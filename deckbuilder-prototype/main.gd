@@ -1,8 +1,8 @@
 extends Control
 
-## Protótipo jogável de deckbuilder (Balatro-lite).
+## Protótipo jogável de deckbuilder (Balatro-lite) + sistema de Coringas.
 ## Toda a UI é construída em código de propósito: zero arte, foco no LOOP.
-## O objetivo deste protótipo é responder uma pergunta: o loop é divertido?
+## A lógica de pontuação vive em scoring.gd (testável); aqui é só jogo + UI.
 
 # --------------------------------------------------------------------------
 #  BALANCEAMENTO — mexa aqui para ajustar o jogo. É o "painel de controle".
@@ -13,19 +13,8 @@ const HANDS_PER_ROUND := 4      # tentativas de pontuar por rodada
 const DISCARDS_PER_ROUND := 3   # descartes por rodada
 const BASE_TARGET := 100        # meta da rodada 1
 const TARGET_GROWTH := 1.6      # meta cresce ^ por rodada
-
-# [chips_base, mult] por tipo de mão
-const HAND_VALUES := {
-	"Carta Alta":     [5, 1],
-	"Par":            [10, 2],
-	"Dois Pares":     [20, 2],
-	"Trinca":         [30, 3],
-	"Sequência":      [30, 4],
-	"Flush":          [35, 4],
-	"Full House":     [40, 4],
-	"Quadra":         [60, 7],
-	"Straight Flush": [100, 8],
-}
+const STARTING_JOKERS := 2      # coringas com que o jogador começa
+const MAX_JOKERS := 5           # limite de coringas
 
 # --------------------------------------------------------------------------
 #  ESTADO
@@ -33,6 +22,7 @@ const HAND_VALUES := {
 var deck: Array = []
 var hand: Array = []
 var selected: Array = []   # índices dentro de `hand`
+var jokers: Array = []     # coringas em posse do jogador
 var round_num := 1
 var target := BASE_TARGET
 var round_score := 0
@@ -45,6 +35,7 @@ var game_over := false
 #  REFERÊNCIAS DE UI
 # --------------------------------------------------------------------------
 var info_label: Label
+var joker_label: Label
 var message_label: Label
 var preview_label: Label
 var card_row: HBoxContainer
@@ -53,6 +44,7 @@ var discard_button: Button
 
 
 func _ready() -> void:
+	randomize()
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 
 	var margin := MarginContainer.new()
@@ -62,17 +54,22 @@ func _ready() -> void:
 	add_child(margin)
 
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 18)
+	root.add_theme_constant_override("separation", 16)
 	margin.add_child(root)
 
 	var title := Label.new()
-	title.text = "PROTÓTIPO DECKBUILDER  ·  Balatro-lite"
+	title.text = "PROTÓTIPO DECKBUILDER  ·  Balatro-lite + Coringas"
 	title.add_theme_font_size_override("font_size", 24)
 	root.add_child(title)
 
 	info_label = Label.new()
 	info_label.add_theme_font_size_override("font_size", 18)
 	root.add_child(info_label)
+
+	joker_label = Label.new()
+	joker_label.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
+	joker_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	root.add_child(joker_label)
 
 	message_label = Label.new()
 	message_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
@@ -105,10 +102,12 @@ func _ready() -> void:
 	buttons.add_child(discard_button)
 
 	var hint := Label.new()
-	hint.text = "Selecione até 5 cartas e forme a maior pontuação (chips × mult)."
+	hint.text = "Selecione até 5 cartas. Os coringas (em amarelo) modificam a pontuação."
 	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	root.add_child(hint)
 
+	# Começa com alguns coringas para o efeito ser visível já na 1ª rodada.
+	jokers = Joker.default_pool().slice(0, STARTING_JOKERS)
 	start_round()
 
 
@@ -153,6 +152,10 @@ func remove_selected_and_refill() -> void:
 	deal_hand()
 
 
+func _ctx() -> Dictionary:
+	return { "discards_left": discards_left, "hands_left": hands_left }
+
+
 # --------------------------------------------------------------------------
 #  AÇÕES DO JOGADOR
 # --------------------------------------------------------------------------
@@ -163,19 +166,18 @@ func _on_play() -> void:
 		round_num = 1
 		money = 0
 		message_label.text = ""
+		jokers = Joker.default_pool().slice(0, STARTING_JOKERS)
 		start_round()
 		return
 
 	if selected.is_empty():
 		return
 
-	var cards := _selected_cards()
-	var result := evaluate(cards)
-	var gained: int = result.chips * result.mult
-	round_score += gained
+	var result := Scoring.score(_selected_cards(), jokers, _ctx())
+	round_score += int(result.total)
 	hands_left -= 1
 	remove_selected_and_refill()
-	message_label.text = "%s!  +%d pontos" % [result.name, gained]
+	message_label.text = "%s!  +%d pontos" % [result.name, int(result.total)]
 	_check_round_state()
 	update_ui()
 
@@ -194,84 +196,43 @@ func _check_round_state() -> void:
 	if round_score >= target:
 		money += 5 + round_num
 		round_num += 1
+		var got := _grant_random_joker()
 		start_round()
-		message_label.text = "Rodada vencida!  +$%d  →  Rodada %d" % [5 + (round_num - 1), round_num]
+		if got != "":
+			message_label.text = "Rodada vencida! Novo coringa: %s  →  Rodada %d" % [got, round_num]
+		else:
+			message_label.text = "Rodada vencida!  →  Rodada %d" % round_num
 	elif hands_left <= 0:
 		game_over = true
 		message_label.text = "FIM DE JOGO na rodada %d. Clique em 'Jogar Mão' para recomeçar." % round_num
 
 
+## Concede um coringa aleatório ainda não possuído. Retorna o nome ou "".
+func _grant_random_joker() -> String:
+	if jokers.size() >= MAX_JOKERS:
+		return ""
+	var owned := {}
+	for j in jokers:
+		owned[j.id] = true
+	var candidates := []
+	for j in Joker.default_pool():
+		if not owned.has(j.id):
+			candidates.append(j)
+	if candidates.is_empty():
+		return ""
+	var chosen: Joker = candidates[randi() % candidates.size()]
+	jokers.append(chosen)
+	return chosen.joker_name
+
+
 # --------------------------------------------------------------------------
-#  PONTUAÇÃO
+#  PONTUAÇÃO (delegada a scoring.gd)
 # --------------------------------------------------------------------------
 func _selected_cards() -> Array:
 	var cards := []
 	for i in selected:
 		cards.append(hand[i])
 	return cards
-
-
-## Retorna { "name": String, "chips": int, "mult": int }
-func evaluate(cards: Array) -> Dictionary:
-	var type_name := classify(cards)
-	var base: Array = HAND_VALUES[type_name]
-	var chips: int = base[0]
-	var mult: int = base[1]
-	for c in cards:
-		chips += c.chip_value()
-	return { "name": type_name, "chips": chips, "mult": mult }
-
-
-## Determina o melhor tipo de mão de pôquer para as cartas selecionadas.
-func classify(cards: Array) -> String:
-	if cards.is_empty():
-		return "Carta Alta"
-
-	var rank_counts := {}
-	var suits := {}
-	var rank_list := []
-	for c in cards:
-		rank_counts[c.rank] = int(rank_counts.get(c.rank, 0)) + 1
-		suits[c.suit] = true
-		rank_list.append(c.rank)
-
-	var counts: Array = rank_counts.values()
-	counts.sort()
-	counts.reverse()  # ordem decrescente: [maior grupo, ...]
-
-	var is_flush: bool = cards.size() == 5 and suits.size() == 1
-	var is_straight: bool = _is_straight(rank_list)
-
-	if is_straight and is_flush:
-		return "Straight Flush"
-	if counts[0] == 4:
-		return "Quadra"
-	if counts[0] == 3 and counts.size() > 1 and counts[1] == 2:
-		return "Full House"
-	if is_flush:
-		return "Flush"
-	if is_straight:
-		return "Sequência"
-	if counts[0] == 3:
-		return "Trinca"
-	if counts[0] == 2 and counts.size() > 1 and counts[1] == 2:
-		return "Dois Pares"
-	if counts[0] == 2:
-		return "Par"
-	return "Carta Alta"
-
-
-func _is_straight(rank_list: Array) -> bool:
-	if rank_list.size() != 5:
-		return false
-	var uniq := {}
-	for r in rank_list:
-		uniq[r] = true
-	if uniq.size() != 5:
-		return false
-	var sorted_ranks: Array = uniq.keys()
-	sorted_ranks.sort()
-	return sorted_ranks[4] - sorted_ranks[0] == 4
 
 
 # --------------------------------------------------------------------------
@@ -281,10 +242,21 @@ func update_ui() -> void:
 	info_label.text = "Rodada %d   |   Alvo: %d   |   Pontos: %d   |   Mãos: %d   |   Descartes: %d   |   $%d" % [
 		round_num, target, round_score, hands_left, discards_left, money
 	]
+	_update_jokers_label()
 	_rebuild_cards()
 	_update_preview()
 	play_button.disabled = (not game_over) and selected.is_empty()
 	discard_button.disabled = game_over or selected.is_empty() or discards_left <= 0
+
+
+func _update_jokers_label() -> void:
+	if jokers.is_empty():
+		joker_label.text = "Coringas: (nenhum)"
+		return
+	var parts := []
+	for j in jokers:
+		parts.append("[%s: %s]" % [j.joker_name, j.description])
+	joker_label.text = "Coringas: " + "  ".join(parts)
 
 
 func _rebuild_cards() -> void:
@@ -322,7 +294,11 @@ func _update_preview() -> void:
 	if selected.is_empty():
 		preview_label.text = "Selecione cartas para ver a mão…"
 		return
-	var r := evaluate(_selected_cards())
-	preview_label.text = "%s   →   %d chips × %d mult = %d pontos" % [
-		r.name, r.chips, r.mult, r.chips * r.mult
+	var r := Scoring.score(_selected_cards(), jokers, _ctx())
+	var base_total: int = int(r.base_chips) * int(r.base_mult)
+	var suffix := ""
+	if int(r.total) != base_total:
+		suffix = "   (base %d, coringas ativos!)" % base_total
+	preview_label.text = "%s   →   %d chips × %d mult = %d pontos%s" % [
+		r.name, int(r.chips), int(r.mult), int(r.total), suffix
 	]

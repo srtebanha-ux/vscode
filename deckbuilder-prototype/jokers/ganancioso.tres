@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="Joker" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://joker.gd" id="1_joker"]
+
+[resource]
+script = ExtResource("1_joker")
+id = "ganancioso"
+joker_name = "Ganancioso"
+description = "+3 Mult por carta de Ouros jogada"
+effect = 3
+amount = 3
+suit_filter = "diamonds"
+hand_filter = ""

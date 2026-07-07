@@ -71,9 +71,13 @@ Meta da rodada `n`: `100 × 1.6^(n-1)` (arredondado).
 
 ## 6. Roadmap curto
 
-- **Fase 0 (feito aqui):** loop jogável com retângulos. Valida diversão.
-- **Fase 1:** dados como Custom Resources (`.tres`), testes com GdUnit4 em
-  modo headless, 1º "coringa" que quebra as regras.
+- **Fase 0 (feito):** loop jogável com retângulos. Valida diversão.
+- **Fase 1 (feito):** motor de pontuação isolado e testável, sistema de
+  coringas que quebram as regras, testes automatizados headless, coringas
+  como Custom Resources (`.tres`). *(Usamos um runner de testes próprio em vez
+  do GdUnit4 — mesmo resultado, zero dependência para instalar.)*
+- **Fase 1.5:** carregar o pool de coringas a partir dos `.tres`; loja entre
+  rodadas para escolher/comprar coringas.
 - **Fase 2:** arte com modelo LoRA consistente (Scenario/Leonardo), som, loja.
 - **Fase 3:** página na Steam + wishlists + Steam Next Fest (começa cedo!).
 

@@ -1,0 +1,13 @@
+[gd_resource type="Resource" script_class="Joker" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://joker.gd" id="1_joker"]
+
+[resource]
+script = ExtResource("1_joker")
+id = "colecionador"
+joker_name = "Colecionador"
+description = "+4 Mult se a mão for um Flush"
+effect = 5
+amount = 4
+suit_filter = ""
+hand_filter = "Flush"

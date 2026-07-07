@@ -22,15 +22,37 @@ qualquer polimento. Feio de propósito: só retângulos e texto.
 - Bata a **meta (Alvo)** antes de acabarem as jogadas para avançar de rodada.
   A meta cresce a cada rodada.
 
+## Coringas (Fase 1)
+
+O jogo agora tem **coringas** — recursos que quebram as regras de pontuação
+(o "molho" que diferencia do Balatro genérico). Você começa com 2 e ganha mais
+a cada rodada vencida. Eles aparecem em amarelo e modificam o cálculo
+`chips × mult` na hora. Exemplos: *Ganancioso* (+3 mult por Ouros), *Colecionador*
+(+4 mult em Flush), *Cauteloso* (+2 mult por descarte não usado), *Vidente* (×3).
+
 ## Arquivos
 
-| Arquivo         | Papel                                                        |
-|-----------------|-------------------------------------------------------------|
-| `GDD.md`        | Documento de design (2 páginas). **Leia primeiro.**         |
-| `project.godot` | Configuração do projeto Godot.                              |
-| `main.tscn`     | Cena principal (só um nó `Control` com o script).           |
-| `main.gd`       | Todo o jogo + UI construída em código. Balanceamento no topo.|
-| `card.gd`       | Recurso `Card` (rank + naipe + valor em chips).             |
+| Arquivo             | Papel                                                     |
+|---------------------|-----------------------------------------------------------|
+| `GDD.md`            | Documento de design (2 páginas). **Leia primeiro.**       |
+| `project.godot`     | Configuração do projeto Godot.                            |
+| `main.tscn`         | Cena principal (só um nó `Control` com o script).         |
+| `main.gd`           | Jogo + UI construída em código. Balanceamento no topo.    |
+| `card.gd`           | Recurso `Card` (rank + naipe + valor em chips).           |
+| `scoring.gd`        | Motor de pontuação **puro** (sem UI) — por isso é testável.|
+| `joker.gd`          | Recurso `Joker` + catálogo de coringas.                   |
+| `jokers/*.tres`     | Coringas como Custom Resources (exemplos data-driven).    |
+| `tests/run_tests.gd`| Testes automatizados da lógica de pontuação/coringas.     |
+
+## Rodar os testes (headless, sem dependências)
+
+```bash
+godot --headless --path . -s res://tests/run_tests.gd
+```
+
+Sai com código de erro `0` se tudo passar, `1` se algo falhar (pronto para CI).
+Cobre classificação de mãos, valores de carta, cada tipo de coringa e o
+empilhamento de coringas.
 
 ## Onde mexer no balanceamento
 

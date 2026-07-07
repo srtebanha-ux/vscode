@@ -24,6 +24,7 @@ enum Effect {
 @export var amount: int = 0
 @export var suit_filter: String = ""   # usado pelos efeitos *_PER_SUIT
 @export var hand_filter: String = ""   # usado por MULT_IF_HAND (ex.: "Flush")
+@export var cost: int = 4              # preço na loja (Fase 1.5)
 
 
 ## Aplica o efeito. Recebe chips/mult atuais e devolve os modificados.
@@ -61,7 +62,7 @@ func _count_suit(cards: Array) -> int:
 #  mesmo sem os .tres). Os .tres em jokers/ são exemplos do fluxo data-driven.
 # --------------------------------------------------------------------------
 static func make(p_id: String, p_name: String, p_desc: String, p_effect: Effect,
-		p_amount: int, p_suit := "", p_hand := "") -> Joker:
+		p_amount: int, p_suit := "", p_hand := "", p_cost := 4) -> Joker:
 	var j := Joker.new()
 	j.id = p_id
 	j.joker_name = p_name
@@ -70,17 +71,27 @@ static func make(p_id: String, p_name: String, p_desc: String, p_effect: Effect,
 	j.amount = p_amount
 	j.suit_filter = p_suit
 	j.hand_filter = p_hand
+	j.cost = p_cost
 	return j
 
 
+## Catálogo completo de coringas disponíveis (loja + pool inicial).
 static func default_pool() -> Array:
 	return [
-		make("ganancioso", "Ganancioso", "+3 Mult por carta de Ouros jogada",
-			Effect.MULT_PER_SUIT, 3, "diamonds"),
-		make("colecionador", "Colecionador", "+4 Mult se a mão for um Flush",
-			Effect.MULT_IF_HAND, 4, "", "Flush"),
+		make("ganancioso", "Ganancioso", "+3 Mult por Ouros jogado",
+			Effect.MULT_PER_SUIT, 3, "diamonds", "", 4),
+		make("colecionador", "Colecionador", "+4 Mult se for Flush",
+			Effect.MULT_IF_HAND, 4, "", "Flush", 5),
 		make("cauteloso", "Cauteloso", "+2 Mult por descarte não usado",
-			Effect.MULT_PER_DISCARD, 2),
+			Effect.MULT_PER_DISCARD, 2, "", "", 5),
 		make("vidente", "Vidente", "Triplica o Mult (x3)",
-			Effect.MULT_TIMES, 3),
+			Effect.MULT_TIMES, 3, "", "", 9),
+		make("otimista", "Otimista", "+4 Mult sempre",
+			Effect.FLAT_MULT, 4, "", "", 4),
+		make("peso_pesado", "Peso Pesado", "+50 Chips sempre",
+			Effect.FLAT_CHIPS, 50, "", "", 4),
+		make("funebre", "Fúnebre", "+15 Chips por Espadas jogada",
+			Effect.CHIPS_PER_SUIT, 15, "spades", "", 5),
+		make("trio", "Trio", "+5 Mult se for Trinca",
+			Effect.MULT_IF_HAND, 5, "", "Trinca", 5),
 	]

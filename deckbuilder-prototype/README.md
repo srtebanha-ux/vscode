@@ -22,13 +22,17 @@ qualquer polimento. Feio de propósito: só retângulos e texto.
 - Bata a **meta (Alvo)** antes de acabarem as jogadas para avançar de rodada.
   A meta cresce a cada rodada.
 
-## Coringas (Fase 1)
+## Coringas + Loja (Fases 1 e 1.5)
 
-O jogo agora tem **coringas** — recursos que quebram as regras de pontuação
-(o "molho" que diferencia do Balatro genérico). Você começa com 2 e ganha mais
-a cada rodada vencida. Eles aparecem em amarelo e modificam o cálculo
-`chips × mult` na hora. Exemplos: *Ganancioso* (+3 mult por Ouros), *Colecionador*
-(+4 mult em Flush), *Cauteloso* (+2 mult por descarte não usado), *Vidente* (×3).
+O jogo tem **coringas** — recursos que quebram as regras de pontuação (o "molho"
+que diferencia do Balatro genérico). Você começa com 2 e aparecem em amarelo,
+modificando o cálculo `chips × mult` na hora. O catálogo tem 8: *Ganancioso*
+(+3 mult por Ouros), *Colecionador* (+4 mult em Flush), *Cauteloso* (+2 mult por
+descarte não usado), *Vidente* (×3), *Otimista*, *Peso Pesado*, *Fúnebre*, *Trio*.
+
+Ao **vencer uma rodada** você ganha dinheiro (`$`) e entra na **loja**: 3
+coringas são ofertados e você compra os que quiser (e puder pagar) antes de
+seguir. É aqui que o jogo vira decisão estratégica — gastar agora ou guardar.
 
 ## Arquivos
 

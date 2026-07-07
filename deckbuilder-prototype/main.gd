@@ -1,6 +1,6 @@
 extends Control
 
-## Protótipo jogável de deckbuilder (Balatro-lite) + sistema de Coringas.
+## Protótipo jogável de deckbuilder (Balatro-lite) + Coringas + Loja.
 ## Toda a UI é construída em código de propósito: zero arte, foco no LOOP.
 ## A lógica de pontuação vive em scoring.gd (testável); aqui é só jogo + UI.
 
@@ -15,14 +15,16 @@ const BASE_TARGET := 100        # meta da rodada 1
 const TARGET_GROWTH := 1.6      # meta cresce ^ por rodada
 const STARTING_JOKERS := 2      # coringas com que o jogador começa
 const MAX_JOKERS := 5           # limite de coringas
+const SHOP_SLOTS := 3           # coringas ofertados por loja
 
 # --------------------------------------------------------------------------
 #  ESTADO
 # --------------------------------------------------------------------------
 var deck: Array = []
 var hand: Array = []
-var selected: Array = []   # índices dentro de `hand`
-var jokers: Array = []     # coringas em posse do jogador
+var selected: Array = []     # índices dentro de `hand`
+var jokers: Array = []       # coringas em posse do jogador
+var shop_offers: Array = []  # coringas à venda na loja atual
 var round_num := 1
 var target := BASE_TARGET
 var round_score := 0
@@ -30,6 +32,7 @@ var hands_left := HANDS_PER_ROUND
 var discards_left := DISCARDS_PER_ROUND
 var money := 0
 var game_over := false
+var in_shop := false
 
 # --------------------------------------------------------------------------
 #  REFERÊNCIAS DE UI
@@ -37,10 +40,16 @@ var game_over := false
 var info_label: Label
 var joker_label: Label
 var message_label: Label
+# painel de jogo
+var play_panel: VBoxContainer
 var preview_label: Label
 var card_row: HBoxContainer
 var play_button: Button
 var discard_button: Button
+# painel de loja
+var shop_panel: VBoxContainer
+var shop_row: HBoxContainer
+var continue_button: Button
 
 
 func _ready() -> void:
@@ -58,7 +67,7 @@ func _ready() -> void:
 	margin.add_child(root)
 
 	var title := Label.new()
-	title.text = "PROTÓTIPO DECKBUILDER  ·  Balatro-lite + Coringas"
+	title.text = "PROTÓTIPO DECKBUILDER  ·  Coringas + Loja"
 	title.add_theme_font_size_override("font_size", 24)
 	root.add_child(title)
 
@@ -77,17 +86,30 @@ func _ready() -> void:
 
 	root.add_child(HSeparator.new())
 
+	_build_play_panel(root)
+	_build_shop_panel(root)
+
+	# Começa com alguns coringas para o efeito ser visível já na 1ª rodada.
+	jokers = Joker.default_pool().slice(0, STARTING_JOKERS)
+	start_round()
+
+
+func _build_play_panel(root: VBoxContainer) -> void:
+	play_panel = VBoxContainer.new()
+	play_panel.add_theme_constant_override("separation", 16)
+	root.add_child(play_panel)
+
 	preview_label = Label.new()
 	preview_label.add_theme_font_size_override("font_size", 20)
-	root.add_child(preview_label)
+	play_panel.add_child(preview_label)
 
 	card_row = HBoxContainer.new()
 	card_row.add_theme_constant_override("separation", 10)
-	root.add_child(card_row)
+	play_panel.add_child(card_row)
 
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 12)
-	root.add_child(buttons)
+	play_panel.add_child(buttons)
 
 	play_button = Button.new()
 	play_button.text = "Jogar Mão"
@@ -104,11 +126,28 @@ func _ready() -> void:
 	var hint := Label.new()
 	hint.text = "Selecione até 5 cartas. Os coringas (em amarelo) modificam a pontuação."
 	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	root.add_child(hint)
+	play_panel.add_child(hint)
 
-	# Começa com alguns coringas para o efeito ser visível já na 1ª rodada.
-	jokers = Joker.default_pool().slice(0, STARTING_JOKERS)
-	start_round()
+
+func _build_shop_panel(root: VBoxContainer) -> void:
+	shop_panel = VBoxContainer.new()
+	shop_panel.add_theme_constant_override("separation", 16)
+	root.add_child(shop_panel)
+
+	var shop_title := Label.new()
+	shop_title.text = "🛒  LOJA — gaste seu dinheiro em coringas"
+	shop_title.add_theme_font_size_override("font_size", 20)
+	shop_panel.add_child(shop_title)
+
+	shop_row = HBoxContainer.new()
+	shop_row.add_theme_constant_override("separation", 12)
+	shop_panel.add_child(shop_row)
+
+	continue_button = Button.new()
+	continue_button.text = "Próxima Rodada  ▶"
+	continue_button.custom_minimum_size = Vector2(220, 48)
+	continue_button.pressed.connect(_on_continue)
+	shop_panel.add_child(continue_button)
 
 
 # --------------------------------------------------------------------------
@@ -157,19 +196,12 @@ func _ctx() -> Dictionary:
 
 
 # --------------------------------------------------------------------------
-#  AÇÕES DO JOGADOR
+#  AÇÕES DO JOGADOR (jogo)
 # --------------------------------------------------------------------------
 func _on_play() -> void:
 	if game_over:
-		# Recomeçar do zero.
-		game_over = false
-		round_num = 1
-		money = 0
-		message_label.text = ""
-		jokers = Joker.default_pool().slice(0, STARTING_JOKERS)
-		start_round()
+		_restart()
 		return
-
 	if selected.is_empty():
 		return
 
@@ -194,35 +226,60 @@ func _on_discard() -> void:
 
 func _check_round_state() -> void:
 	if round_score >= target:
-		money += 5 + round_num
-		round_num += 1
-		var got := _grant_random_joker()
-		start_round()
-		if got != "":
-			message_label.text = "Rodada vencida! Novo coringa: %s  →  Rodada %d" % [got, round_num]
-		else:
-			message_label.text = "Rodada vencida!  →  Rodada %d" % round_num
+		money += 5 + round_num                       # recompensa da rodada
+		message_label.text = "Rodada %d vencida!  +$%d" % [round_num, 5 + round_num]
+		_open_shop()
 	elif hands_left <= 0:
 		game_over = true
 		message_label.text = "FIM DE JOGO na rodada %d. Clique em 'Jogar Mão' para recomeçar." % round_num
 
 
-## Concede um coringa aleatório ainda não possuído. Retorna o nome ou "".
-func _grant_random_joker() -> String:
-	if jokers.size() >= MAX_JOKERS:
-		return ""
+func _restart() -> void:
+	game_over = false
+	in_shop = false
+	round_num = 1
+	money = 0
+	message_label.text = ""
+	jokers = Joker.default_pool().slice(0, STARTING_JOKERS)
+	start_round()
+
+
+# --------------------------------------------------------------------------
+#  LOJA (Fase 1.5)
+# --------------------------------------------------------------------------
+func _open_shop() -> void:
+	in_shop = true
+	shop_offers.clear()
 	var owned := {}
 	for j in jokers:
 		owned[j.id] = true
-	var candidates := []
+	var pool := []
 	for j in Joker.default_pool():
 		if not owned.has(j.id):
-			candidates.append(j)
-	if candidates.is_empty():
-		return ""
-	var chosen: Joker = candidates[randi() % candidates.size()]
-	jokers.append(chosen)
-	return chosen.joker_name
+			pool.append(j)
+	pool.shuffle()
+	for i in min(SHOP_SLOTS, pool.size()):
+		shop_offers.append(pool[i])
+
+
+func _buy_joker(index: int) -> void:
+	if index < 0 or index >= shop_offers.size():
+		return
+	var j: Joker = shop_offers[index]
+	if money < j.cost or jokers.size() >= MAX_JOKERS:
+		return
+	money -= j.cost
+	jokers.append(j)
+	shop_offers.remove_at(index)
+	message_label.text = "Comprou: %s  (-$%d)" % [j.joker_name, j.cost]
+	update_ui()
+
+
+func _on_continue() -> void:
+	in_shop = false
+	round_num += 1
+	start_round()
+	message_label.text = "Rodada %d — alvo %d" % [round_num, target]
 
 
 # --------------------------------------------------------------------------
@@ -243,10 +300,17 @@ func update_ui() -> void:
 		round_num, target, round_score, hands_left, discards_left, money
 	]
 	_update_jokers_label()
-	_rebuild_cards()
-	_update_preview()
-	play_button.disabled = (not game_over) and selected.is_empty()
-	discard_button.disabled = game_over or selected.is_empty() or discards_left <= 0
+
+	play_panel.visible = not in_shop
+	shop_panel.visible = in_shop
+
+	if in_shop:
+		_rebuild_shop()
+	else:
+		_rebuild_cards()
+		_update_preview()
+		play_button.disabled = (not game_over) and selected.is_empty()
+		discard_button.disabled = game_over or selected.is_empty() or discards_left <= 0
 
 
 func _update_jokers_label() -> void:
@@ -276,6 +340,25 @@ func _rebuild_cards() -> void:
 		b.button_pressed = selected.has(i)
 		b.toggled.connect(_on_card_toggled.bind(i))
 		card_row.add_child(b)
+
+
+func _rebuild_shop() -> void:
+	for child in shop_row.get_children():
+		child.queue_free()
+	if shop_offers.is_empty():
+		var empty := Label.new()
+		empty.text = "(nada à venda — você já tem tudo, ou não sobrou nada!)"
+		empty.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		shop_row.add_child(empty)
+		return
+	for i in shop_offers.size():
+		var j: Joker = shop_offers[i]
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(210, 130)
+		b.text = "%s\n$%d\n\n%s" % [j.joker_name, j.cost, j.description]
+		b.disabled = money < j.cost or jokers.size() >= MAX_JOKERS
+		b.pressed.connect(_buy_joker.bind(i))
+		shop_row.add_child(b)
 
 
 func _on_card_toggled(pressed: bool, index: int) -> void:

@@ -21,7 +21,11 @@ func _initialize() -> void:
 	test_joker_per_suit()
 	test_joker_if_hand()
 	test_joker_per_discard()
+	test_joker_flat_chips()
+	test_joker_chips_per_suit()
+	test_joker_flat_mult()
 	test_joker_stacking()
+	test_catalog()
 	print("\n== Resultado: %d passaram, %d falharam ==" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
 
@@ -125,6 +129,29 @@ func test_joker_per_discard() -> void:
 	check("cauteloso: mult 2 + 2*3", int(r.mult), 8)
 
 
+func test_joker_flat_chips() -> void:
+	# Peso Pesado: +50 chips. Par de reis: 30 chips -> 80, mult 2 -> 160.
+	var pp := Joker.make("p", "Peso Pesado", "", Joker.Effect.FLAT_CHIPS, 50)
+	var r := Scoring.score([_card(13, "spades"), _card(13, "hearts")], [pp], {})
+	check("peso pesado: chips 30+50", int(r.chips), 80)
+	check("peso pesado: total", int(r.total), 160)
+
+
+func test_joker_chips_per_suit() -> void:
+	# Fúnebre: +15 chips por Espadas. Par de espadas: +30 chips.
+	var fun := Joker.make("f", "Fúnebre", "", Joker.Effect.CHIPS_PER_SUIT, 15, "spades")
+	var cards := [_card(13, "spades"), _card(13, "spades")]  # par, 2 espadas
+	var r := Scoring.score(cards, [fun], {})
+	check("funebre: chips 30 + 15*2", int(r.chips), 60)
+
+
+func test_joker_flat_mult() -> void:
+	# Otimista: +4 mult sempre. Par: mult 2 -> 6.
+	var oti := Joker.make("o", "Otimista", "", Joker.Effect.FLAT_MULT, 4)
+	var r := Scoring.score([_card(13, "spades"), _card(13, "hearts")], [oti], {})
+	check("otimista: mult 2+4", int(r.mult), 6)
+
+
 func test_joker_stacking() -> void:
 	# Dois coringas empilham na ordem: Ganancioso (+6 mult) depois Vidente (x3).
 	# Par de ouros: mult 2 -> +6 = 8 -> x3 = 24.
@@ -133,3 +160,15 @@ func test_joker_stacking() -> void:
 	var cards := [_card(13, "diamonds"), _card(13, "diamonds")]
 	var r := Scoring.score(cards, [ganancioso, vidente], {})
 	check("stack: (2+6)*3", int(r.mult), 24)
+
+
+func test_catalog() -> void:
+	# O catálogo cresceu para a loja ter variedade.
+	check("catalogo: 8 coringas", Joker.default_pool().size(), 8)
+	# cost tem default 4 quando não informado em make().
+	check("cost: default 4", Joker.make("x", "", "", Joker.Effect.FLAT_MULT, 1).cost, 4)
+	# ids únicos (a loja depende disso para não ofertar duplicado).
+	var ids := {}
+	for j in Joker.default_pool():
+		ids[j.id] = true
+	check("catalogo: ids unicos", ids.size(), 8)

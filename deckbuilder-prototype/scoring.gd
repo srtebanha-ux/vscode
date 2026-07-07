@@ -72,8 +72,10 @@ static func _is_straight(rank_list: Array) -> bool:
 
 
 ## Pontua uma mão. Aplica primeiro as regras base, depois cada coringa em ordem.
+## `positions` (opcional): célula Vector2i de cada coringa no tabuleiro, na mesma
+## ordem de `jokers`. Se informado, habilita efeitos de adjacência 2D.
 ## Retorna: { name, base_chips, base_mult, chips, mult, total }
-static func score(cards: Array, jokers: Array, ctx: Dictionary) -> Dictionary:
+static func score(cards: Array, jokers: Array, ctx: Dictionary, positions := []) -> Dictionary:
 	if cards.is_empty():
 		return { "name": "—", "base_chips": 0, "base_mult": 0,
 			"chips": 0, "mult": 0, "total": 0 }
@@ -88,12 +90,18 @@ static func score(cards: Array, jokers: Array, ctx: Dictionary) -> Dictionary:
 	var base_chips := chips
 	var base_mult := mult
 
-	# Aplica da esquerda para a direita. A POSIÇÃO de cada coringa entra no ctx,
-	# então efeitos posicionais (MULT_PER_LEFT, MULT_IF_RIGHTMOST) dependem da ordem.
+	# Conjunto de células ocupadas, para calcular adjacência em O(1).
+	var occupied := {}
+	for p in positions:
+		occupied[p] = true
+
+	# Aplica em ordem de leitura. A POSIÇÃO de cada coringa entra no ctx, então
+	# efeitos posicionais (index/rightmost) e de adjacência 2D dependem do lugar.
 	ctx["joker_count"] = jokers.size()
 	for i in jokers.size():
 		var j = jokers[i]
 		ctx["index"] = i
+		ctx["adjacent_count"] = _count_adjacent(positions[i], occupied) if i < positions.size() else 0
 		var r: Dictionary = j.apply(chips, mult, type_name, cards, ctx)
 		chips = int(r.chips)
 		mult = int(r.mult)
@@ -106,3 +114,12 @@ static func score(cards: Array, jokers: Array, ctx: Dictionary) -> Dictionary:
 		"mult": mult,
 		"total": chips * mult,
 	}
+
+
+## Conta quantas das 4 células ortogonais a `cell` estão ocupadas.
+static func _count_adjacent(cell, occupied: Dictionary) -> int:
+	var n := 0
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		if occupied.has(cell + d):
+			n += 1
+	return n

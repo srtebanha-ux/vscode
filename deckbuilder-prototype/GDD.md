@@ -78,11 +78,12 @@ Meta da rodada `n`: `100 × 1.6^(n-1)` (arredondado).
   do GdUnit4 — mesmo resultado, zero dependência para instalar.)*
 - **Fase 1.5 (feito):** loja entre rodadas — o dinheiro vira decisão. Catálogo
   de coringas, compra com `$`, 3 ofertas por loja, reroll pago.
-- **Fase 2 (feito):** gestão espacial — a ORDEM dos coringas importa. Efeitos
-  posicionais (*Acumulador*: +mult por coringa à esquerda; *Finalizador*: bônus
-  se for o último) + reordenação pela UI. Organizar virou decisão estratégica.
-- **Fase 2.5 (próximo):** carregar coringas dos `.tres`; grade 2D real (cartas
-  E coringas ocupando slots, com adjacência em duas dimensões, tipo Backpack Hero).
+- **Fase 2 (feito):** gestão espacial em fileira — a ORDEM dos coringas importa.
+- **Fase 2.5 (feito):** tabuleiro 2D real. Coringas ocupam células de uma grade
+  (5×2); adjacência ortogonal (*Ímã*: +mult por vizinho) e ordem de leitura
+  contam. Clique-para-selecionar e mover/trocar. É a base "tipo Backpack Hero".
+- **Fase 3 (próximo):** cartas também no tabuleiro (não só coringas); formas de
+  itens que ocupam mais de uma célula; salvar/carregar; arte.
 - **Fase 2:** arte com modelo LoRA consistente (Scenario/Leonardo), som, loja.
 - **Fase 3:** página na Steam + wishlists + Steam Next Fest (começa cedo!).
 

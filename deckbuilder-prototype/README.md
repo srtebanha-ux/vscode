@@ -35,13 +35,20 @@ coringas são ofertados e você compra os que quiser (e puder pagar) antes de
 seguir. Dá para **rerolar** as ofertas por $2. É aqui que o jogo vira decisão
 estratégica — gastar agora ou guardar.
 
-## Gestão espacial (Fase 2)
+## Tabuleiro 2D (Fases 2 e 2.5)
 
-A **ordem dos coringas importa**: eles aplicam da esquerda para a direita, e
-alguns efeitos dependem da posição — *Acumulador* (+2 mult por coringa à sua
-esquerda) e *Finalizador* (+8 mult se for o último). Clique num coringa e use
-**◀ Mover / Mover ▶** para reorganizar a fileira. Organizar bem é o "molho"
-que aproxima o jogo do Backpack Hero, não de um Balatro genérico.
+Os coringas ocupam células de um **tabuleiro** (5×2). Duas coisas mexem na
+pontuação:
+
+- **Adjacência** — coringas vizinhos (cima/baixo/lados) se potencializam.
+  Ex.: *Ímã* dá +3 mult por vizinho, então colar coringas rende mais.
+- **Ordem de leitura** (esquerda→direita, cima→baixo) — *Acumulador* (+2 mult
+  por coringa anterior) e *Finalizador* (+8 mult se for o último).
+
+Para reorganizar: **clique num coringa** para selecioná-lo (fica destacado),
+depois clique numa **célula vazia** para movê-lo ou em **outro coringa** para
+trocar de lugar. Montar um bom arranjo é o "molho" que aproxima o jogo do
+Backpack Hero, não de um Balatro genérico.
 
 ## Arquivos
 

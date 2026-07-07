@@ -27,6 +27,7 @@ func _initialize() -> void:
 	test_joker_stacking()
 	test_joker_per_left()
 	test_order_matters()
+	test_joker_adjacent()
 	test_catalog()
 	print("\n== Resultado: %d passaram, %d falharam ==" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -188,13 +189,27 @@ func test_order_matters() -> void:
 	check("ordem B: finalizador nao e ultimo", int(Scoring.score(pair, [fin, oti], {}).mult), 6)
 
 
+func test_joker_adjacent() -> void:
+	# Ímã: +3 mult por coringa adjacente no tabuleiro. Depende das posições —
+	# o ponto central da Fase 2.5 (grade 2D).
+	var ima := Joker.make("i", "Ímã", "", Joker.Effect.MULT_PER_ADJACENT, 3)
+	var neutro := Joker.make("n", "Neutro", "", Joker.Effect.FLAT_MULT, 0)
+	var pair := [_card(13, "spades"), _card(13, "hearts")]
+	# Adjacentes (colados): Ímã tem 1 vizinho -> +3. mult 2 -> 5.
+	var adj := Scoring.score(pair, [ima, neutro], {}, [Vector2i(0, 0), Vector2i(1, 0)])
+	check("ima: adjacente +3", int(adj.mult), 5)
+	# Separados: Ímã não tem vizinho -> +0. mult 2.
+	var far := Scoring.score(pair, [ima, neutro], {}, [Vector2i(0, 0), Vector2i(2, 0)])
+	check("ima: separado +0", int(far.mult), 2)
+
+
 func test_catalog() -> void:
 	# O catálogo cresceu para a loja ter variedade.
-	check("catalogo: 10 coringas", Joker.default_pool().size(), 10)
+	check("catalogo: 11 coringas", Joker.default_pool().size(), 11)
 	# cost tem default 4 quando não informado em make().
 	check("cost: default 4", Joker.make("x", "", "", Joker.Effect.FLAT_MULT, 1).cost, 4)
 	# ids únicos (a loja depende disso para não ofertar duplicado).
 	var ids := {}
 	for j in Joker.default_pool():
 		ids[j.id] = true
-	check("catalogo: ids unicos", ids.size(), 10)
+	check("catalogo: ids unicos", ids.size(), 11)

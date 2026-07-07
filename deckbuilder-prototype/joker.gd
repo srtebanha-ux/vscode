@@ -15,8 +15,9 @@ enum Effect {
 	CHIPS_PER_SUIT,   # 4: +amount de chips por carta do naipe suit_filter
 	MULT_IF_HAND,     # 5: +amount de mult SE o tipo de mão == hand_filter
 	MULT_PER_DISCARD, # 6: +amount de mult por descarte NÃO usado (recompensa cautela)
-	MULT_PER_LEFT,    # 7: +amount de mult por coringa à ESQUERDA (posição importa!)
-	MULT_IF_RIGHTMOST,# 8: +amount de mult SE for o coringa mais à direita
+	MULT_PER_LEFT,    # 7: +amount de mult por coringa ANTES dele (ordem de leitura)
+	MULT_IF_RIGHTMOST,# 8: +amount de mult SE for o último (ordem de leitura)
+	MULT_PER_ADJACENT,# 9: +amount de mult por coringa ADJACENTE no tabuleiro (2D!)
 }
 
 @export var id: String = ""
@@ -54,6 +55,9 @@ func apply(chips: int, mult: int, hand_type: String, cards: Array, ctx: Dictiona
 		Effect.MULT_IF_RIGHTMOST:
 			if int(ctx.get("index", 0)) == int(ctx.get("joker_count", 1)) - 1:
 				mult += amount
+		Effect.MULT_PER_ADJACENT:
+			# ctx["adjacent_count"] = coringas ortogonalmente vizinhos no tabuleiro
+			mult += amount * int(ctx.get("adjacent_count", 0))
 	return { "chips": chips, "mult": mult }
 
 
@@ -102,8 +106,10 @@ static func default_pool() -> Array:
 			Effect.CHIPS_PER_SUIT, 15, "spades", "", 5),
 		make("trio", "Trio", "+5 Mult se for Trinca",
 			Effect.MULT_IF_HAND, 5, "", "Trinca", 5),
-		make("acumulador", "Acumulador", "+2 Mult por coringa à esquerda",
+		make("acumulador", "Acumulador", "+2 Mult por coringa anterior",
 			Effect.MULT_PER_LEFT, 2, "", "", 6),
-		make("finalizador", "Finalizador", "+8 Mult se for o último à direita",
+		make("finalizador", "Finalizador", "+8 Mult se for o último",
 			Effect.MULT_IF_RIGHTMOST, 8, "", "", 6),
+		make("ima", "Ímã", "+3 Mult por coringa adjacente",
+			Effect.MULT_PER_ADJACENT, 3, "", "", 7),
 	]

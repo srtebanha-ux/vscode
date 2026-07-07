@@ -16,8 +16,9 @@ serializa de volta em texto simples (fácil de ler no diff e para a IA editar).
 | 4  | CHIPS_PER_SUIT    | `amount`, `suit_filter`     |
 | 5  | MULT_IF_HAND      | `amount`, `hand_filter`     |
 | 6  | MULT_PER_DISCARD  | `amount`                    |
-| 7  | MULT_PER_LEFT     | `amount` (posição importa)  |
-| 8  | MULT_IF_RIGHTMOST | `amount` (posição importa)  |
+| 7  | MULT_PER_LEFT     | `amount` (ordem de leitura) |
+| 8  | MULT_IF_RIGHTMOST | `amount` (ordem de leitura) |
+| 9  | MULT_PER_ADJACENT | `amount` (adjacência 2D)    |
 
 > Se você reordenar o enum em `joker.gd`, atualize estes números.
 

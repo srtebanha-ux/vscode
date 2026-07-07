@@ -1,12 +1,13 @@
 extends Control
 
-## Protótipo jogável de deckbuilder (Balatro-lite) + Coringas + Loja + Gestão.
+## Protótipo jogável de deckbuilder (Balatro-lite) + Coringas + Loja + Tabuleiro.
 ## Toda a UI é construída em código de propósito: zero arte, foco no LOOP.
 ## A lógica de pontuação vive em scoring.gd (testável); aqui é só jogo + UI.
 ##
-## FASE 2 (gestão espacial): a ORDEM dos coringas importa. Alguns efeitos
-## dependem da posição na fileira, e você pode reordená-los — organizar é
-## uma decisão, no espírito do Backpack Hero.
+## FASE 2.5 (grade 2D): os coringas ocupam células de um TABULEIRO. A adjacência
+## (vizinhos em cima/baixo/lados) e a ordem de leitura mudam a pontuação.
+## Clique num coringa para selecioná-lo, depois clique numa célula vazia para
+## mover ou noutro coringa para trocar. Organizar é a decisão central.
 
 # --------------------------------------------------------------------------
 #  BALANCEAMENTO — mexa aqui para ajustar o jogo. É o "painel de controle".
@@ -18,19 +19,23 @@ const DISCARDS_PER_ROUND := 3   # descartes por rodada
 const BASE_TARGET := 100        # meta da rodada 1
 const TARGET_GROWTH := 1.6      # meta cresce ^ por rodada
 const STARTING_JOKERS := 2      # coringas com que o jogador começa
-const MAX_JOKERS := 5           # limite de coringas
+const BOARD_COLS := 5           # colunas do tabuleiro
+const BOARD_ROWS := 2           # linhas do tabuleiro
+const MAX_JOKERS := 6           # limite de coringas (<= COLS*ROWS)
 const SHOP_SLOTS := 3           # coringas ofertados por loja
 const REROLL_COST := 2          # custo para rerolar a loja
+
+const NO_CELL := Vector2i(-1, -1)
 
 # --------------------------------------------------------------------------
 #  ESTADO
 # --------------------------------------------------------------------------
 var deck: Array = []
 var hand: Array = []
-var selected: Array = []     # índices dentro de `hand`
-var jokers: Array = []       # coringas em posse do jogador (a ORDEM importa)
-var selected_joker := -1     # coringa selecionado para reordenar (-1 = nenhum)
-var shop_offers: Array = []  # coringas à venda na loja atual
+var selected: Array = []          # índices dentro de `hand`
+var board: Dictionary = {}        # Vector2i(col,row) -> Joker (fonte da verdade)
+var selected_cell := NO_CELL      # célula do coringa selecionado p/ mover
+var shop_offers: Array = []       # coringas à venda na loja atual
 var round_num := 1
 var target := BASE_TARGET
 var round_score := 0
@@ -45,10 +50,7 @@ var in_shop := false
 # --------------------------------------------------------------------------
 var info_label: Label
 var message_label: Label
-# fileira de coringas (sempre visível)
-var joker_row: HBoxContainer
-var move_left_button: Button
-var move_right_button: Button
+var board_grid: GridContainer
 # painel de jogo
 var play_panel: VBoxContainer
 var preview_label: Label
@@ -77,7 +79,7 @@ func _ready() -> void:
 	margin.add_child(root)
 
 	var title := Label.new()
-	title.text = "PROTÓTIPO DECKBUILDER  ·  Coringas + Loja + Gestão"
+	title.text = "PROTÓTIPO DECKBUILDER  ·  Tabuleiro de Coringas"
 	title.add_theme_font_size_override("font_size", 24)
 	root.add_child(title)
 
@@ -89,44 +91,28 @@ func _ready() -> void:
 	message_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 	root.add_child(message_label)
 
-	_build_joker_bar(root)
+	_build_board(root)
 	root.add_child(HSeparator.new())
 	_build_play_panel(root)
 	_build_shop_panel(root)
 
 	# Começa com alguns coringas para o efeito ser visível já na 1ª rodada.
-	jokers = Joker.default_pool().slice(0, STARTING_JOKERS)
+	for j in Joker.default_pool().slice(0, STARTING_JOKERS):
+		_add_joker(j)
 	start_round()
 
 
-func _build_joker_bar(root: VBoxContainer) -> void:
+func _build_board(root: VBoxContainer) -> void:
 	var header := Label.new()
-	header.text = "Coringas (aplicam da ESQUERDA p/ direita — a ordem muda a pontuação):"
+	header.text = "Tabuleiro (adjacência e ordem de leitura importam — clique p/ selecionar e mover):"
 	header.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
 	root.add_child(header)
 
-	joker_row = HBoxContainer.new()
-	joker_row.add_theme_constant_override("separation", 8)
-	root.add_child(joker_row)
-
-	var move_bar := HBoxContainer.new()
-	move_bar.add_theme_constant_override("separation", 8)
-	root.add_child(move_bar)
-
-	move_left_button = Button.new()
-	move_left_button.text = "◀ Mover"
-	move_left_button.pressed.connect(_move_joker.bind(-1))
-	move_bar.add_child(move_left_button)
-
-	move_right_button = Button.new()
-	move_right_button.text = "Mover ▶"
-	move_right_button.pressed.connect(_move_joker.bind(1))
-	move_bar.add_child(move_right_button)
-
-	var tip := Label.new()
-	tip.text = "  (clique num coringa para selecioná-lo, depois mova)"
-	tip.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	move_bar.add_child(tip)
+	board_grid = GridContainer.new()
+	board_grid.columns = BOARD_COLS
+	board_grid.add_theme_constant_override("h_separation", 8)
+	board_grid.add_theme_constant_override("v_separation", 8)
+	root.add_child(board_grid)
 
 
 func _build_play_panel(root: VBoxContainer) -> void:
@@ -191,6 +177,52 @@ func _build_shop_panel(root: VBoxContainer) -> void:
 
 
 # --------------------------------------------------------------------------
+#  TABULEIRO — helpers
+# --------------------------------------------------------------------------
+func _first_free_cell() -> Vector2i:
+	for r in BOARD_ROWS:
+		for c in BOARD_COLS:
+			var cell := Vector2i(c, r)
+			if not board.has(cell):
+				return cell
+	return NO_CELL
+
+
+func _add_joker(j: Joker) -> bool:
+	if board.size() >= MAX_JOKERS:
+		return false
+	var cell := _first_free_cell()
+	if cell == NO_CELL:
+		return false
+	board[cell] = j
+	return true
+
+
+func _owned_ids() -> Dictionary:
+	var d := {}
+	for j in board.values():
+		d[j.id] = true
+	return d
+
+
+## Coringas em ordem de leitura (linha, depois coluna) + suas células.
+func _ordered() -> Dictionary:
+	var cells: Array = board.keys()
+	cells.sort_custom(func(a, b): return (a.y * BOARD_COLS + a.x) < (b.y * BOARD_COLS + b.x))
+	var js := []
+	var ps := []
+	for cell in cells:
+		js.append(board[cell])
+		ps.append(cell)
+	return { "jokers": js, "positions": ps }
+
+
+func _score(cards: Array) -> Dictionary:
+	var od := _ordered()
+	return Scoring.score(cards, od.jokers, _ctx(), od.positions)
+
+
+# --------------------------------------------------------------------------
 #  FLUXO DE RODADA
 # --------------------------------------------------------------------------
 func start_round() -> void:
@@ -245,7 +277,7 @@ func _on_play() -> void:
 	if selected.is_empty():
 		return
 
-	var result := Scoring.score(_selected_cards(), jokers, _ctx())
+	var result := _score(_selected_cards())
 	round_score += int(result.total)
 	hands_left -= 1
 	remove_selected_and_refill()
@@ -279,29 +311,35 @@ func _restart() -> void:
 	in_shop = false
 	round_num = 1
 	money = 0
-	selected_joker = -1
+	selected_cell = NO_CELL
 	message_label.text = ""
-	jokers = Joker.default_pool().slice(0, STARTING_JOKERS)
+	board.clear()
+	for j in Joker.default_pool().slice(0, STARTING_JOKERS):
+		_add_joker(j)
 	start_round()
 
 
 # --------------------------------------------------------------------------
-#  GESTÃO: reordenar coringas (a posição muda o cálculo)
+#  GESTÃO: mover/trocar coringas no tabuleiro (posição muda o cálculo)
 # --------------------------------------------------------------------------
-func _on_joker_clicked(index: int) -> void:
-	selected_joker = -1 if selected_joker == index else index
-	update_ui()
-
-
-func _move_joker(dir: int) -> void:
-	var i := selected_joker
-	var j := i + dir
-	if i < 0 or j < 0 or j >= jokers.size():
-		return
-	var tmp = jokers[i]
-	jokers[i] = jokers[j]
-	jokers[j] = tmp
-	selected_joker = j
+func _on_cell_clicked(cell: Vector2i) -> void:
+	if board.has(cell):
+		if selected_cell != NO_CELL and selected_cell != cell:
+			# troca dois coringas de lugar
+			var tmp = board[cell]
+			board[cell] = board[selected_cell]
+			board[selected_cell] = tmp
+			selected_cell = NO_CELL
+		elif selected_cell == cell:
+			selected_cell = NO_CELL          # clicar de novo = desmarcar
+		else:
+			selected_cell = cell             # seleciona
+	else:
+		if selected_cell != NO_CELL:
+			# move o coringa selecionado para a célula vazia
+			board[cell] = board[selected_cell]
+			board.erase(selected_cell)
+			selected_cell = NO_CELL
 	update_ui()
 
 
@@ -315,9 +353,7 @@ func _open_shop() -> void:
 
 func _generate_offers() -> void:
 	shop_offers.clear()
-	var owned := {}
-	for j in jokers:
-		owned[j.id] = true
+	var owned := _owned_ids()
 	var pool := []
 	for j in Joker.default_pool():
 		if not owned.has(j.id):
@@ -331,10 +367,11 @@ func _buy_joker(index: int) -> void:
 	if index < 0 or index >= shop_offers.size():
 		return
 	var j: Joker = shop_offers[index]
-	if money < j.cost or jokers.size() >= MAX_JOKERS:
+	if money < j.cost or board.size() >= MAX_JOKERS:
+		return
+	if not _add_joker(j):
 		return
 	money -= j.cost
-	jokers.append(j)
 	shop_offers.remove_at(index)
 	message_label.text = "Comprou: %s  (-$%d)" % [j.joker_name, j.cost]
 	update_ui()
@@ -373,7 +410,7 @@ func update_ui() -> void:
 	info_label.text = "Rodada %d   |   Alvo: %d   |   Pontos: %d   |   Mãos: %d   |   Descartes: %d   |   $%d" % [
 		round_num, target, round_score, hands_left, discards_left, money
 	]
-	_rebuild_jokers()
+	_rebuild_board()
 
 	play_panel.visible = not in_shop
 	shop_panel.visible = in_shop
@@ -388,26 +425,24 @@ func update_ui() -> void:
 		discard_button.disabled = game_over or selected.is_empty() or discards_left <= 0
 
 
-func _rebuild_jokers() -> void:
-	for child in joker_row.get_children():
+func _rebuild_board() -> void:
+	for child in board_grid.get_children():
 		child.queue_free()
-	if jokers.is_empty():
-		var empty := Label.new()
-		empty.text = "(nenhum coringa)"
-		empty.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-		joker_row.add_child(empty)
-	else:
-		for i in jokers.size():
-			var j: Joker = jokers[i]
+	for r in BOARD_ROWS:
+		for c in BOARD_COLS:
+			var cell := Vector2i(c, r)
 			var b := Button.new()
-			b.custom_minimum_size = Vector2(155, 76)
-			b.text = "%d. %s\n%s" % [i + 1, j.joker_name, j.description]
-			if i == selected_joker:
-				b.modulate = Color(1.0, 0.9, 0.4)  # destaca o selecionado
-			b.pressed.connect(_on_joker_clicked.bind(i))
-			joker_row.add_child(b)
-	move_left_button.disabled = selected_joker <= 0
-	move_right_button.disabled = selected_joker < 0 or selected_joker >= jokers.size() - 1
+			b.custom_minimum_size = Vector2(150, 78)
+			if board.has(cell):
+				var j: Joker = board[cell]
+				b.text = "%s\n%s" % [j.joker_name, j.description]
+				if cell == selected_cell:
+					b.modulate = Color(1.0, 0.9, 0.4)  # destaca o selecionado
+			else:
+				b.text = "· vazio ·"
+				b.add_theme_color_override("font_color", Color(0.45, 0.45, 0.45))
+			b.pressed.connect(_on_cell_clicked.bind(cell))
+			board_grid.add_child(b)
 
 
 func _rebuild_cards() -> void:
@@ -438,12 +473,14 @@ func _rebuild_shop() -> void:
 		empty.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 		shop_row.add_child(empty)
 		return
+	var board_full := board.size() >= MAX_JOKERS
 	for i in shop_offers.size():
 		var j: Joker = shop_offers[i]
 		var b := Button.new()
 		b.custom_minimum_size = Vector2(210, 130)
-		b.text = "%s\n$%d\n\n%s" % [j.joker_name, j.cost, j.description]
-		b.disabled = money < j.cost or jokers.size() >= MAX_JOKERS
+		var tag := "  (tabuleiro cheio)" if board_full else ""
+		b.text = "%s\n$%d\n\n%s%s" % [j.joker_name, j.cost, j.description, tag]
+		b.disabled = money < j.cost or board_full
 		b.pressed.connect(_buy_joker.bind(i))
 		shop_row.add_child(b)
 
@@ -464,7 +501,7 @@ func _update_preview() -> void:
 	if selected.is_empty():
 		preview_label.text = "Selecione cartas para ver a mão…"
 		return
-	var r := Scoring.score(_selected_cards(), jokers, _ctx())
+	var r := _score(_selected_cards())
 	var base_total: int = int(r.base_chips) * int(r.base_mult)
 	var suffix := ""
 	if int(r.total) != base_total:

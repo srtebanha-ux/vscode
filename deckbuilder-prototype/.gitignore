@@ -1,0 +1,11 @@
+# Godot 4 — arquivos gerados/importados
+.godot/
+.import/
+export.cfg
+export_presets.cfg
+
+# Builds
+*.exe
+*.pck
+*.zip
+builds/

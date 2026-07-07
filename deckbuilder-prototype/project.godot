@@ -1,0 +1,17 @@
+; Engine configuration file.
+; Projeto: Deckbuilder Prototype (Balatro-lite)
+; Abra esta pasta no Godot 4.3+ e aperte F5 para jogar.
+
+config_version=5
+
+[application]
+
+config/name="Deckbuilder Prototype"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.3")
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="canvas_items"

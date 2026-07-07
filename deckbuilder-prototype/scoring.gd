@@ -88,7 +88,12 @@ static func score(cards: Array, jokers: Array, ctx: Dictionary) -> Dictionary:
 	var base_chips := chips
 	var base_mult := mult
 
-	for j in jokers:
+	# Aplica da esquerda para a direita. A POSIÇÃO de cada coringa entra no ctx,
+	# então efeitos posicionais (MULT_PER_LEFT, MULT_IF_RIGHTMOST) dependem da ordem.
+	ctx["joker_count"] = jokers.size()
+	for i in jokers.size():
+		var j = jokers[i]
+		ctx["index"] = i
 		var r: Dictionary = j.apply(chips, mult, type_name, cards, ctx)
 		chips = int(r.chips)
 		mult = int(r.mult)

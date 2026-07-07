@@ -32,7 +32,16 @@ descarte não usado), *Vidente* (×3), *Otimista*, *Peso Pesado*, *Fúnebre*, *T
 
 Ao **vencer uma rodada** você ganha dinheiro (`$`) e entra na **loja**: 3
 coringas são ofertados e você compra os que quiser (e puder pagar) antes de
-seguir. É aqui que o jogo vira decisão estratégica — gastar agora ou guardar.
+seguir. Dá para **rerolar** as ofertas por $2. É aqui que o jogo vira decisão
+estratégica — gastar agora ou guardar.
+
+## Gestão espacial (Fase 2)
+
+A **ordem dos coringas importa**: eles aplicam da esquerda para a direita, e
+alguns efeitos dependem da posição — *Acumulador* (+2 mult por coringa à sua
+esquerda) e *Finalizador* (+8 mult se for o último). Clique num coringa e use
+**◀ Mover / Mover ▶** para reorganizar a fileira. Organizar bem é o "molho"
+que aproxima o jogo do Backpack Hero, não de um Balatro genérico.
 
 ## Arquivos
 

@@ -1,8 +1,12 @@
 extends Control
 
-## Protótipo jogável de deckbuilder (Balatro-lite) + Coringas + Loja.
+## Protótipo jogável de deckbuilder (Balatro-lite) + Coringas + Loja + Gestão.
 ## Toda a UI é construída em código de propósito: zero arte, foco no LOOP.
 ## A lógica de pontuação vive em scoring.gd (testável); aqui é só jogo + UI.
+##
+## FASE 2 (gestão espacial): a ORDEM dos coringas importa. Alguns efeitos
+## dependem da posição na fileira, e você pode reordená-los — organizar é
+## uma decisão, no espírito do Backpack Hero.
 
 # --------------------------------------------------------------------------
 #  BALANCEAMENTO — mexa aqui para ajustar o jogo. É o "painel de controle".
@@ -16,6 +20,7 @@ const TARGET_GROWTH := 1.6      # meta cresce ^ por rodada
 const STARTING_JOKERS := 2      # coringas com que o jogador começa
 const MAX_JOKERS := 5           # limite de coringas
 const SHOP_SLOTS := 3           # coringas ofertados por loja
+const REROLL_COST := 2          # custo para rerolar a loja
 
 # --------------------------------------------------------------------------
 #  ESTADO
@@ -23,7 +28,8 @@ const SHOP_SLOTS := 3           # coringas ofertados por loja
 var deck: Array = []
 var hand: Array = []
 var selected: Array = []     # índices dentro de `hand`
-var jokers: Array = []       # coringas em posse do jogador
+var jokers: Array = []       # coringas em posse do jogador (a ORDEM importa)
+var selected_joker := -1     # coringa selecionado para reordenar (-1 = nenhum)
 var shop_offers: Array = []  # coringas à venda na loja atual
 var round_num := 1
 var target := BASE_TARGET
@@ -38,8 +44,11 @@ var in_shop := false
 #  REFERÊNCIAS DE UI
 # --------------------------------------------------------------------------
 var info_label: Label
-var joker_label: Label
 var message_label: Label
+# fileira de coringas (sempre visível)
+var joker_row: HBoxContainer
+var move_left_button: Button
+var move_right_button: Button
 # painel de jogo
 var play_panel: VBoxContainer
 var preview_label: Label
@@ -49,6 +58,7 @@ var discard_button: Button
 # painel de loja
 var shop_panel: VBoxContainer
 var shop_row: HBoxContainer
+var reroll_button: Button
 var continue_button: Button
 
 
@@ -63,11 +73,11 @@ func _ready() -> void:
 	add_child(margin)
 
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 16)
+	root.add_theme_constant_override("separation", 14)
 	margin.add_child(root)
 
 	var title := Label.new()
-	title.text = "PROTÓTIPO DECKBUILDER  ·  Coringas + Loja"
+	title.text = "PROTÓTIPO DECKBUILDER  ·  Coringas + Loja + Gestão"
 	title.add_theme_font_size_override("font_size", 24)
 	root.add_child(title)
 
@@ -75,17 +85,12 @@ func _ready() -> void:
 	info_label.add_theme_font_size_override("font_size", 18)
 	root.add_child(info_label)
 
-	joker_label = Label.new()
-	joker_label.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
-	joker_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	root.add_child(joker_label)
-
 	message_label = Label.new()
 	message_label.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
 	root.add_child(message_label)
 
+	_build_joker_bar(root)
 	root.add_child(HSeparator.new())
-
 	_build_play_panel(root)
 	_build_shop_panel(root)
 
@@ -94,9 +99,39 @@ func _ready() -> void:
 	start_round()
 
 
+func _build_joker_bar(root: VBoxContainer) -> void:
+	var header := Label.new()
+	header.text = "Coringas (aplicam da ESQUERDA p/ direita — a ordem muda a pontuação):"
+	header.add_theme_color_override("font_color", Color(1.0, 0.82, 0.35))
+	root.add_child(header)
+
+	joker_row = HBoxContainer.new()
+	joker_row.add_theme_constant_override("separation", 8)
+	root.add_child(joker_row)
+
+	var move_bar := HBoxContainer.new()
+	move_bar.add_theme_constant_override("separation", 8)
+	root.add_child(move_bar)
+
+	move_left_button = Button.new()
+	move_left_button.text = "◀ Mover"
+	move_left_button.pressed.connect(_move_joker.bind(-1))
+	move_bar.add_child(move_left_button)
+
+	move_right_button = Button.new()
+	move_right_button.text = "Mover ▶"
+	move_right_button.pressed.connect(_move_joker.bind(1))
+	move_bar.add_child(move_right_button)
+
+	var tip := Label.new()
+	tip.text = "  (clique num coringa para selecioná-lo, depois mova)"
+	tip.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	move_bar.add_child(tip)
+
+
 func _build_play_panel(root: VBoxContainer) -> void:
 	play_panel = VBoxContainer.new()
-	play_panel.add_theme_constant_override("separation", 16)
+	play_panel.add_theme_constant_override("separation", 14)
 	root.add_child(play_panel)
 
 	preview_label = Label.new()
@@ -123,15 +158,10 @@ func _build_play_panel(root: VBoxContainer) -> void:
 	discard_button.pressed.connect(_on_discard)
 	buttons.add_child(discard_button)
 
-	var hint := Label.new()
-	hint.text = "Selecione até 5 cartas. Os coringas (em amarelo) modificam a pontuação."
-	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	play_panel.add_child(hint)
-
 
 func _build_shop_panel(root: VBoxContainer) -> void:
 	shop_panel = VBoxContainer.new()
-	shop_panel.add_theme_constant_override("separation", 16)
+	shop_panel.add_theme_constant_override("separation", 14)
 	root.add_child(shop_panel)
 
 	var shop_title := Label.new()
@@ -143,11 +173,21 @@ func _build_shop_panel(root: VBoxContainer) -> void:
 	shop_row.add_theme_constant_override("separation", 12)
 	shop_panel.add_child(shop_row)
 
+	var shop_buttons := HBoxContainer.new()
+	shop_buttons.add_theme_constant_override("separation", 12)
+	shop_panel.add_child(shop_buttons)
+
+	reroll_button = Button.new()
+	reroll_button.text = "Rerolar ($%d)" % REROLL_COST
+	reroll_button.custom_minimum_size = Vector2(160, 48)
+	reroll_button.pressed.connect(_on_reroll)
+	shop_buttons.add_child(reroll_button)
+
 	continue_button = Button.new()
 	continue_button.text = "Próxima Rodada  ▶"
 	continue_button.custom_minimum_size = Vector2(220, 48)
 	continue_button.pressed.connect(_on_continue)
-	shop_panel.add_child(continue_button)
+	shop_buttons.add_child(continue_button)
 
 
 # --------------------------------------------------------------------------
@@ -239,16 +279,41 @@ func _restart() -> void:
 	in_shop = false
 	round_num = 1
 	money = 0
+	selected_joker = -1
 	message_label.text = ""
 	jokers = Joker.default_pool().slice(0, STARTING_JOKERS)
 	start_round()
 
 
 # --------------------------------------------------------------------------
-#  LOJA (Fase 1.5)
+#  GESTÃO: reordenar coringas (a posição muda o cálculo)
+# --------------------------------------------------------------------------
+func _on_joker_clicked(index: int) -> void:
+	selected_joker = -1 if selected_joker == index else index
+	update_ui()
+
+
+func _move_joker(dir: int) -> void:
+	var i := selected_joker
+	var j := i + dir
+	if i < 0 or j < 0 or j >= jokers.size():
+		return
+	var tmp = jokers[i]
+	jokers[i] = jokers[j]
+	jokers[j] = tmp
+	selected_joker = j
+	update_ui()
+
+
+# --------------------------------------------------------------------------
+#  LOJA
 # --------------------------------------------------------------------------
 func _open_shop() -> void:
 	in_shop = true
+	_generate_offers()
+
+
+func _generate_offers() -> void:
 	shop_offers.clear()
 	var owned := {}
 	for j in jokers:
@@ -272,6 +337,15 @@ func _buy_joker(index: int) -> void:
 	jokers.append(j)
 	shop_offers.remove_at(index)
 	message_label.text = "Comprou: %s  (-$%d)" % [j.joker_name, j.cost]
+	update_ui()
+
+
+func _on_reroll() -> void:
+	if money < REROLL_COST:
+		return
+	money -= REROLL_COST
+	_generate_offers()
+	message_label.text = "Loja rerolada (-$%d)" % REROLL_COST
 	update_ui()
 
 
@@ -299,13 +373,14 @@ func update_ui() -> void:
 	info_label.text = "Rodada %d   |   Alvo: %d   |   Pontos: %d   |   Mãos: %d   |   Descartes: %d   |   $%d" % [
 		round_num, target, round_score, hands_left, discards_left, money
 	]
-	_update_jokers_label()
+	_rebuild_jokers()
 
 	play_panel.visible = not in_shop
 	shop_panel.visible = in_shop
 
 	if in_shop:
 		_rebuild_shop()
+		reroll_button.disabled = money < REROLL_COST
 	else:
 		_rebuild_cards()
 		_update_preview()
@@ -313,14 +388,26 @@ func update_ui() -> void:
 		discard_button.disabled = game_over or selected.is_empty() or discards_left <= 0
 
 
-func _update_jokers_label() -> void:
+func _rebuild_jokers() -> void:
+	for child in joker_row.get_children():
+		child.queue_free()
 	if jokers.is_empty():
-		joker_label.text = "Coringas: (nenhum)"
-		return
-	var parts := []
-	for j in jokers:
-		parts.append("[%s: %s]" % [j.joker_name, j.description])
-	joker_label.text = "Coringas: " + "  ".join(parts)
+		var empty := Label.new()
+		empty.text = "(nenhum coringa)"
+		empty.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		joker_row.add_child(empty)
+	else:
+		for i in jokers.size():
+			var j: Joker = jokers[i]
+			var b := Button.new()
+			b.custom_minimum_size = Vector2(155, 76)
+			b.text = "%d. %s\n%s" % [i + 1, j.joker_name, j.description]
+			if i == selected_joker:
+				b.modulate = Color(1.0, 0.9, 0.4)  # destaca o selecionado
+			b.pressed.connect(_on_joker_clicked.bind(i))
+			joker_row.add_child(b)
+	move_left_button.disabled = selected_joker <= 0
+	move_right_button.disabled = selected_joker < 0 or selected_joker >= jokers.size() - 1
 
 
 func _rebuild_cards() -> void:

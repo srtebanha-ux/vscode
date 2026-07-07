@@ -25,6 +25,8 @@ func _initialize() -> void:
 	test_joker_chips_per_suit()
 	test_joker_flat_mult()
 	test_joker_stacking()
+	test_joker_per_left()
+	test_order_matters()
 	test_catalog()
 	print("\n== Resultado: %d passaram, %d falharam ==" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
@@ -162,13 +164,37 @@ func test_joker_stacking() -> void:
 	check("stack: (2+6)*3", int(r.mult), 24)
 
 
+func test_joker_per_left() -> void:
+	# Acumulador: +2 mult por coringa à esquerda. Sozinho (índice 0) não soma.
+	var acu := Joker.make("a", "Acumulador", "", Joker.Effect.MULT_PER_LEFT, 2)
+	var pair := [_card(13, "spades"), _card(13, "hearts")]
+	var r1 := Scoring.score(pair, [acu], {})
+	check("acumulador sozinho: mult 2", int(r1.mult), 2)
+	# Com um coringa à esquerda (índice 1): +2*1 = +2.
+	var oti := Joker.make("o", "Otimista", "", Joker.Effect.FLAT_MULT, 4)
+	var r2 := Scoring.score(pair, [oti, acu], {})
+	check("acumulador apos otimista: (2+4)+2", int(r2.mult), 8)
+
+
+func test_order_matters() -> void:
+	# Finalizador: +8 mult SE for o último. A ORDEM muda o resultado — o ponto
+	# central da Fase 2 (gestão espacial).
+	var oti := Joker.make("o", "Otimista", "", Joker.Effect.FLAT_MULT, 4)
+	var fin := Joker.make("f", "Finalizador", "", Joker.Effect.MULT_IF_RIGHTMOST, 8)
+	var pair := [_card(13, "spades"), _card(13, "hearts")]
+	# [otimista, finalizador]: 2 +4 = 6, finalizador é o último -> +8 = 14.
+	check("ordem A: finalizador por ultimo", int(Scoring.score(pair, [oti, fin], {}).mult), 14)
+	# [finalizador, otimista]: finalizador NÃO é o último -> +0; +4 = 6.
+	check("ordem B: finalizador nao e ultimo", int(Scoring.score(pair, [fin, oti], {}).mult), 6)
+
+
 func test_catalog() -> void:
 	# O catálogo cresceu para a loja ter variedade.
-	check("catalogo: 8 coringas", Joker.default_pool().size(), 8)
+	check("catalogo: 10 coringas", Joker.default_pool().size(), 10)
 	# cost tem default 4 quando não informado em make().
 	check("cost: default 4", Joker.make("x", "", "", Joker.Effect.FLAT_MULT, 1).cost, 4)
 	# ids únicos (a loja depende disso para não ofertar duplicado).
 	var ids := {}
 	for j in Joker.default_pool():
 		ids[j.id] = true
-	check("catalogo: ids unicos", ids.size(), 8)
+	check("catalogo: ids unicos", ids.size(), 10)

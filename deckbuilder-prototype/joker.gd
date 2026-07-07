@@ -15,6 +15,8 @@ enum Effect {
 	CHIPS_PER_SUIT,   # 4: +amount de chips por carta do naipe suit_filter
 	MULT_IF_HAND,     # 5: +amount de mult SE o tipo de mão == hand_filter
 	MULT_PER_DISCARD, # 6: +amount de mult por descarte NÃO usado (recompensa cautela)
+	MULT_PER_LEFT,    # 7: +amount de mult por coringa à ESQUERDA (posição importa!)
+	MULT_IF_RIGHTMOST,# 8: +amount de mult SE for o coringa mais à direita
 }
 
 @export var id: String = ""
@@ -46,6 +48,12 @@ func apply(chips: int, mult: int, hand_type: String, cards: Array, ctx: Dictiona
 				mult += amount
 		Effect.MULT_PER_DISCARD:
 			mult += amount * int(ctx.get("discards_left", 0))
+		Effect.MULT_PER_LEFT:
+			# ctx["index"] = posição deste coringa (0 = mais à esquerda)
+			mult += amount * int(ctx.get("index", 0))
+		Effect.MULT_IF_RIGHTMOST:
+			if int(ctx.get("index", 0)) == int(ctx.get("joker_count", 1)) - 1:
+				mult += amount
 	return { "chips": chips, "mult": mult }
 
 
@@ -94,4 +102,8 @@ static func default_pool() -> Array:
 			Effect.CHIPS_PER_SUIT, 15, "spades", "", 5),
 		make("trio", "Trio", "+5 Mult se for Trinca",
 			Effect.MULT_IF_HAND, 5, "", "Trinca", 5),
+		make("acumulador", "Acumulador", "+2 Mult por coringa à esquerda",
+			Effect.MULT_PER_LEFT, 2, "", "", 6),
+		make("finalizador", "Finalizador", "+8 Mult se for o último à direita",
+			Effect.MULT_IF_RIGHTMOST, 8, "", "", 6),
 	]

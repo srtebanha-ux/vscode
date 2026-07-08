@@ -1,9 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import ajv2020 from 'ajv/dist/2020.js';
 import type { ValidateFunction } from 'ajv';
-
-// ajv ships CJS with a `default` property; unwrap it under NodeNext ESM.
-const Ajv2020 = ajv2020.default;
 import {
 	CORE_ONLY_SCOPES,
 	moduleManifestSchema,
@@ -12,6 +8,7 @@ import {
 	type SecurityScope
 } from '@foundry/shared';
 import { ApprovedModuleRegistry } from '@foundry/modules-library';
+import { compileSchema, schemaErrors } from '../validation/compileSchema.js';
 
 export interface TenantPolicy {
 	readonly tenantId: string;
@@ -52,18 +49,13 @@ export class FactoryService {
 	private readonly instances = new Map<string, SaaSInstance>(); // key: namespace
 
 	constructor(private readonly registry: ApprovedModuleRegistry) {
-		// allowUnionTypes: templateVars values are string|number|boolean by design.
-		const ajv = new Ajv2020({ allErrors: true, strict: true, allowUnionTypes: true });
-		this.validateManifest = ajv.compile<SaaSModuleManifest>(moduleManifestSchema);
+		this.validateManifest = compileSchema<SaaSModuleManifest>(moduleManifestSchema);
 	}
 
 	provision(rawConfig: unknown, policy: TenantPolicy): FactoryResult {
 		// 1. Schema: rawConfig is untrusted until this passes.
 		if (!this.validateManifest(rawConfig)) {
-			const details = (this.validateManifest.errors ?? []).map(
-				e => `${e.instancePath || '/'} ${e.message ?? 'invalid'}`
-			);
-			return { ok: false, error: { code: 'schema-violation', details } };
+			return { ok: false, error: { code: 'schema-violation', details: schemaErrors(this.validateManifest) } };
 		}
 		const manifest: SaaSModuleManifest = rawConfig;
 

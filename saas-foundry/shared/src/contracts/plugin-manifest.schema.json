@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foundry.internal/schemas/plugin-manifest.json",
+  "title": "PluginManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "version", "permissions", "entryPoint"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$",
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "permissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 8,
+      "items": {
+        "enum": [
+          "storage:read",
+          "storage:write",
+          "net:outbound",
+          "auth:read-profile",
+          "billing:read",
+          "events:emit",
+          "events:subscribe",
+          "ui:render"
+        ]
+      }
+    },
+    "entryPoint": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*\\.js$",
+      "description": "Relative path inside the plugin dir. Segments cannot contain dots — traversal ('..'), absolute paths and URLs never match."
+    },
+    "displayName": { "type": "string", "minLength": 1, "maxLength": 80 }
+  }
+}

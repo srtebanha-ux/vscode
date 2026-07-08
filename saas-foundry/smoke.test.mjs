@@ -1,6 +1,9 @@
 // Smoke test: exercises the fail-closed pipeline end-to-end. Run: node smoke.test.mjs
 import assert from 'node:assert/strict';
-import { FactoryService } from '@foundry/engine-core';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { FactoryService, PluginRegistry } from '@foundry/engine-core';
 import { ApprovedModuleRegistry } from '@foundry/modules-library';
 import { SandboxHost, ScopeDeniedError } from '@foundry/sandbox-runtime';
 import { createSecurityMiddleware, GatewayRouter } from '@foundry/api-gateway';
@@ -72,5 +75,50 @@ assert.equal(crossOrigin.status, 403);
 
 const traversal = await router.handle(mkReq('tokA', `/apps/${instance.namespace}/../ns_tnt2_other/items`));
 assert.equal(traversal.status, 400);
+
+// 7. PluginRegistry: scan validation + authorization-gated dynamic loading
+const lib = await mkdtemp(join(tmpdir(), 'foundry-lib-'));
+try {
+	const writePlugin = async (dir, manifest, entrySource) => {
+		await mkdir(join(lib, dir), { recursive: true });
+		await writeFile(join(lib, dir, 'manifest.json'), JSON.stringify(manifest));
+		if (entrySource) {
+			await writeFile(join(lib, dir, 'index.js'), entrySource);
+		}
+	};
+	await writePlugin(
+		'hello',
+		{ id: 'block.hello', version: '1.0.0', permissions: ['storage:read'], entryPoint: 'index.js' },
+		'export function createPlugin(ctx) { return { greet: () => `hello from ${ctx.namespace}` }; }'
+	);
+	await writePlugin('no-entry-field', { id: 'block.broken', version: '1.0.0', permissions: [] }); // missing entryPoint
+	await writePlugin('traversal', { id: 'block.evil', version: '1.0.0', permissions: [], entryPoint: '../../outside.js' });
+	await writePlugin('bad-scope', { id: 'block.rogue', version: '1.0.0', permissions: ['core:cross-namespace'], entryPoint: 'index.js' });
+
+	const pluginRegistry = new PluginRegistry(lib);
+	const report = await pluginRegistry.scan();
+	assert.deepEqual(report.registered, ['block.hello']);
+	assert.equal(report.skipped.length, 3); // schema catches all three invalid manifests
+
+	// Public listing never leaks entryPoint
+	assert.equal(Object.hasOwn(pluginRegistry.list()[0], 'entryPoint'), false);
+
+	const alice = { userId: 'u1', tenantId: 'tnt1', grantedScopes: ['storage:read'] };
+	const mallory = { userId: 'u2', tenantId: 'tnt2', grantedScopes: ['ui:render'] };
+
+	const denied = await pluginRegistry.loadPlugin('block.hello', mallory);
+	assert.equal(denied.ok, false);
+	assert.equal(denied.error.code, 'missing-scope');
+
+	const unknown = await pluginRegistry.loadPlugin('block.ghost', alice);
+	assert.equal(unknown.ok, false);
+	assert.equal(unknown.error.code, 'unknown-plugin');
+
+	const loaded = await pluginRegistry.loadPlugin('block.hello', alice);
+	assert.equal(loaded.ok, true);
+	assert.equal(loaded.plugin.create({ namespace: instance.namespace }).greet(), `hello from ${instance.namespace}`);
+} finally {
+	await rm(lib, { recursive: true, force: true });
+}
 
 console.log('ALL SMOKE TESTS PASSED');

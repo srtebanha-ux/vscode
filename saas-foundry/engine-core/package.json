@@ -1,0 +1,14 @@
+{
+  "name": "@foundry/engine-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc -b" },
+  "dependencies": {
+    "@foundry/shared": "0.1.0",
+    "@foundry/modules-library": "0.1.0",
+    "ajv": "^8.16.0"
+  }
+}

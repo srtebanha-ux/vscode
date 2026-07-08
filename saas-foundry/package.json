@@ -1,0 +1,21 @@
+{
+  "name": "saas-foundry",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Meta-SaaS engine: generates, manages and runs isolated micro-SaaS instances",
+  "workspaces": [
+    "shared",
+    "engine-core",
+    "sandbox-runtime",
+    "modules-library",
+    "api-gateway"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.14.0"
+  }
+}

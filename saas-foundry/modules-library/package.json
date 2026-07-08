@@ -1,0 +1,12 @@
+{
+  "name": "@foundry/modules-library",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": { "build": "tsc -b" },
+  "dependencies": {
+    "@foundry/shared": "0.1.0"
+  }
+}

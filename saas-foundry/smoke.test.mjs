@@ -144,7 +144,7 @@ const mount = (services) =>
 const fakeApi = { get: async () => [], put: async () => {} };
 
 const authorizedHtml = mount({ namespace: instance.namespace, grantedScopes: ['read:tasks', 'write:tasks'], api: fakeApi });
-assert.match(authorizedHtml, /Carregando tarefas/); // effects don't run in static render
+assert.match(authorizedHtml, /animate-pulse/); // LoadingSkeleton: effects don't run in static render
 
 const deniedHtml = mount({ namespace: instance.namespace, grantedScopes: ['read:tasks'], api: fakeApi });
 assert.match(deniedHtml, /Acesso negado/);
@@ -196,6 +196,14 @@ assert.match(viewerHtml, /write:tasks/);
 
 const ghostHtml = await renderApp(createElement(AppRouter, { path: '/plugins/ghost-plugin', ...routeProps }));
 assert.match(ghostHtml, /unknown-plugin/);
+
+// Empty collection -> friction-zero EmptyState with CTA
+const { MockApiService } = await import('@foundry/engine-core');
+const emptyHtml = await renderApp(
+	createElement(AppRouter, { path: '/plugins/task-dashboard-v1', ...routeProps, api: new MockApiService({ tasks: [] }) })
+);
+assert.match(emptyHtml, /Sua lista está limpa\./);
+assert.match(emptyHtml, /Adicionar tarefa/);
 
 // Crash isolation: a throwing plugin degrades to the fallback, the shell survives
 const Thrower = () => { throw new Error('boom'); };

@@ -45,6 +45,23 @@ export class MockApiService implements ApiService {
 		}
 	}
 
+	async delete(resource: string): Promise<void> {
+		await this.delay();
+		const slash = resource.indexOf('/');
+		if (slash === -1) {
+			this.resources.delete(resource);
+			return;
+		}
+		const items = this.resources.get(resource.slice(0, slash));
+		if (Array.isArray(items)) {
+			const id = resource.slice(slash + 1);
+			const index = items.findIndex((item: unknown) => (item as { id?: string }).id === id);
+			if (index !== -1) {
+				items.splice(index, 1);
+			}
+		}
+	}
+
 	private delay(): Promise<void> {
 		return new Promise(resolve => setTimeout(resolve, this.latencyMs));
 	}

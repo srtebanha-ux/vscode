@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
-import type { PluginRegistry } from '@foundry/engine-core/ui';
+import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
 import { Factory, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, UserRound, type LucideIcon } from 'lucide-react';
 
 export interface SessionInfo {
@@ -31,6 +31,7 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 	};
 
 	return (
+		<ToastProvider>
 		<div className="flex min-h-screen bg-gray-50 font-sans text-gray-900 antialiased">
 			<aside
 				className={`sticky top-0 z-20 flex h-screen flex-col border-r border-gray-200/70 bg-white/80 backdrop-blur transition-all duration-300 ${
@@ -131,5 +132,6 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 
 			<main className="min-w-0 flex-1 px-8 py-8">{children}</main>
 		</div>
+		</ToastProvider>
 	);
 }

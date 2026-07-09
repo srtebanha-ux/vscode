@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { hasScopes, useCoreService } from '@foundry/engine-core/ui';
+import { EmptyState, LoadingSkeleton, hasScopes, useCoreService, useToast } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
-import { ArrowRight, CalendarDays, ClipboardList, Loader2, Plus, ShieldAlert, TriangleAlert } from 'lucide-react';
+import { ArrowRight, CalendarDays, ClipboardList, Plus, ShieldAlert, Trash2, TriangleAlert } from 'lucide-react';
 
 export type TaskStatus = 'todo' | 'in-progress' | 'done';
 
@@ -63,6 +63,7 @@ export default function TaskDashboard(): React.JSX.Element {
 
 function AuthorizedDashboard(): React.JSX.Element {
 	const { api } = useCoreService();
+	const toast = useToast();
 	const [tasks, setTasks] = useState<readonly Task[] | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
@@ -87,9 +88,24 @@ function AuthorizedDashboard(): React.JSX.Element {
 			status: 'todo',
 			dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
 		};
-		await api.put<Task>(`tasks/${task.id}`, task);
-		setTasks(current => [...(current ?? []), task]);
-	}, [api]);
+		try {
+			await api.put<Task>(`tasks/${task.id}`, task);
+			setTasks(current => [...(current ?? []), task]);
+			toast.success('Tarefa adicionada com sucesso!');
+		} catch {
+			toast.error('Não foi possível adicionar a tarefa.');
+		}
+	}, [api, toast]);
+
+	const removeTask = useCallback(async (task: Task) => {
+		try {
+			await api.delete(`tasks/${task.id}`);
+			setTasks(current => (current ?? []).filter(t => t.id !== task.id));
+			toast.success('Tarefa excluída.');
+		} catch {
+			toast.error('Não foi possível excluir a tarefa.');
+		}
+	}, [api, toast]);
 
 	if (error !== null) {
 		return (
@@ -102,10 +118,9 @@ function AuthorizedDashboard(): React.JSX.Element {
 
 	if (tasks === null) {
 		return (
-			<div className="flex items-center gap-3 rounded-2xl bg-white p-6 text-sm text-gray-500 shadow-sm">
-				<Loader2 className="h-5 w-5 animate-spin" aria-hidden />
-				<p>Carregando tarefas…</p>
-			</div>
+			<section className="rounded-2xl bg-white p-6 shadow-sm">
+				<LoadingSkeleton rows={3} />
+			</section>
 		);
 	}
 
@@ -127,10 +142,13 @@ function AuthorizedDashboard(): React.JSX.Element {
 			</header>
 
 			{tasks.length === 0 ? (
-				<div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-gray-200 py-12 text-gray-400">
-					<ClipboardList className="h-8 w-8" aria-hidden />
-					<p className="text-sm">Nenhuma tarefa.</p>
-				</div>
+				<EmptyState
+					icon={ClipboardList}
+					title="Sua lista está limpa."
+					description="Comece adicionando uma nova tarefa."
+					actionLabel="Adicionar tarefa"
+					onAction={() => void createTask()}
+				/>
 			) : (
 				<ul className="space-y-3">
 					{tasks.map(task => (
@@ -156,6 +174,15 @@ function AuthorizedDashboard(): React.JSX.Element {
 							>
 								{STATUS_LABELS[task.status]}
 								<ArrowRight className="h-3.5 w-3.5 opacity-0 transition-all group-hover:opacity-100" aria-hidden />
+							</button>
+							<button
+								type="button"
+								onClick={() => void removeTask(task)}
+								title="Excluir tarefa"
+								aria-label={`Excluir ${task.title}`}
+								className="rounded-lg p-2 text-gray-300 transition-all hover:scale-105 hover:bg-red-50 hover:text-red-500"
+							>
+								<Trash2 className="h-4 w-4" aria-hidden />
 							</button>
 						</li>
 					))}

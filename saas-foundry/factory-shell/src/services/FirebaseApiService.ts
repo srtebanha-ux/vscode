@@ -1,6 +1,7 @@
 import {
 	addDoc,
 	collection,
+	deleteDoc,
 	doc,
 	getDoc,
 	getDocs,
@@ -64,6 +65,15 @@ export class FirebaseApiService implements ApiService {
 			throw new Error(`put requires a document path, got collection: ${resource}`);
 		}
 		await setDoc(doc(this.db, segments.join('/')), body as Record<string, unknown>, { merge: true });
+	}
+
+	/** ApiService contract: remove um documento do silo do tenant. */
+	async delete(resource: string): Promise<void> {
+		const segments = tenantSegments(this.tenantId, resource);
+		if (segments.length % 2 === 1) {
+			throw new Error(`delete requires a document path, got collection: ${resource}`);
+		}
+		await deleteDoc(doc(this.db, segments.join('/')));
 	}
 
 	/** Lists a tenant collection, e.g. getCollection('tasks'). */

@@ -10,6 +10,7 @@ import type { SecurityScope } from '@foundry/shared';
 export interface ApiService {
 	get<T>(resource: string): Promise<T>;
 	put<T>(resource: string, body: T): Promise<void>;
+	delete(resource: string): Promise<void>;
 }
 
 /** What the Core host injects when mounting a plugin validated by the PluginRegistry. */

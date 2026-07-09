@@ -212,6 +212,20 @@ const crashHtml = await renderApp(
 );
 assert.match(crashHtml, /Plugin indisponível/);
 
+// Global boundary: fatal app error -> friendly screen, Recarregar triggers onReload
+const { GlobalErrorBoundary } = await import('@foundry/engine-core');
+let reloaded = false;
+const globalContainer = dom.window.document.createElement('div');
+createRoot(globalContainer).render(
+	createElement(GlobalErrorBoundary, { onReload: () => { reloaded = true; } }, createElement(Thrower))
+);
+await new Promise(resolve => setTimeout(resolve, 50));
+assert.match(globalContainer.innerHTML, /Ops, algo deu errado/);
+const reloadButton = [...globalContainer.querySelectorAll('button')].find(b => b.textContent === 'Recarregar');
+reloadButton.click();
+await new Promise(resolve => setTimeout(resolve, 20));
+assert.equal(reloaded, true);
+
 // 11. Golden rule: only the shell's FirebaseApiService may import firebase.
 // Plugins and engine-core must stay firebase-free (data access via useCoreService only).
 const { readFile: readSrc } = await import('node:fs/promises');

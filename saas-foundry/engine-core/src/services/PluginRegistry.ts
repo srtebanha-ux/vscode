@@ -83,7 +83,10 @@ export class PluginRegistry {
 		this.resolveModule =
 			resolver ??
 			(async entryPath => {
-				const { pathToFileURL } = await import(/* @vite-ignore */ 'node:url');
+				// Specifier via variável: bundlers (Rollup/Vite) não tentam resolver
+				// builtins do Node em builds de browser — este caminho só roda no servidor.
+				const nodeUrl = 'node:url';
+				const { pathToFileURL } = await import(/* @vite-ignore */ nodeUrl);
 				return (await import(/* @vite-ignore */ pathToFileURL(entryPath).href)) as Record<string, unknown>;
 			});
 	}
@@ -112,9 +115,11 @@ export class PluginRegistry {
 		this.plugins.clear();
 		this.moduleCache.clear();
 
+		const nodeFs = 'node:fs/promises';
+		const nodePath = 'node:path';
 		const [{ readdir, readFile }, { resolve, sep }] = await Promise.all([
-			import(/* @vite-ignore */ 'node:fs/promises'),
-			import(/* @vite-ignore */ 'node:path')
+			import(/* @vite-ignore */ nodeFs) as Promise<typeof import('node:fs/promises')>,
+			import(/* @vite-ignore */ nodePath) as Promise<typeof import('node:path')>
 		]);
 
 		const root = resolve(this.libraryRoot);

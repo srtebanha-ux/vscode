@@ -7,6 +7,7 @@ export * from './services/PluginRegistry.js';
 export * from './services/MockApiService.js';
 export * from './plugin-host/CoreServices.js';
 export * from './components/ErrorBoundary.js';
+export * from './components/GlobalErrorBoundary.js';
 export * from './components/PluginRenderer.js';
 export * from './components/AppRouter.js';
 export * from './components/EmptyState.js';

@@ -1,6 +1,6 @@
 import { StrictMode, useMemo, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
-import { createMockTaskApi, type AuthenticatedPrincipal, type PluginRegistry } from '@foundry/engine-core/ui';
+import { GlobalErrorBoundary, createMockTaskApi, type AuthenticatedPrincipal, type PluginRegistry } from '@foundry/engine-core/ui';
 import { App } from './App';
 import { AuthProvider, RequireAuth, useAuth } from './auth/AuthProvider';
 import { createPluginRegistry } from './pluginCatalog';
@@ -48,15 +48,17 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
 	<StrictMode>
-		{isFirebaseConfigured ? (
-			<AuthProvider>
-				<RequireAuth>
-					<AuthedApp registry={registry} />
-				</RequireAuth>
-			</AuthProvider>
-		) : (
-			<App registry={registry} principal={DEV_PRINCIPAL} api={createMockTaskApi()} />
-		)}
+		<GlobalErrorBoundary>
+			{isFirebaseConfigured ? (
+				<AuthProvider>
+					<RequireAuth>
+						<AuthedApp registry={registry} />
+					</RequireAuth>
+				</AuthProvider>
+			) : (
+				<App registry={registry} principal={DEV_PRINCIPAL} api={createMockTaskApi()} />
+			)}
+		</GlobalErrorBoundary>
 	</StrictMode>
 );
 

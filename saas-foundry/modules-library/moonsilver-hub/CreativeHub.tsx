@@ -91,6 +91,7 @@ function Hub(): React.JSX.Element {
 						key={item.id}
 						type="button"
 						role="tab"
+						data-tour={item.id === 'consistency' ? 'consistency-tab' : undefined}
 						aria-selected={tab === item.id}
 						onClick={() => setTab(item.id)}
 						className={`relative px-4 py-2.5 text-sm font-medium transition-colors ${

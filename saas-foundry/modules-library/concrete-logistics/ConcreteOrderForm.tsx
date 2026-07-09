@@ -189,6 +189,7 @@ function OrderForm(): React.JSX.Element {
 				</p>
 				<button
 					type="button"
+					data-tour="generate-order"
 					onClick={() => void generate()}
 					disabled={saving}
 					className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:scale-105 hover:shadow-md disabled:pointer-events-none disabled:opacity-60"

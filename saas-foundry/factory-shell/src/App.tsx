@@ -11,6 +11,7 @@ import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } fro
 import { MasterDashboard } from './admin/MasterDashboard';
 import type { UserRole } from './auth/AuthProvider';
 import { MainLayout, type SessionInfo } from './MainLayout';
+import { OnboardingProvider } from './providers/OnboardingProvider';
 import { Storefront } from './Storefront';
 
 /** Same charset the plugin-manifest schema allows for ids — anything else 404s before touching the registry. */
@@ -139,15 +140,17 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 
 	return (
 		<MainLayout registry={registry} currentPath={path} onNavigate={navigate} session={session} showAdmin={role === 'SUPER_ADMIN'}>
-			{/* keyed by path: remounts + fades on every module switch */}
-			<motion.div
-				key={path}
-				initial={{ opacity: 0, y: 10 }}
-				animate={{ opacity: 1, y: 0 }}
-				transition={{ duration: 0.25, ease: 'easeOut' }}
-			>
-				{content}
-			</motion.div>
+			<OnboardingProvider currentPath={path}>
+				{/* keyed by path: remounts + fades on every module switch */}
+				<motion.div
+					key={path}
+					initial={{ opacity: 0, y: 10 }}
+					animate={{ opacity: 1, y: 0 }}
+					transition={{ duration: 0.25, ease: 'easeOut' }}
+				>
+					{content}
+				</motion.div>
+			</OnboardingProvider>
 		</MainLayout>
 	);
 }

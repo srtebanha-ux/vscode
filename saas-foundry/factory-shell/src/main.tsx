@@ -12,7 +12,7 @@ const registry = createPluginRegistry();
 
 /** Composition root of the authenticated app: session -> principal + tenant-siloed ApiService. */
 function AuthedApp({ registry: reg }: { readonly registry: PluginRegistry }): ReactElement {
-	const { user, signOut } = useAuth();
+	const { user, role, signOut } = useAuth();
 	if (!user) {
 		throw new Error('AuthedApp montado sem sessão'); // RequireAuth garante que não acontece
 	}
@@ -33,6 +33,7 @@ function AuthedApp({ registry: reg }: { readonly registry: PluginRegistry }): Re
 			registry={reg}
 			principal={principal}
 			api={api}
+			role={role}
 			session={{ email: user.email, onSignOut: () => void signOut() }}
 		/>
 	);
@@ -60,7 +61,12 @@ createRoot(rootElement).render(
 					</RequireAuth>
 				</AuthProvider>
 			) : (
-				<App registry={registry} principal={DEV_PRINCIPAL} api={createMockTaskApi()} />
+				<App
+					registry={registry}
+					principal={DEV_PRINCIPAL}
+					api={createMockTaskApi()}
+					role={window.localStorage.getItem('foundry:dev-role') === 'USER' ? 'USER' : 'SUPER_ADMIN'}
+				/>
 			)}
 		</GlobalErrorBoundary>
 	</StrictMode>

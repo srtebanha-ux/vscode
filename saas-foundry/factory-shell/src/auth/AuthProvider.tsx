@@ -9,8 +9,12 @@ import { Loader2 } from 'lucide-react';
 import { getFirebase } from '../services/firebaseConfig';
 import { LoginScreen } from './LoginScreen';
 
+export type UserRole = 'SUPER_ADMIN' | 'USER';
+
 export interface AuthState {
 	readonly user: User | null;
+	/** Vem dos custom claims do token (setados só pelo servidor/firebase-admin). */
+	readonly role: UserRole;
 	readonly loading: boolean;
 	readonly signIn: (email: string, password: string) => Promise<void>;
 	readonly signOut: () => Promise<void>;
@@ -29,25 +33,36 @@ export function useAuth(): AuthState {
 export function AuthProvider({ children }: { readonly children: ReactNode }): ReactElement {
 	const { auth } = getFirebase();
 	const [user, setUser] = useState<User | null>(null);
+	const [role, setRole] = useState<UserRole>('USER');
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
 		return onAuthStateChanged(auth, current => {
 			setUser(current);
-			setLoading(false);
+			if (!current) {
+				setRole('USER');
+				setLoading(false);
+				return;
+			}
+			// Fonte da role: custom claim assinado no token — o cliente não consegue forjar.
+			void current.getIdTokenResult().then(result => {
+				setRole(result.claims['role'] === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'USER');
+				setLoading(false);
+			});
 		});
 	}, [auth]);
 
 	const value = useMemo<AuthState>(
 		() => ({
 			user,
+			role,
 			loading,
 			signIn: async (email, password) => {
 				await signInWithEmailAndPassword(auth, email, password);
 			},
 			signOut: () => firebaseSignOut(auth)
 		}),
-		[auth, user, loading]
+		[auth, user, role, loading]
 	);
 
 	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

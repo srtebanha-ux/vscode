@@ -7,6 +7,8 @@ import {
 } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
 import { Sparkles, SearchX } from 'lucide-react';
+import { MasterDashboard } from './admin/MasterDashboard';
+import type { UserRole } from './auth/AuthProvider';
 import { MainLayout, type SessionInfo } from './MainLayout';
 import { Storefront } from './Storefront';
 
@@ -19,7 +21,14 @@ export interface AppProps {
 	readonly principal: AuthenticatedPrincipal;
 	/** FirebaseApiService or MockApiService — plugins can't tell the difference. */
 	readonly api: ApiService;
+	readonly role: UserRole;
 	readonly session?: SessionInfo;
+}
+
+/** Rota privilegiada acessada sem role: volta para a Home sem renderizar nada. */
+function RedirectHome({ navigate }: { readonly navigate: (to: string) => void }): null {
+	useEffect(() => navigate('/'), [navigate]);
+	return null;
 }
 
 function Welcome(): ReactElement {
@@ -54,7 +63,7 @@ function NotFound({ path }: { readonly path: string }): ReactElement {
  * PluginRenderer applies it per-mount, after the registry authorizes the
  * plugin — a global provider would hand services to unvalidated code.
  */
-export function App({ registry, principal, api, session }: AppProps): ReactElement {
+export function App({ registry, principal, api, role, session }: AppProps): ReactElement {
 	const [path, setPath] = useState(() => window.location.pathname);
 
 	useEffect(() => {
@@ -76,12 +85,15 @@ export function App({ registry, principal, api, session }: AppProps): ReactEleme
 		content = <Welcome />;
 	} else if (path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
+	} else if (path === '/admin') {
+		// RBAC: só SUPER_ADMIN renderiza; qualquer outro nível volta para a Home.
+		content = role === 'SUPER_ADMIN' ? <MasterDashboard /> : <RedirectHome navigate={navigate} />;
 	} else {
 		content = <NotFound path={path} />;
 	}
 
 	return (
-		<MainLayout registry={registry} currentPath={path} onNavigate={navigate} session={session}>
+		<MainLayout registry={registry} currentPath={path} onNavigate={navigate} session={session} showAdmin={role === 'SUPER_ADMIN'}>
 			{/* keyed by path: remounts + fades on every module switch */}
 			<motion.div
 				key={path}

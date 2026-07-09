@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { Clapperboard, Factory, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, Store, UserRound, type LucideIcon } from 'lucide-react';
+import { Clapperboard, Factory, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, ShieldCheck, Store, UserRound, type LucideIcon } from 'lucide-react';
 
 export interface SessionInfo {
 	readonly email: string | null;
@@ -14,6 +14,8 @@ export interface MainLayoutProps {
 	readonly onNavigate: (path: string) => void;
 	readonly children: ReactNode;
 	readonly session?: SessionInfo | undefined;
+	/** Mostra o atalho /admin — a rota em si é re-verificada pelo guard no App. */
+	readonly showAdmin?: boolean;
 }
 
 /** Visual metadata stays in the shell — the registry keeps exposing security-relevant fields only. */
@@ -22,7 +24,7 @@ const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
 	'creative-hub-v1': Clapperboard
 };
 
-export function MainLayout({ registry, currentPath, onNavigate, children, session }: MainLayoutProps): ReactElement {
+export function MainLayout({ registry, currentPath, onNavigate, children, session, showAdmin = false }: MainLayoutProps): ReactElement {
 	const [collapsed, setCollapsed] = useState(false);
 	const plugins = registry.list();
 
@@ -68,6 +70,22 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 						<Store className="h-5 w-5 shrink-0" aria-hidden />
 						{!collapsed && <span className="truncate">Marketplace</span>}
 					</a>
+					{showAdmin && (
+						<a
+							href="/admin"
+							title="Master Admin"
+							aria-current={currentPath === '/admin' ? 'page' : undefined}
+							onClick={event => navigate(event, '/admin')}
+							className={`group mb-3 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
+								currentPath === '/admin'
+									? 'bg-gray-900 text-white shadow-sm'
+									: 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
+							}`}
+						>
+							<ShieldCheck className="h-5 w-5 shrink-0" aria-hidden />
+							{!collapsed && <span className="truncate">Master Admin</span>}
+						</a>
+					)}
 					{!collapsed && (
 						<p className="px-2 pb-2 text-xs font-medium uppercase tracking-wider text-gray-400">Módulos</p>
 					)}

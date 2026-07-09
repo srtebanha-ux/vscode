@@ -75,7 +75,7 @@ export function App({ registry, principal, api, session }: AppProps): ReactEleme
 	} else if (path === '/' || path === '') {
 		content = <Welcome />;
 	} else if (path === '/storefront') {
-		content = <Storefront />;
+		content = <Storefront tenantId={principal.tenantId} />;
 	} else {
 		content = <NotFound path={path} />;
 	}

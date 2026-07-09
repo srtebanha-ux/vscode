@@ -1,54 +1,10 @@
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
 import { motion } from 'framer-motion';
-import { Calculator, Check, FileText, ListTodo, Package, Receipt, type LucideIcon } from 'lucide-react';
+import { Check, Loader2, Lock, Receipt } from 'lucide-react';
 import { useToast } from '@foundry/engine-core/ui';
+import { AVAILABLE_MODULES, CORE_BASE_PRICE, type AvailableModule } from './catalog';
+import { computeMonthlyTotal, createCheckoutSession } from './services/stripeService';
 import { useSubscription } from './store/subscriptionStore';
-
-interface AvailableModule {
-	readonly id: string;
-	readonly name: string;
-	readonly description: string;
-	readonly icon: LucideIcon;
-	readonly price: number; // mensalidade extra (BRL)
-}
-
-/**
- * Trojan-horse pricing: base barata que passa sem aprovação de diretoria;
- * o crescimento vem módulo a módulo, cada um resolvendo UMA dor específica
- * (nada de pagar por pacote gigante com 10% de uso).
- */
-const CORE_BASE_PRICE = 29.9;
-
-const AVAILABLE_MODULES: readonly AvailableModule[] = [
-	{
-		id: 'budget-calculator-v1',
-		name: 'Calculadora de Orçamentos',
-		description: 'Volumes exatos de concreto usinado para lajes, com custo de bombeamento incluído.',
-		icon: Calculator,
-		price: 14.9
-	},
-	{
-		id: 'supplies-v1',
-		name: 'Gestão de Insumos',
-		description: 'Controle de pedidos recorrentes e estoque de insumos, sem planilha paralela.',
-		icon: Package,
-		price: 19.9
-	},
-	{
-		id: 'work-orders-v1',
-		name: 'Ordens de Serviço',
-		description: 'Gere e acompanhe OS de entrega e bombeamento direto do cronograma da obra.',
-		icon: FileText,
-		price: 12.9
-	},
-	{
-		id: 'task-dashboard-v1',
-		name: 'Gestão de Tarefas',
-		description: 'Quadro de tarefas com status, prazos e fluxo de trabalho para o seu time.',
-		icon: ListTodo,
-		price: 9.9
-	}
-];
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -105,11 +61,26 @@ function ModuleCard({ module }: { readonly module: AvailableModule }): ReactElem
 	);
 }
 
-function SubscriptionSummary(): ReactElement {
+function SubscriptionSummary({ tenantId }: { readonly tenantId: string }): ReactElement {
 	const { selectedIds } = useSubscription();
 	const toast = useToast();
+	const [checkingOut, setCheckingOut] = useState(false);
 	const selectedModules = AVAILABLE_MODULES.filter(module => selectedIds.includes(module.id));
-	const total = CORE_BASE_PRICE + selectedModules.reduce((sum, module) => sum + module.price, 0);
+	const total = computeMonthlyTotal(selectedModules);
+
+	const finalize = async (): Promise<void> => {
+		setCheckingOut(true);
+		toast.success('Redirecionando para o pagamento seguro...');
+		try {
+			const session = await createCheckoutSession(tenantId, selectedModules);
+			// Produção: window.location.assign(session.url)
+			console.info('[stripe] sessão de checkout criada (simulada):', session.id);
+		} catch {
+			toast.error('Não foi possível iniciar o checkout. Tente novamente.');
+		} finally {
+			setCheckingOut(false);
+		}
+	};
 
 	return (
 		<aside className="sticky top-8 flex h-fit w-full flex-col rounded-2xl bg-white p-6 shadow-sm lg:w-80">
@@ -158,17 +129,22 @@ function SubscriptionSummary(): ReactElement {
 
 			<button
 				type="button"
-				onClick={() => toast.success('Assinatura atualizada com sucesso!')}
-				className="mt-5 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:scale-105 hover:shadow-md"
+				onClick={() => void finalize()}
+				disabled={checkingOut}
+				className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:scale-105 hover:shadow-md disabled:pointer-events-none disabled:opacity-60"
 			>
-				Confirmar assinatura
+				{checkingOut ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Lock className="h-4 w-4" aria-hidden />}
+				Finalizar Assinatura
 			</button>
+			<p className="mt-3 text-center text-xs text-gray-400">
+				Pagamento processado pelo Stripe. A chave secreta vive no servidor, nunca aqui.
+			</p>
 		</aside>
 	);
 }
 
 /** Internal marketplace: the tenant assembles its own SaaS out of modules. */
-export function Storefront(): ReactElement {
+export function Storefront({ tenantId }: { readonly tenantId: string }): ReactElement {
 	return (
 		<div className="flex flex-col gap-6 lg:flex-row lg:items-start">
 			<section className="min-w-0 flex-1">
@@ -184,7 +160,7 @@ export function Storefront(): ReactElement {
 					))}
 				</div>
 			</section>
-			<SubscriptionSummary />
+			<SubscriptionSummary tenantId={tenantId} />
 		</div>
 	);
 }

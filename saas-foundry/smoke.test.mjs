@@ -229,4 +229,13 @@ for (const file of forbidden) {
 	assert.doesNotMatch(source, /['"]firebase/, `${file} must not import firebase`);
 }
 
+// 12. Financial guard: no Stripe secret key material anywhere in browser code.
+const { readdir: readDir } = await import('node:fs/promises');
+const shellSrc = new URL('./factory-shell/src/', import.meta.url);
+for (const entry of await readDir(shellSrc, { recursive: true, withFileTypes: true })) {
+	if (!entry.isFile()) { continue; }
+	const source = await readSrc(new URL(`${entry.parentPath}/${entry.name}`, 'file://'), 'utf8');
+	assert.doesNotMatch(source, /sk_(live|test)/, `${entry.name} must not contain a Stripe secret key`);
+}
+
 console.log('ALL SMOKE TESTS PASSED');

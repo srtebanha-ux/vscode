@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { CoreServicesContext, FactoryService, PluginRegistry } from '@foundry/engine-core';
@@ -150,5 +151,57 @@ assert.match(deniedHtml, /Acesso negado/);
 assert.doesNotMatch(deniedHtml, /<h1>Task Dashboard<\/h1>/);
 
 assert.throws(() => renderToStaticMarkup(createElement(TaskDashboard)), /outside the Core plugin host/);
+
+// 10. UI integration: AppRouter -> PluginRenderer -> registry-gated mount -> MockApiService data
+const { JSDOM } = await import('jsdom');
+const dom = new JSDOM('<div id="root"></div>', { url: 'https://foundry.example/' });
+globalThis.window = dom.window;
+globalThis.document = dom.window.document;
+const { createRoot } = await import('react-dom/client');
+const { AppRouter, createMockTaskApi, ErrorBoundary } = await import('@foundry/engine-core');
+
+// Bundler stand-in: maps the manifest's .tsx entry to its compiled artifact.
+const uiResolver = entryPath =>
+	import(pathToFileURL(entryPath.replace(/TaskDashboard\.tsx$/, 'dist/TaskDashboard.js')).href);
+const uiRegistry = new PluginRegistry(new URL('./modules-library', import.meta.url).pathname, uiResolver);
+await uiRegistry.scan();
+
+const renderApp = async element => {
+	const container = dom.window.document.createElement('div');
+	const root = createRoot(container);
+	root.render(element);
+	await new Promise(resolve => setTimeout(resolve, 100)); // flush effects + mock latency
+	return container.innerHTML;
+};
+
+const admin = { userId: 'u1', tenantId: 'tnt1', grantedScopes: ['read:tasks', 'write:tasks'] };
+const routeProps = { registry: uiRegistry, principal: admin, api: createMockTaskApi() };
+
+const homeHtml = await renderApp(createElement(AppRouter, { path: '/', ...routeProps }));
+assert.match(homeHtml, /Task Dashboard.*v1\.0\.0/);
+
+const dashHtml = await renderApp(createElement(AppRouter, { path: '/plugins/task-dashboard-v1', ...routeProps }));
+assert.match(dashHtml, /<h1>Task Dashboard<\/h1>/);
+assert.match(dashHtml, /Auditar bloco crud-table v1\.1/); // mock task rendered end-to-end
+
+const viewerHtml = await renderApp(
+	createElement(AppRouter, {
+		path: '/plugins/task-dashboard-v1',
+		...routeProps,
+		principal: { ...admin, grantedScopes: ['read:tasks'] }
+	})
+);
+assert.match(viewerHtml, /Acesso negado/);
+assert.match(viewerHtml, /write:tasks/);
+
+const ghostHtml = await renderApp(createElement(AppRouter, { path: '/plugins/ghost-plugin', ...routeProps }));
+assert.match(ghostHtml, /unknown-plugin/);
+
+// Crash isolation: a throwing plugin degrades to the fallback, the shell survives
+const Thrower = () => { throw new Error('boom'); };
+const crashHtml = await renderApp(
+	createElement(ErrorBoundary, { pluginId: 'task-dashboard-v1' }, createElement(Thrower))
+);
+assert.match(crashHtml, /Plugin indisponível/);
 
 console.log('ALL SMOKE TESTS PASSED');

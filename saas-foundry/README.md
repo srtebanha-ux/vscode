@@ -26,7 +26,7 @@ Meta-SaaS: gera, gerencia e executa instâncias de micro-SaaS isoladas.
 | Pacote | Papel |
 |---|---|
 | `shared` | Contratos (`SaaSModuleManifest`, `SaaSInstance`, `PluginManifest`, escopos) + JSON Schemas |
-| `engine-core` | `FactoryService` (pipeline fail-closed), `LifecycleService`, `PluginRegistry` (scan + carga dinâmica gated por escopo) |
+| `engine-core` | `FactoryService` (pipeline fail-closed), `LifecycleService`, `PluginRegistry` (scan + carga dinâmica gated por escopo), shell UI (`AppRouter`, `PluginRenderer`, `ErrorBoundary`, `MockApiService`) |
 | `sandbox-runtime` | `SandboxHost` + `IsolationContext` (brokers com namespace forçado) |
 | `modules-library` | `ApprovedModuleRegistry` (blocos auditados) + plugins (`task-dashboard`) |
 | `api-gateway` | `SecurityMiddleware` global + `GatewayRouter` (rotas dinâmicas) |

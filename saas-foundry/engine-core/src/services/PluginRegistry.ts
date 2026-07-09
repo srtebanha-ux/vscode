@@ -42,6 +42,15 @@ export type PluginLoadResult =
 	| { readonly ok: true; readonly plugin: LoadedPlugin }
 	| { readonly ok: false; readonly error: PluginError };
 
+/**
+ * Resolves a registry-validated entryPath to its executable module. The
+ * default is a node `import()` (server blocks). The Core UI host supplies
+ * one that maps to bundler-compiled artifacts (.tsx entries) — the resolver
+ * only ever receives paths the registry has already containment-checked,
+ * and authorization still happens before it is called.
+ */
+export type EntryModuleResolver = (entryPath: string) => Promise<Record<string, unknown>>;
+
 export interface ScanReport {
 	readonly registered: readonly string[];
 	readonly skipped: readonly { readonly dir: string; readonly reason: string }[];
@@ -65,8 +74,14 @@ export class PluginRegistry {
 	private readonly validateManifest = compileSchema<PluginManifest>(pluginManifestSchema);
 	private readonly plugins = new Map<string, RegisteredPlugin>();
 	private readonly moduleCache = new Map<string, Record<string, unknown>>();
+	private readonly resolveModule: EntryModuleResolver;
 
-	constructor(private readonly libraryRoot: string) {}
+	constructor(
+		private readonly libraryRoot: string,
+		resolver?: EntryModuleResolver
+	) {
+		this.resolveModule = resolver ?? (async entryPath => (await import(pathToFileURL(entryPath).href)) as Record<string, unknown>);
+	}
 
 	async scan(): Promise<ScanReport> {
 		const registered: string[] = [];
@@ -148,7 +163,7 @@ export class PluginRegistry {
 		let mod = this.moduleCache.get(id);
 		if (!mod) {
 			try {
-				mod = (await import(pathToFileURL(registration.entryPath).href)) as Record<string, unknown>;
+				mod = await this.resolveModule(registration.entryPath);
 			} catch (err) {
 				return { ok: false, error: { code: 'load-failed', id, detail: (err as Error).message } };
 			}

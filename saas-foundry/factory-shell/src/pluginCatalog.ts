@@ -1,5 +1,6 @@
 import { PluginRegistry } from '@foundry/engine-core/ui';
 import taskDashboardManifest from '../../modules-library/task-dashboard/manifest.json';
+import creativeHubManifest from '../../modules-library/creative-production-hub/manifest.json';
 
 /**
  * Bundler-side lazy entries. Each value is a dynamic import, so Vite
@@ -9,7 +10,8 @@ import taskDashboardManifest from '../../modules-library/task-dashboard/manifest
  * ever receives refs the registry has already validated.
  */
 const bundledEntries: Readonly<Record<string, () => Promise<Record<string, unknown>>>> = {
-	'task-dashboard-v1': () => import('../../modules-library/task-dashboard/TaskDashboard.tsx')
+	'task-dashboard-v1': () => import('../../modules-library/task-dashboard/TaskDashboard.tsx'),
+	'creative-hub-v1': () => import('../../modules-library/creative-production-hub/ModuleView.tsx')
 };
 
 export function createPluginRegistry(): PluginRegistry {
@@ -21,9 +23,14 @@ export function createPluginRegistry(): PluginRegistry {
 		return load();
 	});
 
-	const result = registry.registerManifest(taskDashboardManifest, 'task-dashboard-v1');
-	if (!result.ok) {
-		throw new Error(`task-dashboard manifest rejected: ${result.reason}`);
+	for (const [entryRef, manifest] of [
+		['task-dashboard-v1', taskDashboardManifest],
+		['creative-hub-v1', creativeHubManifest]
+	] as const) {
+		const result = registry.registerManifest(manifest, entryRef);
+		if (!result.ok) {
+			throw new Error(`${entryRef} manifest rejected: ${result.reason}`);
+		}
 	}
 	return registry;
 }

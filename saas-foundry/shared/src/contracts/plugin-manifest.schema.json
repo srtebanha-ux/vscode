@@ -30,7 +30,9 @@
           "events:subscribe",
           "ui:render",
           "read:tasks",
-          "write:tasks"
+          "write:tasks",
+          "read:production",
+          "write:production"
         ]
       }
     },

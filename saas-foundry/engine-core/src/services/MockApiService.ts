@@ -67,13 +67,39 @@ export class MockApiService implements ApiService {
 	}
 }
 
-/** Seeded instance so the task-dashboard renders something immediately. */
+/** Seeded instance so every first-party module renders something immediately in dev. */
 export function createMockTaskApi(): MockApiService {
 	return new MockApiService({
 		tasks: [
 			{ id: 't1', title: 'Configurar billing do tenant', status: 'todo', dueDate: '2026-07-15T12:00:00Z' },
 			{ id: 't2', title: 'Auditar bloco crud-table v1.1', status: 'in-progress', dueDate: '2026-07-11T12:00:00Z' },
 			{ id: 't3', title: 'Publicar template de onboarding', status: 'done', dueDate: '2026-07-08T12:00:00Z' }
+		],
+		scenes: [
+			{ id: 'sc1', title: 'Abertura — voo sobre a obra', frame: 'FR-001', status: 'approved' },
+			{ id: 'sc2', title: 'Close na bomba de concreto', frame: 'FR-014', status: 'generated' },
+			{ id: 'sc3', title: 'Time-lapse da laje L3', frame: 'FR-022', status: 'planned' },
+			{ id: 'sc4', title: 'Logo 3D — take final', frame: 'FR-030', status: 'planned' }
+		],
+		parameters: [
+			{
+				id: 'p1',
+				label: 'Negative prompt padrão',
+				category: 'negative-prompt',
+				content: 'blurry, low quality, distorted hands, extra fingers, watermark, text artifacts'
+			},
+			{
+				id: 'p2',
+				label: 'Iluminação consistente',
+				category: 'visual-rule',
+				content: 'golden hour lighting, soft shadows, cinematic color grading, 35mm lens'
+			},
+			{
+				id: 'p3',
+				label: 'Identidade da marca',
+				category: 'visual-rule',
+				content: 'palette: deep navy #14142B + white, clean minimal composition, high contrast'
+			}
 		]
 	});
 }

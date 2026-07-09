@@ -1,0 +1,7 @@
+{
+  "id": "creative-hub-v1",
+  "displayName": "Production Hub 3D",
+  "version": "1.0.0",
+  "permissions": ["read:production", "write:production"],
+  "entryPoint": "ModuleView.tsx"
+}

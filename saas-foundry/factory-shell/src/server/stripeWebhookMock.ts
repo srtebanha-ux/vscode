@@ -35,7 +35,8 @@ const MODULE_SCOPE_GRANTS: Readonly<Record<string, readonly string[]>> = {
 	'task-dashboard-v1': ['read:tasks', 'write:tasks'],
 	'budget-calculator-v1': ['read:budgets', 'write:budgets'],
 	'supplies-v1': ['read:supplies', 'write:supplies'],
-	'work-orders-v1': ['read:work-orders', 'write:work-orders']
+	'work-orders-v1': ['read:work-orders', 'write:work-orders'],
+	'creative-hub-v1': ['read:production', 'write:production']
 };
 
 /** Produção: stripe.webhooks.constructEvent(rawBody, signature, whsec) — lança se inválido. */

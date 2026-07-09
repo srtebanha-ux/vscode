@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { Factory, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, Store, UserRound, type LucideIcon } from 'lucide-react';
+import { Clapperboard, Factory, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, Store, UserRound, type LucideIcon } from 'lucide-react';
 
 export interface SessionInfo {
 	readonly email: string | null;
@@ -18,7 +18,8 @@ export interface MainLayoutProps {
 
 /** Visual metadata stays in the shell — the registry keeps exposing security-relevant fields only. */
 const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
-	'task-dashboard-v1': LayoutDashboard
+	'task-dashboard-v1': LayoutDashboard,
+	'creative-hub-v1': Clapperboard
 };
 
 export function MainLayout({ registry, currentPath, onNavigate, children, session }: MainLayoutProps): ReactElement {

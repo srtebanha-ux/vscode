@@ -41,8 +41,14 @@ function ModuleCard({ module }: { readonly module: AvailableModule }): ReactElem
 			<p className="mt-1 flex-1 text-sm leading-relaxed text-gray-500">{module.description}</p>
 			<div className="mt-4 flex items-center justify-between">
 				<span className="text-sm font-semibold text-gray-900">
-					{brl.format(module.price)}
-					<span className="font-normal text-gray-400">/mês</span>
+					{module.price === 0 ? (
+						<span className="rounded-lg bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">Gratuito</span>
+					) : (
+						<>
+							{brl.format(module.price)}
+							<span className="font-normal text-gray-400">/mês</span>
+						</>
+					)}
 				</span>
 				<button
 					type="button"

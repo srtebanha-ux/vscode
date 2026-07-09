@@ -2,6 +2,7 @@
 
 /* Plugin and SDK sources live outside the shell root — point Tailwind's scanner at them. */
 @source '../../modules-library/task-dashboard';
+@source '../../modules-library/creative-production-hub';
 @source '../../engine-core/src';
 
 @theme {

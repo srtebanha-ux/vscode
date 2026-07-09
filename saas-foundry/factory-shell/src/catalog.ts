@@ -1,4 +1,4 @@
-import { Calculator, FileText, ListTodo, Package, type LucideIcon } from 'lucide-react';
+import { Calculator, Clapperboard, FileText, ListTodo, Package, type LucideIcon } from 'lucide-react';
 
 export interface AvailableModule {
 	readonly id: string;
@@ -42,5 +42,12 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 		description: 'Quadro de tarefas com status, prazos e fluxo de trabalho para o seu time.',
 		icon: ListTodo,
 		price: 9.9
+	},
+	{
+		id: 'creative-hub-v1',
+		name: 'Production Hub 3D',
+		description: 'Kanban de cenas e cofre de parâmetros para produção com IAs generativas.',
+		icon: Clapperboard,
+		price: 0
 	}
 ];

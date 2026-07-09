@@ -20,7 +20,11 @@ function AuthedApp({ registry: reg }: { readonly registry: PluginRegistry }): Re
 	// tenantId = uid: cada usuário é um tenant (empresas viram custom claims depois).
 	const api = useMemo(() => new FirebaseApiService(getFirebase().db, user.uid), [user.uid]);
 	const principal = useMemo<AuthenticatedPrincipal>(
-		() => ({ userId: user.uid, tenantId: user.uid, grantedScopes: ['read:tasks', 'write:tasks'] }),
+		() => ({
+			userId: user.uid,
+			tenantId: user.uid,
+			grantedScopes: ['read:tasks', 'write:tasks', 'read:production', 'write:production']
+		}),
 		[user.uid]
 	);
 
@@ -38,7 +42,7 @@ function AuthedApp({ registry: reg }: { readonly registry: PluginRegistry }): Re
 const DEV_PRINCIPAL: AuthenticatedPrincipal = {
 	userId: 'dev-user',
 	tenantId: 'tnt-dev',
-	grantedScopes: ['read:tasks', 'write:tasks']
+	grantedScopes: ['read:tasks', 'write:tasks', 'read:production', 'write:production']
 };
 
 const rootElement = document.getElementById('root');

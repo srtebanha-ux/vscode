@@ -126,7 +126,10 @@ try {
 }
 
 // 8. task-dashboard plugin: registered from the real modules-library, scope-gated
-const realRegistry = new PluginRegistry(new URL('./modules-library', import.meta.url).pathname);
+// Telemetria invisível: loads e negações viram eventos sem código no módulo
+const capturedEvents = [];
+const testSink = { capture: (event, props) => capturedEvents.push({ event, props }) };
+const realRegistry = new PluginRegistry(new URL('./modules-library', import.meta.url).pathname, undefined, testSink);
 const realReport = await realRegistry.scan();
 assert.ok(realReport.registered.includes('task-dashboard-v1'));
 
@@ -135,6 +138,10 @@ const deniedDash = await realRegistry.loadPlugin('task-dashboard-v1', noWrite);
 assert.equal(deniedDash.ok, false);
 assert.equal(deniedDash.error.code, 'missing-scope');
 assert.equal(deniedDash.error.scope, 'write:tasks');
+assert.deepEqual(capturedEvents[0], {
+	event: 'Acesso a Módulo Negado',
+	props: { moduleId: 'task-dashboard-v1', scope: 'write:tasks', tenantId: 'tnt1' }
+});
 
 // 9. Render gate: authorized -> dashboard; missing scope -> Acesso negado; outside host -> throws
 const mount = (services) =>

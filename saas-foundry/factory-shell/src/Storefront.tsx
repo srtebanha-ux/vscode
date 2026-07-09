@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactElement } from 'react';
 import { motion } from 'framer-motion';
 import { Check, Loader2, Lock, Receipt } from 'lucide-react';
-import { Tooltip, useToast } from '@foundry/engine-core/ui';
+import { Tooltip, useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import type { AiArchitectResponse } from '../../api/ai-orchestrator';
 import { AVAILABLE_MODULES, CORE_BASE_PRICE, type AvailableModule } from './catalog';
 import { MagicPrompt } from './components/MagicPrompt';
@@ -12,8 +12,14 @@ const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' 
 
 function ModuleCard({ module, highlighted }: { readonly module: AvailableModule; readonly highlighted: boolean }): ReactElement {
 	const { isSelected, toggle } = useSubscription();
+	const track = useTrackEvent();
 	const selected = isSelected(module.id);
 	const Icon = module.icon;
+
+	const onToggle = (): void => {
+		track(selected ? 'Módulo Desativado' : 'Módulo Ativado', { moduleId: module.id, price: module.price });
+		toggle(module.id);
+	};
 
 	return (
 		<motion.div
@@ -59,7 +65,7 @@ function ModuleCard({ module, highlighted }: { readonly module: AvailableModule;
 				</span>
 				<button
 					type="button"
-					onClick={() => toggle(module.id)}
+					onClick={onToggle}
 					aria-pressed={selected}
 					className={`rounded-xl px-4 py-2 text-sm font-medium shadow-sm transition-all hover:scale-105 hover:shadow-md ${
 						selected
@@ -77,12 +83,14 @@ function ModuleCard({ module, highlighted }: { readonly module: AvailableModule;
 function SubscriptionSummary({ tenantId }: { readonly tenantId: string }): ReactElement {
 	const { selectedIds } = useSubscription();
 	const toast = useToast();
+	const track = useTrackEvent();
 	const [checkingOut, setCheckingOut] = useState(false);
 	const selectedModules = AVAILABLE_MODULES.filter(module => selectedIds.includes(module.id));
 	const total = computeMonthlyTotal(selectedModules);
 
 	const finalize = async (): Promise<void> => {
 		setCheckingOut(true);
+		track('Checkout Iniciado', { total, moduleIds: selectedModules.map(module => module.id).join(',') });
 		toast.success('Redirecionando para o pagamento seguro...');
 		try {
 			const session = await createCheckoutSession(tenantId, selectedModules);

@@ -4,6 +4,7 @@ import {
 	type PluginPublicInfo,
 	type SecurityScope
 } from '@foundry/shared';
+import { NOOP_TELEMETRY, type TelemetrySink } from '../hooks/useTrackEvent.js';
 import { compileSchema, schemaErrors } from '../validation/compileSchema.js';
 
 /** Caller identity resolved by the auth layer BEFORE reaching the registry. */
@@ -75,7 +76,9 @@ export class PluginRegistry {
 
 	constructor(
 		private readonly libraryRoot: string,
-		resolver?: EntryModuleResolver
+		resolver?: EntryModuleResolver,
+		/** Telemetria invisível: o dev do módulo não escreve nada e o Analytics vê tudo. */
+		private readonly telemetry: TelemetrySink = NOOP_TELEMETRY
 	) {
 		// Node builtins are imported lazily (and hidden from bundlers via
 		// @vite-ignore) so the registry is usable in the browser shell,
@@ -189,6 +192,7 @@ export class PluginRegistry {
 		const held = new Set(principal.grantedScopes);
 		for (const scope of registration.manifest.permissions) {
 			if (!held.has(scope)) {
+				this.telemetry.capture('Acesso a Módulo Negado', { moduleId: id, scope, tenantId: principal.tenantId });
 				return { ok: false, error: { code: 'missing-scope', id, scope } };
 			}
 		}
@@ -198,6 +202,7 @@ export class PluginRegistry {
 			try {
 				mod = await this.resolveModule(registration.entryPath);
 			} catch (err) {
+				this.telemetry.capture('Erro na Geração', { moduleId: id, stage: 'load', detail: (err as Error).message });
 				return { ok: false, error: { code: 'load-failed', id, detail: (err as Error).message } };
 			}
 			this.moduleCache.set(id, mod);
@@ -207,6 +212,12 @@ export class PluginRegistry {
 		if (typeof create !== 'function') {
 			return { ok: false, error: { code: 'invalid-export', id } };
 		}
+
+		this.telemetry.capture('Módulo Carregado', {
+			moduleId: id,
+			version: registration.manifest.version,
+			tenantId: principal.tenantId
+		});
 
 		return {
 			ok: true,

@@ -1,4 +1,5 @@
 import { PluginRegistry } from '@foundry/engine-core/ui';
+import { telemetrySink } from './services/analytics';
 import taskDashboardManifest from '../../modules-library/task-dashboard/manifest.json';
 import creativeHubManifest from '../../modules-library/creative-production-hub/manifest.json';
 
@@ -15,13 +16,17 @@ const bundledEntries: Readonly<Record<string, () => Promise<Record<string, unkno
 };
 
 export function createPluginRegistry(): PluginRegistry {
-	const registry = new PluginRegistry('bundle://modules-library', async entryRef => {
-		const load = bundledEntries[entryRef];
-		if (!load) {
-			throw new Error(`no bundled entry for '${entryRef}'`);
-		}
-		return load();
-	});
+	const registry = new PluginRegistry(
+		'bundle://modules-library',
+		async entryRef => {
+			const load = bundledEntries[entryRef];
+			if (!load) {
+				throw new Error(`no bundled entry for '${entryRef}'`);
+			}
+			return load();
+		},
+		telemetrySink // todo load/negação de módulo vira evento no Analytics
+	);
 
 	for (const [entryRef, manifest] of [
 		['task-dashboard-v1', taskDashboardManifest],

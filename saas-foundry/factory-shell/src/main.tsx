@@ -2,11 +2,14 @@ import { StrictMode, useCallback, useEffect, useMemo, useState, type ReactElemen
 import { createRoot } from 'react-dom/client';
 import {
 	GlobalErrorBoundary,
+	TelemetryProvider,
 	createMockTaskApi,
 	type AuthenticatedPrincipal,
 	type PluginRegistry
 } from '@foundry/engine-core/ui';
+import { PostHogProvider } from 'posthog-js/react';
 import { App } from './App';
+import { capturePageview, identifyTenant, posthogClient, telemetrySink } from './services/analytics';
 import { AuthProvider, RequireAuth, useAuth, type UserRole } from './auth/AuthProvider';
 import { createPluginRegistry } from './pluginCatalog';
 import { LandingPage } from './public/LandingPage';
@@ -44,6 +47,7 @@ function AuthedApp({ registry: reg, router }: { readonly registry: PluginRegistr
 
 	// tenantId = uid: cada usuário é um tenant (empresas viram custom claims depois).
 	const api = useMemo(() => new FirebaseApiService(getFirebase().db, user.uid), [user.uid]);
+	useEffect(() => identifyTenant(user.uid, user.email), [user.uid, user.email]);
 	const principal = useMemo<AuthenticatedPrincipal>(
 		() => ({
 			userId: user.uid,
@@ -79,6 +83,9 @@ const DEV_ROLE: UserRole = window.localStorage.getItem('foundry:dev-role') === '
 function Root(): ReactElement {
 	const router = useRouter();
 
+	// Pageview por rota (SPA) — inclui a landing pública.
+	useEffect(() => capturePageview(router.path), [router.path]);
+
 	if (router.path === '/' || router.path === '') {
 		return <LandingPage onStart={() => router.navigate('/storefront')} onEnter={() => router.navigate('/app')} />;
 	}
@@ -109,11 +116,19 @@ if (!rootElement) {
 	throw new Error('missing #root element');
 }
 
+const appTree = (
+	<GlobalErrorBoundary
+		onError={error => telemetrySink.capture('Erro na Geração', { stage: 'render', message: error.message, fatal: true })}
+	>
+		<TelemetryProvider sink={telemetrySink}>
+			<Root />
+		</TelemetryProvider>
+	</GlobalErrorBoundary>
+);
+
 createRoot(rootElement).render(
 	<StrictMode>
-		<GlobalErrorBoundary>
-			<Root />
-		</GlobalErrorBoundary>
+		{posthogClient ? <PostHogProvider client={posthogClient}>{appTree}</PostHogProvider> : appTree}
 	</StrictMode>
 );
 

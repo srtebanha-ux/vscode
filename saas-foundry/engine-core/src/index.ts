@@ -11,3 +11,4 @@ export * from './components/EmptyState.js';
 export * from './components/LoadingSkeleton.js';
 export * from './components/ToastProvider.js';
 export * from './components/Tooltip.js';
+export * from './hooks/useTrackEvent.js';

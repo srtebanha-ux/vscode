@@ -8,6 +8,7 @@ import {
 import { motion } from 'framer-motion';
 import { Sparkles, SearchX } from 'lucide-react';
 import { MainLayout, type SessionInfo } from './MainLayout';
+import { Storefront } from './Storefront';
 
 /** Same charset the plugin-manifest schema allows for ids — anything else 404s before touching the registry. */
 const PLUGIN_ROUTE = /^\/plugins\/([a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*)$/;
@@ -73,6 +74,8 @@ export function App({ registry, principal, api, session }: AppProps): ReactEleme
 		content = <PluginRenderer pluginId={match[1]} registry={registry} principal={principal} api={api} />;
 	} else if (path === '/' || path === '') {
 		content = <Welcome />;
+	} else if (path === '/storefront') {
+		content = <Storefront />;
 	} else {
 		content = <NotFound path={path} />;
 	}

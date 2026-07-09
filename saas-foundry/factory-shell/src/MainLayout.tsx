@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { Factory, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, UserRound, type LucideIcon } from 'lucide-react';
+import { Factory, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, Store, UserRound, type LucideIcon } from 'lucide-react';
 
 export interface SessionInfo {
 	readonly email: string | null;
@@ -53,6 +53,20 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 				</div>
 
 				<nav aria-label="Módulos" className="flex-1 space-y-1 px-3 py-2">
+					<a
+						href="/storefront"
+						title="Marketplace"
+						aria-current={currentPath === '/storefront' ? 'page' : undefined}
+						onClick={event => navigate(event, '/storefront')}
+						className={`group mb-3 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
+							currentPath === '/storefront'
+								? 'bg-gray-900 text-white shadow-sm'
+								: 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
+						}`}
+					>
+						<Store className="h-5 w-5 shrink-0" aria-hidden />
+						{!collapsed && <span className="truncate">Marketplace</span>}
+					</a>
 					{!collapsed && (
 						<p className="px-2 pb-2 text-xs font-medium uppercase tracking-wider text-gray-400">Módulos</p>
 					)}

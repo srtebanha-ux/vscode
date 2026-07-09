@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import { motion } from 'framer-motion';
-import { Check, ListTodo, Receipt, Truck, Users, type LucideIcon } from 'lucide-react';
+import { Calculator, Check, FileText, ListTodo, Package, Receipt, type LucideIcon } from 'lucide-react';
 import { useToast } from '@foundry/engine-core/ui';
 import { useSubscription } from './store/subscriptionStore';
 
@@ -12,29 +12,41 @@ interface AvailableModule {
 	readonly price: number; // mensalidade extra (BRL)
 }
 
-const CORE_BASE_PRICE = 99;
+/**
+ * Trojan-horse pricing: base barata que passa sem aprovação de diretoria;
+ * o crescimento vem módulo a módulo, cada um resolvendo UMA dor específica
+ * (nada de pagar por pacote gigante com 10% de uso).
+ */
+const CORE_BASE_PRICE = 29.9;
 
 const AVAILABLE_MODULES: readonly AvailableModule[] = [
+	{
+		id: 'budget-calculator-v1',
+		name: 'Calculadora de Orçamentos',
+		description: 'Volumes exatos de concreto usinado para lajes, com custo de bombeamento incluído.',
+		icon: Calculator,
+		price: 14.9
+	},
+	{
+		id: 'supplies-v1',
+		name: 'Gestão de Insumos',
+		description: 'Controle de pedidos recorrentes e estoque de insumos, sem planilha paralela.',
+		icon: Package,
+		price: 19.9
+	},
+	{
+		id: 'work-orders-v1',
+		name: 'Ordens de Serviço',
+		description: 'Gere e acompanhe OS de entrega e bombeamento direto do cronograma da obra.',
+		icon: FileText,
+		price: 12.9
+	},
 	{
 		id: 'task-dashboard-v1',
 		name: 'Gestão de Tarefas',
 		description: 'Quadro de tarefas com status, prazos e fluxo de trabalho para o seu time.',
 		icon: ListTodo,
-		price: 29
-	},
-	{
-		id: 'crm-v1',
-		name: 'CRM',
-		description: 'Pipeline de vendas, contatos e histórico de interações com clientes.',
-		icon: Users,
-		price: 49
-	},
-	{
-		id: 'logistics-v1',
-		name: 'Logística',
-		description: 'Rastreamento de entregas, rotas e gestão de estoque em tempo real.',
-		icon: Truck,
-		price: 59
+		price: 9.9
 	}
 ];
 
@@ -108,7 +120,7 @@ function SubscriptionSummary(): ReactElement {
 
 			<dl className="mt-4 space-y-2 text-sm">
 				<div className="flex items-center justify-between">
-					<dt className="text-gray-500">Core Base</dt>
+					<dt className="text-gray-500">Base do Sistema (Core)</dt>
 					<dd className="font-medium text-gray-900">{brl.format(CORE_BASE_PRICE)}</dd>
 				</div>
 				{selectedModules.map(module => (
@@ -126,7 +138,7 @@ function SubscriptionSummary(): ReactElement {
 
 			<div className="mt-4 border-t border-gray-100 pt-4">
 				<div className="flex items-baseline justify-between">
-					<span className="text-sm text-gray-500">Total mensal</span>
+					<span className="text-sm text-gray-500">Total Mensal Dinâmico</span>
 					<motion.span
 						key={total}
 						initial={{ scale: 0.9, opacity: 0.5 }}
@@ -162,7 +174,9 @@ export function Storefront(): ReactElement {
 			<section className="min-w-0 flex-1">
 				<header className="mb-6">
 					<h1 className="text-lg font-semibold tracking-tight text-gray-900">Marketplace</h1>
-					<p className="mt-1 text-sm text-gray-500">Monte a sua assinatura ativando os módulos que o seu negócio precisa.</p>
+					<p className="mt-1 text-sm text-gray-500">
+						Você é o arquiteto do seu negócio: pague só pelos módulos que usa, e adicione outros quando precisar.
+					</p>
 				</header>
 				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
 					{AVAILABLE_MODULES.map(module => (

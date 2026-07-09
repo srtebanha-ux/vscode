@@ -9,6 +9,10 @@
   "dependencies": {
     "@foundry/shared": "0.1.0",
     "@foundry/modules-library": "0.1.0",
-    "ajv": "^8.16.0"
+    "ajv": "^8.16.0",
+    "react": "^18.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0"
   }
 }

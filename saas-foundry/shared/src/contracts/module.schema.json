@@ -19,7 +19,7 @@
     "scopes": {
       "type": "array",
       "uniqueItems": true,
-      "maxItems": 8,
+      "maxItems": 12,
       "items": {
         "enum": [
           "storage:read",
@@ -29,7 +29,9 @@
           "billing:read",
           "events:emit",
           "events:subscribe",
-          "ui:render"
+          "ui:render",
+          "read:tasks",
+          "write:tasks"
         ]
       }
     },

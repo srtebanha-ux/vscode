@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FactoryService, PluginRegistry } from '@foundry/engine-core';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { CoreServicesContext, FactoryService, PluginRegistry } from '@foundry/engine-core';
+import TaskDashboard from './modules-library/task-dashboard/dist/TaskDashboard.js';
 import { ApprovedModuleRegistry } from '@foundry/modules-library';
 import { SandboxHost, ScopeDeniedError } from '@foundry/sandbox-runtime';
 import { createSecurityMiddleware, GatewayRouter } from '@foundry/api-gateway';
@@ -120,5 +123,32 @@ try {
 } finally {
 	await rm(lib, { recursive: true, force: true });
 }
+
+// 8. task-dashboard plugin: registered from the real modules-library, scope-gated
+const realRegistry = new PluginRegistry(new URL('./modules-library', import.meta.url).pathname);
+const realReport = await realRegistry.scan();
+assert.ok(realReport.registered.includes('task-dashboard-v1'));
+
+const noWrite = { userId: 'u3', tenantId: 'tnt1', grantedScopes: ['read:tasks'] };
+const deniedDash = await realRegistry.loadPlugin('task-dashboard-v1', noWrite);
+assert.equal(deniedDash.ok, false);
+assert.equal(deniedDash.error.code, 'missing-scope');
+assert.equal(deniedDash.error.scope, 'write:tasks');
+
+// 9. Render gate: authorized -> dashboard; missing scope -> Acesso negado; outside host -> throws
+const mount = (services) =>
+	renderToStaticMarkup(
+		createElement(CoreServicesContext.Provider, { value: services }, createElement(TaskDashboard))
+	);
+const fakeApi = { get: async () => [], put: async () => {} };
+
+const authorizedHtml = mount({ namespace: instance.namespace, grantedScopes: ['read:tasks', 'write:tasks'], api: fakeApi });
+assert.match(authorizedHtml, /Carregando tarefas/); // effects don't run in static render
+
+const deniedHtml = mount({ namespace: instance.namespace, grantedScopes: ['read:tasks'], api: fakeApi });
+assert.match(deniedHtml, /Acesso negado/);
+assert.doesNotMatch(deniedHtml, /<h1>Task Dashboard<\/h1>/);
+
+assert.throws(() => renderToStaticMarkup(createElement(TaskDashboard)), /outside the Core plugin host/);
 
 console.log('ALL SMOKE TESTS PASSED');

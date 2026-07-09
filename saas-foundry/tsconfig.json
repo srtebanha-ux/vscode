@@ -3,6 +3,7 @@
   "references": [
     { "path": "shared" },
     { "path": "modules-library" },
+    { "path": "modules-library/task-dashboard" },
     { "path": "engine-core" },
     { "path": "sandbox-runtime" },
     { "path": "api-gateway" }

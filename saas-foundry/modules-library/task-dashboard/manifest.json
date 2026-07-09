@@ -1,0 +1,7 @@
+{
+  "id": "task-dashboard-v1",
+  "displayName": "Task Dashboard",
+  "version": "1.0.0",
+  "permissions": ["read:tasks", "write:tasks"],
+  "entryPoint": "TaskDashboard.tsx"
+}

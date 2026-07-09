@@ -14,7 +14,9 @@ export const SECURITY_SCOPES = [
 	'billing:read', // read own subscription/usage
 	'events:emit', // emit events on own namespace bus
 	'events:subscribe', // subscribe to own namespace bus
-	'ui:render' // serve UI under its dynamic route
+	'ui:render', // serve UI under its dynamic route
+	'read:tasks', // read task records of own namespace
+	'write:tasks' // create/update task records of own namespace
 ] as const;
 
 export type SecurityScope = (typeof SECURITY_SCOPES)[number];

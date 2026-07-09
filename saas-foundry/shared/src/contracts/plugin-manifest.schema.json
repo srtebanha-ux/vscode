@@ -18,7 +18,7 @@
     "permissions": {
       "type": "array",
       "uniqueItems": true,
-      "maxItems": 8,
+      "maxItems": 12,
       "items": {
         "enum": [
           "storage:read",
@@ -28,15 +28,17 @@
           "billing:read",
           "events:emit",
           "events:subscribe",
-          "ui:render"
+          "ui:render",
+          "read:tasks",
+          "write:tasks"
         ]
       }
     },
     "entryPoint": {
       "type": "string",
       "maxLength": 200,
-      "pattern": "^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*\\.js$",
-      "description": "Relative path inside the plugin dir. Segments cannot contain dots — traversal ('..'), absolute paths and URLs never match."
+      "pattern": "^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_-]+)*\\.(js|tsx)$",
+      "description": "Relative path inside the plugin dir (.js for server blocks, .tsx for UI blocks bundled by the Core host). Segments cannot contain dots — traversal ('..'), absolute paths and URLs never match."
     },
     "displayName": { "type": "string", "minLength": 1, "maxLength": 80 }
   }

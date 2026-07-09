@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
-import { EmptyState, LoadingSkeleton, hasScopes, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
+import {
+	ContractViolationError,
+	EmptyState,
+	LoadingSkeleton,
+	VISUAL_LOCK,
+	hasScopes,
+	publicationSchema,
+	sceneGridModule,
+	useCoreService,
+	useToast,
+	useTrackEvent
+} from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { motion } from 'framer-motion';
 import {
@@ -26,12 +37,8 @@ export interface Publication {
 /** Must mirror `permissions` in manifest.json. */
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['read:production', 'write:production'];
 
-/**
- * TRAVA DE CONSISTÊNCIA VISUAL — regra rígida da marca MoonSilver.
- * Concatenada OBRIGATORIAMENTE em todo payload antes de ir à IA geradora;
- * nenhum prompt sai daqui sem ela.
- */
-export const VISUAL_LOCK = ', estilo animação 3D Pixar, textura do cabelo ondulada (nunca liso)';
+/** A trava agora vem do contrato rígido do Core (fonte única). */
+export { VISUAL_LOCK };
 
 /** Pura (exportada para testes): prompt do usuário + trava inegociável. */
 export function generateScenePayload(basePrompt: string): string {
@@ -126,6 +133,12 @@ function PublicationsTab(): React.JSX.Element {
 
 	const setStatus = useCallback(async (publication: Publication, status: PublicationStatus) => {
 		const updated: Publication = { ...publication, status };
+		// Contrato: nenhuma aprovação processada com metadados incompletos.
+		const check = publicationSchema.safeParse(updated);
+		if (!check.success) {
+			toast.error(check.error.issues[0]?.message ?? 'Publicação fora do contrato.');
+			return;
+		}
 		try {
 			await api.put<Publication>(`publications/${publication.id}`, updated);
 			setPublications(current => (current ?? []).map(p => (p.id === publication.id ? updated : p)));
@@ -203,15 +216,20 @@ function ConsistencyTab(): React.JSX.Element {
 	const [basePrompt, setBasePrompt] = useState('');
 	const [payload, setPayload] = useState<string | null>(null);
 
-	const generate = (): void => {
-		if (basePrompt.trim().length < 5) {
-			toast.error('Descreva a cena antes de gerar o grid.');
-			return;
+	const generate = async (): Promise<void> => {
+		try {
+			// Contrato rígido: entrada validada e a saída só passa COM as tags de estilo.
+			const scene = await sceneGridModule.run({ character, basePrompt });
+			setPayload(scene.payload);
+			track('Cálculo Realizado', { moduleId: 'moonsilver-hub-v1', kind: 'scene-grid', character });
+			toast.success('Payload do grid gerado com a trava visual aplicada.');
+		} catch (err) {
+			if (err instanceof ContractViolationError) {
+				toast.error(err.issues[0]?.message ?? 'Requisição fora do contrato.');
+			} else {
+				toast.error('Não foi possível gerar o grid.');
+			}
 		}
-		const scenePayload = generateScenePayload(`${character}: ${basePrompt}`);
-		setPayload(scenePayload);
-		track('Cálculo Realizado', { moduleId: 'moonsilver-hub-v1', kind: 'scene-grid', character });
-		toast.success('Payload do grid gerado com a trava visual aplicada.');
 	};
 
 	return (
@@ -265,7 +283,7 @@ function ConsistencyTab(): React.JSX.Element {
 
 			<button
 				type="button"
-				onClick={generate}
+				onClick={() => void generate()}
 				className="flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:scale-105 hover:shadow-md"
 			>
 				<Wand2 className="h-4 w-4" aria-hidden />

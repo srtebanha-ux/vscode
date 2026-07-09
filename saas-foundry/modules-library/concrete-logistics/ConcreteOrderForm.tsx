@@ -1,28 +1,26 @@
 import { useCallback, useState } from 'react';
-import { hasScopes, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
+import {
+	ContractViolationError,
+	LOGISTICS_PRICING,
+	concreteOrderModule,
+	hasScopes,
+	useCoreService,
+	useToast,
+	useTrackEvent,
+	type ServiceOrder
+} from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { motion } from 'framer-motion';
 import { BadgeCheck, FileText, Gauge, Loader2, ShieldAlert, Truck } from 'lucide-react';
 
-export interface ServiceOrder {
-	readonly id: string;
-	readonly volumeM3: number;
-	readonly spec: '35mpa';
-	readonly britaMista: boolean;
-	readonly pumpPrice: number;
-	readonly total: number;
-	readonly createdAt: string;
-}
-
 /** Must mirror `permissions` in manifest.json. */
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['read:logistics', 'write:logistics'];
 
-const PRICE_PER_M3 = 620; // concreto usinado 35 MPa (BRL/m³)
-const BRITA_MISTA_SURCHARGE_PER_M3 = 18;
+const { PRICE_PER_M3, BRITA_MISTA_SURCHARGE_PER_M3 } = LOGISTICS_PRICING;
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
-/** Regra de negócio pura (exportada para testes): total da OS em tempo real. */
+/** Prévia visual em tempo real; a versão OFICIAL é conciliada pelo contrato no run(). */
 export function computeOrderTotal(volumeM3: number, britaMista: boolean, pumpPrice: number): number {
 	if (volumeM3 <= 0) {
 		return Math.max(pumpPrice, 0);
@@ -65,33 +63,26 @@ function OrderForm(): React.JSX.Element {
 	const total = computeOrderTotal(volumeM3, britaMista, pumpPrice);
 
 	const generate = useCallback(async () => {
-		if (volumeM3 <= 0) {
-			toast.error('Informe o volume de concreto.');
-			return;
-		}
 		setSaving(true);
-		const order: ServiceOrder = {
-			id: crypto.randomUUID(),
-			volumeM3,
-			spec: '35mpa',
-			britaMista,
-			pumpPrice,
-			total,
-			createdAt: new Date().toISOString()
-		};
 		try {
+			// Contrato rígido: entrada validada, total conciliado e saída re-verificada.
+			const order: ServiceOrder = await concreteOrderModule.run({ volumeM3, britaMista, pumpPrice });
 			await api.put<ServiceOrder>(`orders/${order.id}`, order);
-			track('Cálculo Realizado', { moduleId: 'concrete-logistics-v1', volumeM3, britaMista, total });
-			toast.success(`OS gerada: ${volumeM3} m³ · ${brl.format(total)}`);
+			track('Cálculo Realizado', { moduleId: 'concrete-logistics-v1', volumeM3, britaMista, total: order.total });
+			toast.success(`OS gerada: ${order.volumeM3} m³ · ${brl.format(order.total)}`);
 			setVolume('');
 			setBritaMista(false);
 			setPump('');
-		} catch {
-			toast.error('Não foi possível gerar a OS.');
+		} catch (err) {
+			if (err instanceof ContractViolationError) {
+				toast.error(err.issues[0]?.message ?? 'Dados fora do contrato.');
+			} else {
+				toast.error('Não foi possível gerar a OS.');
+			}
 		} finally {
 			setSaving(false);
 		}
-	}, [api, toast, track, volumeM3, britaMista, pumpPrice, total]);
+	}, [api, toast, track, volumeM3, britaMista, pumpPrice]);
 
 	return (
 		<section className="concrete-order mx-auto max-w-xl rounded-2xl bg-white p-6 shadow-sm">

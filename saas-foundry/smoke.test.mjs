@@ -262,4 +262,79 @@ for (const entry of await readDir(shellSrc, { recursive: true, withFileTypes: tr
 	assert.doesNotMatch(source, /sk_(live|test)/, `${entry.name} must not contain a Stripe secret key`);
 }
 
+// 13. Contratos rígidos (Zod): nada entra ou sai fora do padrão
+const {
+	ContractViolationError,
+	concreteOrderModule,
+	serviceOrderSchema,
+	sceneGridModule,
+	scenePayloadSchema,
+	publicationSchema
+} = await import('@foundry/engine-core');
+
+// Logística: entrada válida -> total conciliado matematicamente
+const order = await concreteOrderModule.run({ volumeM3: 8, britaMista: true, pumpPrice: 900 });
+assert.equal(order.total, 8 * 620 + 8 * 18 + 900); // 6004
+assert.equal(order.spec, '35mpa');
+
+// negativo, string, NaN, incremento inválido -> abortados com ContractViolationError
+for (const bad of [
+	{ volumeM3: -1, britaMista: false, pumpPrice: 0 },
+	{ volumeM3: '8', britaMista: false, pumpPrice: 0 },
+	{ volumeM3: 8, britaMista: false, pumpPrice: Number.NaN },
+	{ volumeM3: 8.3, britaMista: false, pumpPrice: 0 },
+	{ volumeM3: 8, britaMista: 'sim', pumpPrice: 0 },
+	{ volumeM3: 8, britaMista: false, pumpPrice: 0, extra: 'x' }
+]) {
+	await assert.rejects(() => concreteOrderModule.run(bad), ContractViolationError);
+}
+
+// conciliação de custos: total adulterado é dado corrompido -> rejeitado
+assert.equal(serviceOrderSchema.safeParse({ ...order, total: order.total + 1 }).success, false);
+
+// Criativo: payload só passa COM as tags obrigatórias de estilo
+const scene = await sceneGridModule.run({ character: 'Zane & Naty', basePrompt: 'dueto no telhado ao pôr do sol' });
+assert.match(scene.payload, /estilo animação 3D Pixar/);
+assert.match(scene.payload, /textura do cabelo ondulada \(nunca liso\)/);
+assert.equal(scene.lockApplied, true);
+
+await assert.rejects(() => sceneGridModule.run({ character: 'Zane', basePrompt: 'retrato com cabelo liso' }), ContractViolationError);
+await assert.rejects(() => sceneGridModule.run({ character: 'Goku', basePrompt: 'cena qualquer válida' }), ContractViolationError);
+assert.equal(scenePayloadSchema.safeParse({ character: 'Zane', payload: 'sem trava', lockApplied: true }).success, false);
+assert.equal(publicationSchema.safeParse({ id: 'pb1', title: 'Título ok', channel: 'Reels', status: 'weird' }).success, false);
+
+// 14. Auto-cura: crash transitório remonta do cache; crash persistente oferece restauração
+const healLib = await mkdtemp(join(tmpdir(), 'foundry-heal-'));
+try {
+	await mkdir(join(healLib, 'heal'), { recursive: true });
+	await writeFile(join(healLib, 'heal', 'manifest.json'), JSON.stringify({ id: 'block.heal', version: '1.0.0', permissions: [], entryPoint: 'index.js' }));
+	await writeFile(join(healLib, 'heal', 'index.js'),
+		'let crashes = 0;\nexport function createPlugin() { return function Crashy() { if (crashes < 1) { crashes += 1; throw new Error("transient boom"); } return null; }; }');
+	await mkdir(join(healLib, 'dead'), { recursive: true });
+	await writeFile(join(healLib, 'dead', 'manifest.json'), JSON.stringify({ id: 'block.dead', version: '1.0.0', permissions: [], entryPoint: 'index.js' }));
+	await writeFile(join(healLib, 'dead', 'index.js'),
+		'export function createPlugin() { return function Dead() { throw new Error("always boom"); }; }');
+
+	const { PluginRenderer } = await import('@foundry/engine-core');
+	const healRegistry = new PluginRegistry(healLib);
+	await healRegistry.scan();
+	const anon = { userId: 'u9', tenantId: 'tnt9', grantedScopes: [] };
+
+	const healedHtml = await (async () => {
+		const container = dom.window.document.createElement('div');
+		createRoot(container).render(createElement(PluginRenderer, { pluginId: 'block.heal', registry: healRegistry, principal: anon, api: fakeApi }));
+		await new Promise(resolve => setTimeout(resolve, 1200)); // crash -> auto-cura (350ms) -> remonta são
+		return container.innerHTML;
+	})();
+	assert.doesNotMatch(healedHtml, /Plugin indisponível/, 'crash transitório deve se auto-curar');
+
+	const deadContainer = dom.window.document.createElement('div');
+	createRoot(deadContainer).render(createElement(PluginRenderer, { pluginId: 'block.dead', registry: healRegistry, principal: anon, api: fakeApi }));
+	await new Promise(resolve => setTimeout(resolve, 1800)); // 2 tentativas esgotadas
+	assert.match(deadContainer.innerHTML, /Plugin indisponível/);
+	assert.match(deadContainer.innerHTML, /Restaurar módulo/);
+} finally {
+	await rm(healLib, { recursive: true, force: true });
+}
+
 console.log('ALL SMOKE TESTS PASSED');

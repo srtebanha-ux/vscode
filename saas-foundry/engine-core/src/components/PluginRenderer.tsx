@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactElement } from 'react';
 import { CoreServicesContext, type ApiService, type CoreServices } from '../plugin-host/CoreServices.js';
 import { PluginRegistry, type AuthenticatedPrincipal, type PluginError } from '../services/PluginRegistry.js';
 import { ErrorBoundary } from './ErrorBoundary.js';
@@ -32,8 +32,32 @@ type RendererState =
  *   contract. Hard enforcement of that (sandboxed iframe / ShadowRealm per
  *   instance) plugs in at this mount point without changing plugin code.
  */
+/** Tentativas de auto-cura antes de exigir restauração manual. */
+const MAX_SELF_HEALS = 2;
+
 export function PluginRenderer({ pluginId, registry, principal, api, namespace }: PluginRendererProps): ReactElement {
 	const [state, setState] = useState<RendererState>({ phase: 'loading' });
+	// Auto-cura: `epoch` remonta a árvore do plugin a partir do módulo em
+	// cache do registry (último ponto seguro); `failures` limita o loop.
+	const [epoch, setEpoch] = useState(0);
+	const failures = useRef(0);
+
+	const handlePluginError = useCallback((error: Error): void => {
+		failures.current += 1;
+		if (failures.current <= MAX_SELF_HEALS) {
+			window.setTimeout(() => setEpoch(current => current + 1), 350);
+		}
+		void error;
+	}, []);
+
+	const manualRestore = useCallback((): void => {
+		failures.current = 0;
+		setEpoch(current => current + 1);
+	}, []);
+
+	useEffect(() => {
+		failures.current = 0;
+	}, [pluginId]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -85,7 +109,7 @@ export function PluginRenderer({ pluginId, registry, principal, api, namespace }
 		case 'ready': {
 			const { Plugin } = state;
 			return (
-				<ErrorBoundary pluginId={pluginId}>
+				<ErrorBoundary key={epoch} pluginId={pluginId} onError={handlePluginError} onRetry={manualRestore}>
 					<CoreServicesContext.Provider value={services}>
 						<Plugin />
 					</CoreServicesContext.Provider>

@@ -1,14 +1,16 @@
-import { useState, type ReactElement } from 'react';
+import { useRef, useState, type ReactElement } from 'react';
 import { motion } from 'framer-motion';
 import { Check, Loader2, Lock, Receipt } from 'lucide-react';
 import { useToast } from '@foundry/engine-core/ui';
+import type { AiArchitectResponse } from '../../api/ai-orchestrator';
 import { AVAILABLE_MODULES, CORE_BASE_PRICE, type AvailableModule } from './catalog';
+import { MagicPrompt } from './components/MagicPrompt';
 import { computeMonthlyTotal, createCheckoutSession } from './services/stripeService';
-import { useSubscription } from './store/subscriptionStore';
+import { subscriptionStore, useSubscription } from './store/subscriptionStore';
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
-function ModuleCard({ module }: { readonly module: AvailableModule }): ReactElement {
+function ModuleCard({ module, highlighted }: { readonly module: AvailableModule; readonly highlighted: boolean }): ReactElement {
 	const { isSelected, toggle } = useSubscription();
 	const selected = isSelected(module.id);
 	const Icon = module.icon;
@@ -16,10 +18,15 @@ function ModuleCard({ module }: { readonly module: AvailableModule }): ReactElem
 	return (
 		<motion.div
 			layout
-			animate={selected ? { scale: 1.02 } : { scale: 1 }}
+			animate={
+				highlighted
+					? { scale: [1, 1.04, 1.02], backgroundColor: ['#ffffff', '#faf5ff', '#faf5ff'] }
+					: { scale: selected ? 1.02 : 1, backgroundColor: '#ffffff' }
+			}
 			transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+			data-highlighted={highlighted || undefined}
 			className={`relative flex flex-col rounded-2xl border-2 bg-white p-6 shadow-sm transition-all hover:shadow-md ${
-				selected ? 'border-gray-900' : 'border-transparent'
+				highlighted ? 'border-fuchsia-400' : selected ? 'border-gray-900' : 'border-transparent'
 			}`}
 		>
 			{selected && (
@@ -151,22 +158,41 @@ function SubscriptionSummary({ tenantId }: { readonly tenantId: string }): React
 
 /** Internal marketplace: the tenant assembles its own SaaS out of modules. */
 export function Storefront({ tenantId }: { readonly tenantId: string }): ReactElement {
+	const toast = useToast();
+	const gridRef = useRef<HTMLDivElement>(null);
+	const [highlightedIds, setHighlightedIds] = useState<readonly string[]>([]);
+
+	const applyRecommendation = (response: AiArchitectResponse): void => {
+		toast.success(response.rationale);
+		if (response.recommendedModules.length === 0) {
+			return;
+		}
+		subscriptionStore.selectMany(response.recommendedModules);
+		setHighlightedIds(response.recommendedModules);
+		gridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+		setTimeout(() => setHighlightedIds([]), 4000);
+	};
+
 	return (
-		<div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-			<section className="min-w-0 flex-1">
-				<header className="mb-6">
-					<h1 className="text-lg font-semibold tracking-tight text-gray-900">Marketplace</h1>
-					<p className="mt-1 text-sm text-gray-500">
-						Você é o arquiteto do seu negócio: pague só pelos módulos que usa, e adicione outros quando precisar.
-					</p>
-				</header>
-				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-					{AVAILABLE_MODULES.map(module => (
-						<ModuleCard key={module.id} module={module} />
-					))}
-				</div>
-			</section>
-			<SubscriptionSummary tenantId={tenantId} />
+		<div className="space-y-6">
+			<MagicPrompt onRecommendation={applyRecommendation} />
+
+			<div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+				<section className="min-w-0 flex-1">
+					<header className="mb-6">
+						<h1 className="text-lg font-semibold tracking-tight text-gray-900">Marketplace</h1>
+						<p className="mt-1 text-sm text-gray-500">
+							Você é o arquiteto do seu negócio: pague só pelos módulos que usa, e adicione outros quando precisar.
+						</p>
+					</header>
+					<div ref={gridRef} className="grid scroll-mt-6 grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+						{AVAILABLE_MODULES.map(module => (
+							<ModuleCard key={module.id} module={module} highlighted={highlightedIds.includes(module.id)} />
+						))}
+					</div>
+				</section>
+				<SubscriptionSummary tenantId={tenantId} />
+			</div>
 		</div>
 	);
 }

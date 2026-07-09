@@ -28,6 +28,11 @@ export const subscriptionStore = {
 			: [...selectedIds, id];
 		emit();
 	},
+	/** Seleção aditiva e idempotente — usada pelo AI Architect. */
+	selectMany(ids: readonly string[]): void {
+		selectedIds = [...new Set([...selectedIds, ...ids])];
+		emit();
+	},
 	reset(): void {
 		selectedIds = [];
 		emit();

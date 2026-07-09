@@ -148,7 +148,7 @@ assert.match(authorizedHtml, /Carregando tarefas/); // effects don't run in stat
 
 const deniedHtml = mount({ namespace: instance.namespace, grantedScopes: ['read:tasks'], api: fakeApi });
 assert.match(deniedHtml, /Acesso negado/);
-assert.doesNotMatch(deniedHtml, /<h1>Task Dashboard<\/h1>/);
+assert.doesNotMatch(deniedHtml, /<h1[^>]*>Task Dashboard<\/h1>/);
 
 assert.throws(() => renderToStaticMarkup(createElement(TaskDashboard)), /outside the Core plugin host/);
 
@@ -181,7 +181,7 @@ const homeHtml = await renderApp(createElement(AppRouter, { path: '/', ...routeP
 assert.match(homeHtml, /Task Dashboard.*v1\.0\.0/);
 
 const dashHtml = await renderApp(createElement(AppRouter, { path: '/plugins/task-dashboard-v1', ...routeProps }));
-assert.match(dashHtml, /<h1>Task Dashboard<\/h1>/);
+assert.match(dashHtml, /<h1[^>]*>Task Dashboard<\/h1>/);
 assert.match(dashHtml, /Auditar bloco crud-table v1\.1/); // mock task rendered end-to-end
 
 const viewerHtml = await renderApp(

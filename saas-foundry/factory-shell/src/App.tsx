@@ -5,6 +5,8 @@ import {
 	type AuthenticatedPrincipal,
 	type PluginRegistry
 } from '@foundry/engine-core/ui';
+import { motion } from 'framer-motion';
+import { Sparkles, SearchX } from 'lucide-react';
 import { MainLayout } from './MainLayout';
 
 /** Same charset the plugin-manifest schema allows for ids — anything else 404s before touching the registry. */
@@ -19,6 +21,33 @@ const DEV_PRINCIPAL: AuthenticatedPrincipal = {
 
 export interface AppProps {
 	readonly registry: PluginRegistry;
+}
+
+function Welcome(): ReactElement {
+	return (
+		<section className="mx-auto max-w-2xl rounded-2xl bg-white p-10 text-center shadow-sm">
+			<span className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-900 text-white shadow-sm">
+				<Sparkles className="h-6 w-6" aria-hidden />
+			</span>
+			<h2 className="text-xl font-semibold tracking-tight text-gray-900">Bem-vindo à Fábrica</h2>
+			<p className="mt-2 text-sm leading-relaxed text-gray-500">
+				Selecione um módulo na barra lateral para carregá-lo. Cada módulo roda isolado, com acesso apenas aos
+				serviços autorizados pelos seus escopos.
+			</p>
+		</section>
+	);
+}
+
+function NotFound({ path }: { readonly path: string }): ReactElement {
+	return (
+		<div role="alert" className="mx-auto max-w-2xl rounded-2xl bg-white p-10 text-center shadow-sm">
+			<span className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-100 text-gray-500">
+				<SearchX className="h-6 w-6" aria-hidden />
+			</span>
+			<h2 className="text-xl font-semibold tracking-tight text-gray-900">Rota não encontrada</h2>
+			<p className="mt-2 text-sm text-gray-500">{path}</p>
+		</div>
+	);
 }
 
 /**
@@ -47,24 +76,22 @@ export function App({ registry }: AppProps): ReactElement {
 	if (match?.[1] !== undefined) {
 		content = <PluginRenderer pluginId={match[1]} registry={registry} principal={DEV_PRINCIPAL} api={api} />;
 	} else if (path === '/' || path === '') {
-		content = (
-			<section>
-				<h2>Bem-vindo à Fábrica</h2>
-				<p>Selecione um módulo na barra lateral para carregá-lo.</p>
-			</section>
-		);
+		content = <Welcome />;
 	} else {
-		content = (
-			<div role="alert">
-				<h2>Rota não encontrada</h2>
-				<p>{path}</p>
-			</div>
-		);
+		content = <NotFound path={path} />;
 	}
 
 	return (
 		<MainLayout registry={registry} currentPath={path} onNavigate={navigate}>
-			{content}
+			{/* keyed by path: remounts + fades on every module switch */}
+			<motion.div
+				key={path}
+				initial={{ opacity: 0, y: 10 }}
+				animate={{ opacity: 1, y: 0 }}
+				transition={{ duration: 0.25, ease: 'easeOut' }}
+			>
+				{content}
+			</motion.div>
 		</MainLayout>
 	);
 }

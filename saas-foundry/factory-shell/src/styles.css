@@ -3,6 +3,8 @@
 /* Plugin and SDK sources live outside the shell root — point Tailwind's scanner at them. */
 @source '../../modules-library/task-dashboard';
 @source '../../modules-library/creative-production-hub';
+@source '../../modules-library/concrete-logistics';
+@source '../../modules-library/moonsilver-hub';
 @source '../../engine-core/src';
 
 @theme {

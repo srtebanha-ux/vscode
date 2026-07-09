@@ -239,6 +239,8 @@ const { readFile: readSrc } = await import('node:fs/promises');
 const forbidden = [
 	'./modules-library/task-dashboard/TaskDashboard.tsx',
 	'./modules-library/creative-production-hub/ModuleView.tsx',
+	'./modules-library/concrete-logistics/ConcreteOrderForm.tsx',
+	'./modules-library/moonsilver-hub/CreativeHub.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',

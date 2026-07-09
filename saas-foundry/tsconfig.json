@@ -5,6 +5,8 @@
     { "path": "modules-library" },
     { "path": "modules-library/task-dashboard" },
     { "path": "modules-library/creative-production-hub" },
+    { "path": "modules-library/concrete-logistics" },
+    { "path": "modules-library/moonsilver-hub" },
     { "path": "engine-core" },
     { "path": "sandbox-runtime" },
     { "path": "api-gateway" }

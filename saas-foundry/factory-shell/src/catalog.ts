@@ -1,4 +1,4 @@
-import { Calculator, Clapperboard, FileText, ListTodo, Package, type LucideIcon } from 'lucide-react';
+import { Calculator, Clapperboard, FileText, Film, ListTodo, Package, Truck, type LucideIcon } from 'lucide-react';
 
 export interface AvailableModule {
 	readonly id: string;
@@ -49,5 +49,19 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 		description: 'Kanban de cenas e cofre de parâmetros para produção com IAs generativas.',
 		icon: Clapperboard,
 		price: 0
+	},
+	{
+		id: 'concrete-logistics-v1',
+		name: 'Logística de Concreto',
+		description: 'OS de concreto usinado 35 MPa com brita mista e bomba, preço fechado na hora.',
+		icon: Truck,
+		price: 24.9
+	},
+	{
+		id: 'moonsilver-hub-v1',
+		name: 'MoonSilver Hub',
+		description: 'Aprovação de publicações e trava de consistência 3D para o universo Zane & Naty.',
+		icon: Film,
+		price: 39.9
 	}
 ];

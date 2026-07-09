@@ -81,6 +81,12 @@ export function createMockTaskApi(): MockApiService {
 			{ id: 'sc3', title: 'Time-lapse da laje L3', frame: 'FR-022', status: 'planned' },
 			{ id: 'sc4', title: 'Logo 3D — take final', frame: 'FR-030', status: 'planned' }
 		],
+		orders: [],
+		publications: [
+			{ id: 'pb1', title: 'Teaser — Zane no telhado ao pôr do sol', channel: 'Reels · @moonsilver', status: 'pending' },
+			{ id: 'pb2', title: 'Post — Naty golden hour (grid 3x3)', channel: 'Feed · @moonsilver', status: 'pending' },
+			{ id: 'pb3', title: 'Short — dueto Zane & Naty na chuva', channel: 'YouTube · MoonSilver', status: 'pending' }
+		],
 		parameters: [
 			{
 				id: 'p1',

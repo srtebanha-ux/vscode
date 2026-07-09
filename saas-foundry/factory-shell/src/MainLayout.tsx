@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { Clapperboard, Hexagon, Home, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, Search, ShieldCheck, Store, UserRound, type LucideIcon } from 'lucide-react';
+import { Clapperboard, Film, Hexagon, Home, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, Search, ShieldCheck, Store, Truck, UserRound, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
 
 export interface SessionInfo {
@@ -22,7 +22,9 @@ export interface MainLayoutProps {
 /** Visual metadata stays in the shell — the registry keeps exposing security-relevant fields only. */
 const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
 	'task-dashboard-v1': LayoutDashboard,
-	'creative-hub-v1': Clapperboard
+	'creative-hub-v1': Clapperboard,
+	'concrete-logistics-v1': Truck,
+	'moonsilver-hub-v1': Film
 };
 
 export function MainLayout({ registry, currentPath, onNavigate, children, session, showAdmin = false }: MainLayoutProps): ReactElement {

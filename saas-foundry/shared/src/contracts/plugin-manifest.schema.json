@@ -18,7 +18,7 @@
     "permissions": {
       "type": "array",
       "uniqueItems": true,
-      "maxItems": 12,
+      "maxItems": 16,
       "items": {
         "enum": [
           "storage:read",
@@ -32,7 +32,9 @@
           "read:tasks",
           "write:tasks",
           "read:production",
-          "write:production"
+          "write:production",
+          "read:logistics",
+          "write:logistics"
         ]
       }
     },

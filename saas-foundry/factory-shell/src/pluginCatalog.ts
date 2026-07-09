@@ -2,6 +2,8 @@ import { PluginRegistry } from '@foundry/engine-core/ui';
 import { telemetrySink } from './services/analytics';
 import taskDashboardManifest from '../../modules-library/task-dashboard/manifest.json';
 import creativeHubManifest from '../../modules-library/creative-production-hub/manifest.json';
+import concreteLogisticsManifest from '../../modules-library/concrete-logistics/manifest.json';
+import moonsilverHubManifest from '../../modules-library/moonsilver-hub/manifest.json';
 
 /**
  * Bundler-side lazy entries. Each value is a dynamic import, so Vite
@@ -12,7 +14,9 @@ import creativeHubManifest from '../../modules-library/creative-production-hub/m
  */
 const bundledEntries: Readonly<Record<string, () => Promise<Record<string, unknown>>>> = {
 	'task-dashboard-v1': () => import('../../modules-library/task-dashboard/TaskDashboard.tsx'),
-	'creative-hub-v1': () => import('../../modules-library/creative-production-hub/ModuleView.tsx')
+	'creative-hub-v1': () => import('../../modules-library/creative-production-hub/ModuleView.tsx'),
+	'concrete-logistics-v1': () => import('../../modules-library/concrete-logistics/ConcreteOrderForm.tsx'),
+	'moonsilver-hub-v1': () => import('../../modules-library/moonsilver-hub/CreativeHub.tsx')
 };
 
 export function createPluginRegistry(): PluginRegistry {
@@ -30,7 +34,9 @@ export function createPluginRegistry(): PluginRegistry {
 
 	for (const [entryRef, manifest] of [
 		['task-dashboard-v1', taskDashboardManifest],
-		['creative-hub-v1', creativeHubManifest]
+		['creative-hub-v1', creativeHubManifest],
+		['concrete-logistics-v1', concreteLogisticsManifest],
+		['moonsilver-hub-v1', moonsilverHubManifest]
 	] as const) {
 		const result = registry.registerManifest(manifest, entryRef);
 		if (!result.ok) {

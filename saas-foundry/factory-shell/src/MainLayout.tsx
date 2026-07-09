@@ -1,13 +1,19 @@
 import { useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import type { PluginRegistry } from '@foundry/engine-core/ui';
-import { Factory, LayoutDashboard, PanelLeftClose, PanelLeftOpen, Puzzle, type LucideIcon } from 'lucide-react';
+import { Factory, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, UserRound, type LucideIcon } from 'lucide-react';
+
+export interface SessionInfo {
+	readonly email: string | null;
+	readonly onSignOut: () => void;
+}
 
 export interface MainLayoutProps {
 	readonly registry: PluginRegistry;
 	readonly currentPath: string;
 	readonly onNavigate: (path: string) => void;
 	readonly children: ReactNode;
+	readonly session?: SessionInfo | undefined;
 }
 
 /** Visual metadata stays in the shell — the registry keeps exposing security-relevant fields only. */
@@ -15,7 +21,7 @@ const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
 	'task-dashboard-v1': LayoutDashboard
 };
 
-export function MainLayout({ registry, currentPath, onNavigate, children }: MainLayoutProps): ReactElement {
+export function MainLayout({ registry, currentPath, onNavigate, children, session }: MainLayoutProps): ReactElement {
 	const [collapsed, setCollapsed] = useState(false);
 	const plugins = registry.list();
 
@@ -77,6 +83,32 @@ export function MainLayout({ registry, currentPath, onNavigate, children }: Main
 						);
 					})}
 				</nav>
+
+				{session && (
+					<div className="border-t border-gray-200/70 p-3">
+						<div className={`flex items-center gap-2 rounded-xl px-2 py-1.5 ${collapsed ? 'justify-center' : ''}`}>
+							<span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500">
+								<UserRound className="h-4 w-4" aria-hidden />
+							</span>
+							{!collapsed && (
+								<span className="min-w-0 flex-1 truncate text-xs text-gray-500" title={session.email ?? undefined}>
+									{session.email ?? 'Sessão ativa'}
+								</span>
+							)}
+							{!collapsed && (
+								<button
+									type="button"
+									onClick={session.onSignOut}
+									title="Sair"
+									aria-label="Sair"
+									className="rounded-lg p-1.5 text-gray-400 transition-all hover:scale-105 hover:bg-gray-100 hover:text-gray-900"
+								>
+									<LogOut className="h-4 w-4" aria-hidden />
+								</button>
+							)}
+						</div>
+					</div>
+				)}
 
 				<div className="border-t border-gray-200/70 p-3">
 					<button

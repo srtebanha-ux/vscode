@@ -204,4 +204,21 @@ const crashHtml = await renderApp(
 );
 assert.match(crashHtml, /Plugin indisponível/);
 
+// 11. Golden rule: only the shell's FirebaseApiService may import firebase.
+// Plugins and engine-core must stay firebase-free (data access via useCoreService only).
+const { readFile: readSrc } = await import('node:fs/promises');
+const forbidden = [
+	'./modules-library/task-dashboard/TaskDashboard.tsx',
+	'./engine-core/src/index.ts',
+	'./engine-core/src/ui.ts',
+	'./engine-core/src/plugin-host/CoreServices.ts',
+	'./engine-core/src/components/PluginRenderer.tsx',
+	'./engine-core/src/services/PluginRegistry.ts',
+	'./engine-core/src/services/MockApiService.ts'
+];
+for (const file of forbidden) {
+	const source = await readSrc(new URL(file, import.meta.url), 'utf8');
+	assert.doesNotMatch(source, /['"]firebase/, `${file} must not import firebase`);
+}
+
 console.log('ALL SMOKE TESTS PASSED');

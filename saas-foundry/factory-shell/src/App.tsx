@@ -1,26 +1,24 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import {
 	PluginRenderer,
-	createMockTaskApi,
+	type ApiService,
 	type AuthenticatedPrincipal,
 	type PluginRegistry
 } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
 import { Sparkles, SearchX } from 'lucide-react';
-import { MainLayout } from './MainLayout';
+import { MainLayout, type SessionInfo } from './MainLayout';
 
 /** Same charset the plugin-manifest schema allows for ids — anything else 404s before touching the registry. */
 const PLUGIN_ROUTE = /^\/plugins\/([a-z][a-z0-9-]*(?:\.[a-z][a-z0-9-]*)*)$/;
 
-/** Dev session stub — swapped for the engine-core auth service later. */
-const DEV_PRINCIPAL: AuthenticatedPrincipal = {
-	userId: 'dev-user',
-	tenantId: 'tnt-dev',
-	grantedScopes: ['read:tasks', 'write:tasks']
-};
-
 export interface AppProps {
 	readonly registry: PluginRegistry;
+	/** Resolved by the composition root: Firebase auth session or dev stub. */
+	readonly principal: AuthenticatedPrincipal;
+	/** FirebaseApiService or MockApiService — plugins can't tell the difference. */
+	readonly api: ApiService;
+	readonly session?: SessionInfo;
 }
 
 function Welcome(): ReactElement {
@@ -55,7 +53,7 @@ function NotFound({ path }: { readonly path: string }): ReactElement {
  * PluginRenderer applies it per-mount, after the registry authorizes the
  * plugin — a global provider would hand services to unvalidated code.
  */
-export function App({ registry }: AppProps): ReactElement {
+export function App({ registry, principal, api, session }: AppProps): ReactElement {
 	const [path, setPath] = useState(() => window.location.pathname);
 
 	useEffect(() => {
@@ -69,12 +67,10 @@ export function App({ registry }: AppProps): ReactElement {
 		setPath(to);
 	}, []);
 
-	const api = useMemo(() => createMockTaskApi(), []);
-
 	const match = PLUGIN_ROUTE.exec(path);
 	let content: ReactElement;
 	if (match?.[1] !== undefined) {
-		content = <PluginRenderer pluginId={match[1]} registry={registry} principal={DEV_PRINCIPAL} api={api} />;
+		content = <PluginRenderer pluginId={match[1]} registry={registry} principal={principal} api={api} />;
 	} else if (path === '/' || path === '') {
 		content = <Welcome />;
 	} else {
@@ -82,7 +78,7 @@ export function App({ registry }: AppProps): ReactElement {
 	}
 
 	return (
-		<MainLayout registry={registry} currentPath={path} onNavigate={navigate}>
+		<MainLayout registry={registry} currentPath={path} onNavigate={navigate} session={session}>
 			{/* keyed by path: remounts + fades on every module switch */}
 			<motion.div
 				key={path}

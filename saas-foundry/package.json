@@ -8,7 +8,8 @@
     "engine-core",
     "sandbox-runtime",
     "modules-library",
-    "api-gateway"
+    "api-gateway",
+    "factory-shell"
   ],
   "scripts": {
     "build": "tsc -b",

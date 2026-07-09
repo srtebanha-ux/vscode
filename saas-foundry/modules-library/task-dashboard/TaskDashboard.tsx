@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { hasScopes, useCoreService } from '@foundry/engine-core';
+import { hasScopes, useCoreService } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 
 export type TaskStatus = 'todo' | 'in-progress' | 'done';

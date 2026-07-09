@@ -1,0 +1,43 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; color: #1a1a2e; }
+
+.app-shell { display: flex; min-height: 100vh; }
+
+.sidebar {
+	width: 240px;
+	flex-shrink: 0;
+	padding: 1rem;
+	background: #14142b;
+	color: #f0f0f5;
+}
+.sidebar .brand {
+	display: block;
+	margin-bottom: 1.5rem;
+	font-size: 1.2rem;
+	font-weight: 700;
+	color: inherit;
+	text-decoration: none;
+}
+.sidebar nav ul { list-style: none; margin: 0; padding: 0; }
+.sidebar nav a {
+	display: block;
+	padding: 0.5rem 0.75rem;
+	border-radius: 6px;
+	color: #c7c7e0;
+	text-decoration: none;
+}
+.sidebar nav a:hover { background: #23234a; color: #fff; }
+.sidebar nav a[aria-current='page'] { background: #2e2e5e; color: #fff; }
+.sidebar nav small { opacity: 0.6; }
+
+.content { flex: 1; padding: 2rem; }
+
+.task-dashboard ul { list-style: none; padding: 0; }
+.task-dashboard li {
+	display: flex;
+	gap: 1rem;
+	align-items: center;
+	padding: 0.5rem 0;
+	border-bottom: 1px solid #e2e2ef;
+}
+.plugin-access-denied, .plugin-crash-panel { color: #8b1e3f; }

@@ -1,6 +1,3 @@
-import { readdir, readFile } from 'node:fs/promises';
-import { resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import {
 	pluginManifestSchema,
 	type PluginManifest,
@@ -80,14 +77,45 @@ export class PluginRegistry {
 		private readonly libraryRoot: string,
 		resolver?: EntryModuleResolver
 	) {
-		this.resolveModule = resolver ?? (async entryPath => (await import(pathToFileURL(entryPath).href)) as Record<string, unknown>);
+		// Node builtins are imported lazily (and hidden from bundlers via
+		// @vite-ignore) so the registry is usable in the browser shell,
+		// where a bundler resolver is always provided and scan() never runs.
+		this.resolveModule =
+			resolver ??
+			(async entryPath => {
+				const { pathToFileURL } = await import(/* @vite-ignore */ 'node:url');
+				return (await import(/* @vite-ignore */ pathToFileURL(entryPath).href)) as Record<string, unknown>;
+			});
 	}
 
+	/**
+	 * Registers a manifest provided by the host (browser shell: manifests are
+	 * statically imported by the bundler; entryRef is the key its resolver
+	 * understands). Same schema gate as scan(); fail-closed.
+	 */
+	registerManifest(raw: unknown, entryRef: string): { readonly ok: true; readonly id: string } | { readonly ok: false; readonly reason: string } {
+		if (!this.validateManifest(raw)) {
+			return { ok: false, reason: `schema violation: ${schemaErrors(this.validateManifest).join('; ')}` };
+		}
+		const manifest: PluginManifest = raw;
+		if (this.plugins.has(manifest.id)) {
+			return { ok: false, reason: `duplicate id: ${manifest.id}` };
+		}
+		this.plugins.set(manifest.id, Object.freeze({ manifest: Object.freeze(manifest), entryPath: entryRef }));
+		return { ok: true, id: manifest.id };
+	}
+
+	/** Filesystem discovery — server-side only (the browser shell uses registerManifest). */
 	async scan(): Promise<ScanReport> {
 		const registered: string[] = [];
 		const skipped: { dir: string; reason: string }[] = [];
 		this.plugins.clear();
 		this.moduleCache.clear();
+
+		const [{ readdir, readFile }, { resolve, sep }] = await Promise.all([
+			import(/* @vite-ignore */ 'node:fs/promises'),
+			import(/* @vite-ignore */ 'node:path')
+		]);
 
 		const root = resolve(this.libraryRoot);
 		const entries = await readdir(root, { withFileTypes: true });

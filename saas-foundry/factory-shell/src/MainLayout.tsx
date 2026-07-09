@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { Clapperboard, Factory, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, ShieldCheck, Store, UserRound, type LucideIcon } from 'lucide-react';
+import { Clapperboard, Hexagon, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, ShieldCheck, Store, UserRound, type LucideIcon } from 'lucide-react';
 
 export interface SessionInfo {
 	readonly email: string | null;
@@ -45,13 +45,17 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 					<a
 						href="/app"
 						onClick={event => navigate(event, '/app')}
-						title="SaaS Foundry"
+						title="Lidar Core"
 						className="flex items-center gap-3 overflow-hidden"
 					>
 						<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gray-900 text-white shadow-sm">
-							<Factory className="h-5 w-5" aria-hidden />
+							<Hexagon className="h-5 w-5" aria-hidden />
 						</span>
-						{!collapsed && <span className="truncate text-base font-semibold tracking-tight">SaaS Foundry</span>}
+						{!collapsed && (
+							<span className="truncate text-base font-semibold tracking-tight">
+								Lidar <span className="text-gray-400">Core</span>
+							</span>
+						)}
 					</a>
 				</div>
 

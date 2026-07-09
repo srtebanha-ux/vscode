@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight, Bot, CreditCard, Factory, MessageSquareText, Sparkles } from 'lucide-react';
+import { ArrowRight, Bot, CreditCard, Hexagon, MessageSquareText, Sparkles } from 'lucide-react';
 
 export interface LandingPageProps {
 	/** CTA principal: leva ao MagicPrompt (AI Architect) na Store. */
@@ -44,9 +44,11 @@ export function LandingPage({ onStart, onEnter }: LandingPageProps): ReactElemen
 			<nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
 				<span className="flex items-center gap-3">
 					<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 shadow-sm backdrop-blur">
-						<Factory className="h-5 w-5" aria-hidden />
+						<Hexagon className="h-5 w-5" aria-hidden />
 					</span>
-					<span className="text-base font-semibold tracking-tight">SaaS Foundry</span>
+					<span className="text-base font-semibold tracking-tight">
+						Lidar <span className="text-gray-400">Core</span>
+					</span>
 				</span>
 				<button
 					type="button"
@@ -128,7 +130,7 @@ export function LandingPage({ onStart, onEnter }: LandingPageProps): ReactElemen
 			</section>
 
 			<footer className="mx-auto flex max-w-6xl items-center justify-between px-6 py-8 text-xs text-gray-600">
-				<span>© 2026 SaaS Foundry</span>
+				<span>© 2026 Lidar Core</span>
 				<span>Feito com módulos auditados e silos de dados por tenant.</span>
 			</footer>
 		</div>

@@ -32,7 +32,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 export function buildWelcomeEmail(request: WelcomeEmailRequest): ResendEmailPayload {
 	const firstName = request.name?.trim().split(/\s+/)[0] ?? 'arquiteto';
 	return {
-		from: 'SaaS Foundry <onboarding@saasfoundry.example>',
+		from: 'Lidar Core <onboarding@lidarcore.example>',
 		to: [request.email],
 		subject: 'Sua infraestrutura está pronta 🚀',
 		html: `<!doctype html>
@@ -42,7 +42,7 @@ export function buildWelcomeEmail(request: WelcomeEmailRequest): ResendEmailPayl
 			<div style="width:48px;height:48px;background:#111827;border-radius:12px;color:#ffffff;font-size:24px;line-height:48px;text-align:center;">🏭</div>
 			<h1 style="margin:24px 0 8px;font-size:22px;letter-spacing:-0.02em;">Bem-vindo(a), ${escapeHtml(firstName)}!</h1>
 			<p style="margin:0 0 16px;font-size:14px;line-height:1.6;color:#6b7280;">
-				Sua conta na <strong>SaaS Foundry</strong> foi criada e a sua infraestrutura já está de pé:
+				Sua conta na <strong>Lidar Core</strong> foi criada e a sua infraestrutura já está de pé:
 				silo de dados isolado, módulos prontos para ativar e o AI Architect à disposição.
 			</p>
 			<ol style="margin:0 0 24px;padding-left:20px;font-size:14px;line-height:1.9;color:#374151;">
@@ -50,12 +50,12 @@ export function buildWelcomeEmail(request: WelcomeEmailRequest): ResendEmailPayl
 				<li>Ative os módulos recomendados</li>
 				<li>Pague só pelo que usar — a partir de R$ 29,90/mês</li>
 			</ol>
-			<a href="https://saasfoundry.example/storefront"
+			<a href="https://lidarcore.example/storefront"
 				style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 24px;border-radius:12px;">
 				Montar meu sistema
 			</a>
 			<p style="margin:24px 0 0;font-size:12px;color:#9ca3af;">
-				Você recebeu este e-mail porque criou uma conta na SaaS Foundry.
+				Você recebeu este e-mail porque criou uma conta na Lidar Core.
 			</p>
 		</div>
 	</body>

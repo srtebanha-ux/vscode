@@ -1,0 +1,19 @@
+{
+	"name": "Lidar Core",
+	"short_name": "Lidar",
+	"description": "A inteligência artificial que monta o sistema de gestão perfeito para a sua operação em segundos.",
+	"start_url": "/app",
+	"scope": "/",
+	"display": "standalone",
+	"background_color": "#030712",
+	"theme_color": "#030712",
+	"lang": "pt-BR",
+	"icons": [
+		{
+			"src": "/icon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml",
+			"purpose": "any maskable"
+		}
+	]
+}

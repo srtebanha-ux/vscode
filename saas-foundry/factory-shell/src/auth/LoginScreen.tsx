@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactElement } from 'react';
-import { Factory, Loader2, Lock, Mail } from 'lucide-react';
+import { Hexagon, Loader2, Lock, Mail } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAuth } from './AuthProvider';
 
@@ -41,11 +41,13 @@ export function LoginScreen(): ReactElement {
 			>
 				<div className="mb-8 flex flex-col items-center gap-3">
 					<span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-900 text-white shadow-sm">
-						<Factory className="h-6 w-6" aria-hidden />
+						<Hexagon className="h-6 w-6" aria-hidden />
 					</span>
 					<div className="text-center">
-						<h1 className="text-xl font-semibold tracking-tight text-gray-900">SaaS Foundry</h1>
-						<p className="mt-1 text-sm text-gray-500">Entre para acessar a sua fábrica.</p>
+						<h1 className="text-xl font-semibold tracking-tight text-gray-900">
+							Lidar <span className="text-gray-400">Core</span>
+						</h1>
+						<p className="mt-1 text-sm text-gray-500">Entre para acessar a sua operação.</p>
 					</div>
 				</div>
 

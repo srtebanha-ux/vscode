@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactElement } from 'react';
 import { motion } from 'framer-motion';
 import { Check, Loader2, Lock, Receipt } from 'lucide-react';
-import { useToast } from '@foundry/engine-core/ui';
+import { Tooltip, useToast } from '@foundry/engine-core/ui';
 import type { AiArchitectResponse } from '../../api/ai-orchestrator';
 import { AVAILABLE_MODULES, CORE_BASE_PRICE, type AvailableModule } from './catalog';
 import { MagicPrompt } from './components/MagicPrompt';
@@ -140,15 +140,18 @@ function SubscriptionSummary({ tenantId }: { readonly tenantId: string }): React
 				</p>
 			</div>
 
-			<button
-				type="button"
-				onClick={() => void finalize()}
-				disabled={checkingOut}
-				className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:scale-105 hover:shadow-md disabled:pointer-events-none disabled:opacity-60"
-			>
-				{checkingOut ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Lock className="h-4 w-4" aria-hidden />}
-				Finalizar Assinatura
-			</button>
+			<Tooltip label="Abre o checkout seguro do Stripe com a base + módulos selecionados">
+				<button
+					type="button"
+					onClick={() => void finalize()}
+					disabled={checkingOut}
+					aria-label="Finalizar assinatura no checkout seguro do Stripe"
+					className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:scale-105 hover:shadow-md disabled:pointer-events-none disabled:opacity-60"
+				>
+					{checkingOut ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Lock className="h-4 w-4" aria-hidden />}
+					Finalizar Assinatura
+				</button>
+			</Tooltip>
 			<p className="mt-3 text-center text-xs text-gray-400">
 				Pagamento processado pelo Stripe. A chave secreta vive no servidor, nunca aqui.
 			</p>

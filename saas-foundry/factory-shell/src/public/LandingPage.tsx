@@ -40,8 +40,8 @@ const reveal = (delay: number) => ({
 export function LandingPage({ onStart, onEnter }: LandingPageProps): ReactElement {
 	return (
 		<div className="min-h-screen bg-gray-950 font-sans text-white antialiased">
-			{/* Nav */}
-			<nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+			<header>
+			<nav aria-label="Navegação principal" className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
 				<span className="flex items-center gap-3">
 					<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 shadow-sm backdrop-blur">
 						<Hexagon className="h-5 w-5" aria-hidden />
@@ -53,21 +53,24 @@ export function LandingPage({ onStart, onEnter }: LandingPageProps): ReactElemen
 				<button
 					type="button"
 					onClick={onEnter}
+					aria-label="Entrar no sistema Lidar Core"
 					className="rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-gray-200 backdrop-blur transition-all hover:scale-105 hover:bg-white/10 hover:text-white"
 				>
 					Entrar
 				</button>
 			</nav>
+			</header>
 
+			<main>
 			{/* Hero */}
-			<section className="relative mx-auto max-w-6xl px-6 pb-24 pt-20 text-center">
+			<section aria-labelledby="hero-title" className="relative mx-auto max-w-6xl px-6 pb-24 pt-20 text-center">
 				<div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 mx-auto h-72 max-w-3xl rounded-full bg-gradient-to-r from-indigo-600/30 via-fuchsia-600/30 to-amber-500/30 blur-3xl" />
 				<motion.div {...reveal(0)} className="relative">
 					<span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs font-medium text-gray-300 backdrop-blur">
 						<Sparkles className="h-3.5 w-3.5 text-amber-300" aria-hidden />
 						Fábrica de micro-SaaS orquestrada por IA
 					</span>
-					<h1 className="mx-auto mt-6 max-w-3xl text-4xl font-semibold leading-tight tracking-tight sm:text-6xl">
+					<h1 id="hero-title" className="mx-auto mt-6 max-w-3xl text-4xl font-semibold leading-tight tracking-tight sm:text-6xl">
 						Software sob medida,{' '}
 						<span className="bg-gradient-to-r from-indigo-400 via-fuchsia-400 to-amber-300 bg-clip-text text-transparent">
 							gerado em segundos
@@ -80,6 +83,7 @@ export function LandingPage({ onStart, onEnter }: LandingPageProps): ReactElemen
 					<motion.button
 						type="button"
 						onClick={onStart}
+						aria-label="Montar seu sistema agora com o AI Architect"
 						whileHover={{ scale: 1.05 }}
 						whileTap={{ scale: 0.98 }}
 						className="mt-9 inline-flex items-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-500 via-fuchsia-500 to-amber-400 px-8 py-4 text-base font-semibold text-white shadow-lg shadow-fuchsia-500/25 transition-shadow hover:shadow-xl hover:shadow-fuchsia-500/40"
@@ -92,8 +96,8 @@ export function LandingPage({ onStart, onEnter }: LandingPageProps): ReactElemen
 			</section>
 
 			{/* Como Funciona */}
-			<section className="mx-auto max-w-6xl px-6 pb-24">
-				<motion.h2 {...reveal(0)} className="text-center text-2xl font-semibold tracking-tight">
+			<section aria-labelledby="how-title" className="mx-auto max-w-6xl px-6 pb-24">
+				<motion.h2 id="how-title" {...reveal(0)} className="text-center text-2xl font-semibold tracking-tight">
 					Como funciona
 				</motion.h2>
 				<div className="mt-10 grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -114,9 +118,9 @@ export function LandingPage({ onStart, onEnter }: LandingPageProps): ReactElemen
 			</section>
 
 			{/* Social proof */}
-			<section className="border-t border-white/5 bg-white/[0.02] py-12">
+			<section aria-labelledby="trust-title" className="border-t border-white/5 bg-white/[0.02] py-12">
 				<motion.div {...reveal(0)} className="mx-auto max-w-6xl px-6 text-center">
-					<p className="text-xs font-medium uppercase tracking-widest text-gray-500">
+					<p id="trust-title" className="text-xs font-medium uppercase tracking-widest text-gray-500">
 						Empresas que já otimizam tempo com a nossa fábrica
 					</p>
 					<ul className="mt-6 flex flex-wrap items-center justify-center gap-x-10 gap-y-4">
@@ -128,6 +132,7 @@ export function LandingPage({ onStart, onEnter }: LandingPageProps): ReactElemen
 					</ul>
 				</motion.div>
 			</section>
+			</main>
 
 			<footer className="mx-auto flex max-w-6xl items-center justify-between px-6 py-8 text-xs text-gray-600">
 				<span>© 2026 Lidar Core</span>

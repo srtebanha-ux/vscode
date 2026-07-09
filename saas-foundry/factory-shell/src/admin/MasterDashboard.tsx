@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import { motion } from 'framer-motion';
 import { Ban, DollarSign, Eye, ShieldCheck, Trophy, Users, type LucideIcon } from 'lucide-react';
-import { LoadingSkeleton, useToast } from '@foundry/engine-core/ui';
+import { LoadingSkeleton, Tooltip, useToast } from '@foundry/engine-core/ui';
 import {
 	getActiveTenants,
 	getAdminMetrics,
@@ -137,16 +137,18 @@ export function MasterDashboard(): ReactElement {
 													<Eye className="h-3.5 w-3.5" aria-hidden />
 													Inspecionar
 												</button>
-												<button
-													type="button"
-													disabled={tenant.status === 'revoked'}
-													onClick={() => void revoke(tenant)}
-													title={`Revogar acesso de ${tenant.company}`}
-													className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-1.5 text-xs font-medium text-red-600 transition-all hover:scale-105 hover:bg-red-100 disabled:pointer-events-none disabled:opacity-40"
-												>
-													<Ban className="h-3.5 w-3.5" aria-hidden />
-													Revogar Acesso
-												</button>
+												<Tooltip label="Suspende os escopos e a assinatura deste tenant imediatamente">
+													<button
+														type="button"
+														disabled={tenant.status === 'revoked'}
+														onClick={() => void revoke(tenant)}
+														aria-label={`Revogar acesso de ${tenant.company}`}
+														className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-1.5 text-xs font-medium text-red-600 transition-all hover:scale-105 hover:bg-red-100 disabled:pointer-events-none disabled:opacity-40"
+													>
+														<Ban className="h-3.5 w-3.5" aria-hidden />
+														Revogar Acesso
+													</button>
+												</Tooltip>
 											</div>
 										</td>
 									</tr>

@@ -5,8 +5,9 @@ import {
 	type AuthenticatedPrincipal,
 	type PluginRegistry
 } from '@foundry/engine-core/ui';
+import { useToast } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
-import { Sparkles, SearchX } from 'lucide-react';
+import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } from 'lucide-react';
 import { MasterDashboard } from './admin/MasterDashboard';
 import type { UserRole } from './auth/AuthProvider';
 import { MainLayout, type SessionInfo } from './MainLayout';
@@ -34,17 +35,71 @@ function RedirectHome({ navigate }: { readonly navigate: (to: string) => void })
 	return null;
 }
 
-function Welcome(): ReactElement {
+interface QuickAction {
+	readonly icon: LucideIcon;
+	readonly title: string;
+	readonly description: string;
+	readonly run: () => void;
+}
+
+/** Quick Start Panel: pós-login nunca é uma tela vazia — sempre há um próximo passo óbvio. */
+function Welcome({ navigate, isAdmin }: { readonly navigate: (to: string) => void; readonly isAdmin: boolean }): ReactElement {
+	const toast = useToast();
+	const actions: readonly QuickAction[] = [
+		{
+			icon: Sparkles,
+			title: 'Montar novo módulo',
+			description: 'Descreva o seu problema e deixe o AI Architect montar o sistema.',
+			run: () => navigate('/storefront')
+		},
+		{
+			icon: Receipt,
+			title: 'Ver faturamento',
+			description: isAdmin ? 'MRR, tenants e assinaturas da plataforma.' : 'Resumo da sua assinatura e módulos ativos.',
+			run: () => navigate(isAdmin ? '/admin' : '/storefront')
+		},
+		{
+			icon: Settings,
+			title: 'Configurações da conta',
+			description: 'Perfil, equipe e preferências do seu espaço.',
+			run: () => toast.success('Configurações da conta chegam na próxima versão.')
+		}
+	];
+
 	return (
-		<section className="mx-auto max-w-2xl rounded-2xl bg-white p-10 text-center shadow-sm">
-			<span className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-900 text-white shadow-sm">
-				<Sparkles className="h-6 w-6" aria-hidden />
-			</span>
-			<h2 className="text-xl font-semibold tracking-tight text-gray-900">Bem-vindo à Fábrica</h2>
-			<p className="mt-2 text-sm leading-relaxed text-gray-500">
-				Selecione um módulo na barra lateral para carregá-lo. Cada módulo roda isolado, com acesso apenas aos
-				serviços autorizados pelos seus escopos.
-			</p>
+		<section aria-labelledby="quick-start-title" className="mx-auto max-w-4xl">
+			<header className="mb-6 text-center">
+				<span className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-900 text-white shadow-sm">
+					<Sparkles className="h-6 w-6" aria-hidden />
+				</span>
+				<h2 id="quick-start-title" className="text-xl font-semibold tracking-tight text-gray-900">
+					Bem-vindo à Lidar Core
+				</h2>
+				<p className="mt-2 text-sm text-gray-500">Por onde você quer começar? (dica: Ctrl+K busca qualquer coisa)</p>
+			</header>
+			<div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+				{actions.map((action, index) => (
+					<motion.button
+						key={action.title}
+						type="button"
+						onClick={action.run}
+						aria-label={action.title}
+						initial={{ opacity: 0, y: 10 }}
+						animate={{ opacity: 1, y: 0 }}
+						transition={{ duration: 0.25, delay: index * 0.08, ease: 'easeOut' }}
+						className="group flex flex-col rounded-2xl bg-white p-6 text-left shadow-sm transition-all hover:scale-[1.02] hover:shadow-md"
+					>
+						<span className="flex h-11 w-11 items-center justify-center rounded-xl bg-gray-100 text-gray-500 transition-colors group-hover:bg-gray-900 group-hover:text-white">
+							<action.icon className="h-5 w-5" aria-hidden />
+						</span>
+						<span className="mt-4 flex items-center gap-1.5 text-sm font-semibold text-gray-900">
+							{action.title}
+							<ArrowRight className="h-3.5 w-3.5 opacity-0 transition-all group-hover:translate-x-0.5 group-hover:opacity-100" aria-hidden />
+						</span>
+						<span className="mt-1 text-sm leading-relaxed text-gray-500">{action.description}</span>
+					</motion.button>
+				))}
+			</div>
 		</section>
 	);
 }
@@ -72,7 +127,7 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 	if (match?.[1] !== undefined) {
 		content = <PluginRenderer pluginId={match[1]} registry={registry} principal={principal} api={api} />;
 	} else if (path === '/app') {
-		content = <Welcome />;
+		content = <Welcome navigate={navigate} isAdmin={role === 'SUPER_ADMIN'} />;
 	} else if (path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
 	} else if (path === '/admin') {

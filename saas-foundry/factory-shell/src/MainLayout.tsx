@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { Clapperboard, Hexagon, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, ShieldCheck, Store, UserRound, type LucideIcon } from 'lucide-react';
+import { Clapperboard, Hexagon, Home, LayoutDashboard, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, Search, ShieldCheck, Store, UserRound, type LucideIcon } from 'lucide-react';
+import { CommandPalette, type Command } from './components/CommandPalette';
 
 export interface SessionInfo {
 	readonly email: string | null;
@@ -26,12 +27,35 @@ const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
 
 export function MainLayout({ registry, currentPath, onNavigate, children, session, showAdmin = false }: MainLayoutProps): ReactElement {
 	const [collapsed, setCollapsed] = useState(false);
+	const [paletteOpen, setPaletteOpen] = useState(false);
 	const plugins = registry.list();
 
 	const navigate = (event: MouseEvent<HTMLAnchorElement>, path: string): void => {
 		event.preventDefault();
 		onNavigate(path);
 	};
+
+	const commands = useMemo<readonly Command[]>(() => {
+		const items: Command[] = [
+			{ id: 'nav-home', label: 'Início', hint: 'Painel principal', icon: Home, keywords: 'home dashboard painel', run: () => onNavigate('/app') },
+			{ id: 'nav-store', label: 'Marketplace', hint: 'Ativar módulos e assinatura', icon: Store, keywords: 'loja store módulos assinatura billing faturamento', run: () => onNavigate('/storefront') },
+			...plugins.map(plugin => ({
+				id: `mod-${plugin.id}`,
+				label: plugin.displayName ?? plugin.id,
+				hint: `Abrir módulo v${plugin.version}`,
+				icon: MODULE_ICONS[plugin.id] ?? Puzzle,
+				keywords: `módulo plugin ${plugin.id}`,
+				run: () => onNavigate(`/plugins/${plugin.id}`)
+			}))
+		];
+		if (showAdmin) {
+			items.push({ id: 'nav-admin', label: 'Master Admin', hint: 'KPIs e tenants da plataforma', icon: ShieldCheck, keywords: 'admin mrr tenants gestão', run: () => onNavigate('/admin') });
+		}
+		if (session) {
+			items.push({ id: 'act-signout', label: 'Sair da conta', hint: 'Encerrar a sessão atual', icon: LogOut, keywords: 'logout sair sessão configurações', run: session.onSignOut });
+		}
+		return items;
+	}, [plugins, showAdmin, session, onNavigate]);
 
 	return (
 		<ToastProvider>
@@ -57,6 +81,23 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 							</span>
 						)}
 					</a>
+				</div>
+
+				<div className="px-3 pb-1">
+					<button
+						type="button"
+						onClick={() => setPaletteOpen(true)}
+						aria-label="Abrir busca de comandos (Ctrl+K)"
+						className={`flex w-full items-center gap-3 rounded-xl border border-gray-200/70 bg-gray-50 px-3 py-2 text-sm text-gray-400 transition-all hover:border-gray-300 hover:text-gray-600 ${collapsed ? 'justify-center' : ''}`}
+					>
+						<Search className="h-4 w-4 shrink-0" aria-hidden />
+						{!collapsed && (
+							<>
+								<span className="flex-1 text-left">Buscar…</span>
+								<kbd className="rounded-md bg-white px-1.5 py-0.5 text-[10px] font-medium text-gray-400 shadow-sm">⌘K</kbd>
+							</>
+						)}
+					</button>
 				</div>
 
 				<nav aria-label="Módulos" className="flex-1 space-y-1 px-3 py-2">
@@ -168,6 +209,7 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 			</aside>
 
 			<main className="min-w-0 flex-1 px-8 py-8">{children}</main>
+			<CommandPalette commands={commands} open={paletteOpen} onOpenChange={setPaletteOpen} />
 		</div>
 		</ToastProvider>
 	);

@@ -1,17 +1,42 @@
-import { StrictMode, useMemo, type ReactElement } from 'react';
+import { StrictMode, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
-import { GlobalErrorBoundary, createMockTaskApi, type AuthenticatedPrincipal, type PluginRegistry } from '@foundry/engine-core/ui';
+import {
+	GlobalErrorBoundary,
+	createMockTaskApi,
+	type AuthenticatedPrincipal,
+	type PluginRegistry
+} from '@foundry/engine-core/ui';
 import { App } from './App';
-import { AuthProvider, RequireAuth, useAuth } from './auth/AuthProvider';
+import { AuthProvider, RequireAuth, useAuth, type UserRole } from './auth/AuthProvider';
 import { createPluginRegistry } from './pluginCatalog';
+import { LandingPage } from './public/LandingPage';
 import { getFirebase, isFirebaseConfigured } from './services/firebaseConfig';
 import { FirebaseApiService } from './services/FirebaseApiService';
 import './styles.css';
 
 const registry = createPluginRegistry();
 
+interface Router {
+	readonly path: string;
+	readonly navigate: (to: string) => void;
+}
+
+function useRouter(): Router {
+	const [path, setPath] = useState(() => window.location.pathname);
+	useEffect(() => {
+		const onPopState = (): void => setPath(window.location.pathname);
+		window.addEventListener('popstate', onPopState);
+		return () => window.removeEventListener('popstate', onPopState);
+	}, []);
+	const navigate = useCallback((to: string): void => {
+		window.history.pushState(null, '', to);
+		setPath(to);
+	}, []);
+	return { path, navigate };
+}
+
 /** Composition root of the authenticated app: session -> principal + tenant-siloed ApiService. */
-function AuthedApp({ registry: reg }: { readonly registry: PluginRegistry }): ReactElement {
+function AuthedApp({ registry: reg, router }: { readonly registry: PluginRegistry; readonly router: Router }): ReactElement {
 	const { user, role, signOut } = useAuth();
 	if (!user) {
 		throw new Error('AuthedApp montado sem sessão'); // RequireAuth garante que não acontece
@@ -34,6 +59,8 @@ function AuthedApp({ registry: reg }: { readonly registry: PluginRegistry }): Re
 			principal={principal}
 			api={api}
 			role={role}
+			path={router.path}
+			navigate={router.navigate}
 			session={{ email: user.email, onSignOut: () => void signOut() }}
 		/>
 	);
@@ -46,6 +73,37 @@ const DEV_PRINCIPAL: AuthenticatedPrincipal = {
 	grantedScopes: ['read:tasks', 'write:tasks', 'read:production', 'write:production']
 };
 
+const DEV_ROLE: UserRole = window.localStorage.getItem('foundry:dev-role') === 'USER' ? 'USER' : 'SUPER_ADMIN';
+
+/** Raiz: '/' é a Landing pública (sem auth, sem shell); todo o resto é o sistema logado. */
+function Root(): ReactElement {
+	const router = useRouter();
+
+	if (router.path === '/' || router.path === '') {
+		return <LandingPage onStart={() => router.navigate('/storefront')} onEnter={() => router.navigate('/app')} />;
+	}
+
+	if (isFirebaseConfigured) {
+		return (
+			<AuthProvider>
+				<RequireAuth>
+					<AuthedApp registry={registry} router={router} />
+				</RequireAuth>
+			</AuthProvider>
+		);
+	}
+	return (
+		<App
+			registry={registry}
+			principal={DEV_PRINCIPAL}
+			api={createMockTaskApi()}
+			role={DEV_ROLE}
+			path={router.path}
+			navigate={router.navigate}
+		/>
+	);
+}
+
 const rootElement = document.getElementById('root');
 if (!rootElement) {
 	throw new Error('missing #root element');
@@ -54,20 +112,7 @@ if (!rootElement) {
 createRoot(rootElement).render(
 	<StrictMode>
 		<GlobalErrorBoundary>
-			{isFirebaseConfigured ? (
-				<AuthProvider>
-					<RequireAuth>
-						<AuthedApp registry={registry} />
-					</RequireAuth>
-				</AuthProvider>
-			) : (
-				<App
-					registry={registry}
-					principal={DEV_PRINCIPAL}
-					api={createMockTaskApi()}
-					role={window.localStorage.getItem('foundry:dev-role') === 'USER' ? 'USER' : 'SUPER_ADMIN'}
-				/>
-			)}
+			<Root />
 		</GlobalErrorBoundary>
 	</StrictMode>
 );

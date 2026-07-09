@@ -43,8 +43,8 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 			>
 				<div className="px-4 py-5">
 					<a
-						href="/"
-						onClick={event => navigate(event, '/')}
+						href="/app"
+						onClick={event => navigate(event, '/app')}
 						title="SaaS Foundry"
 						className="flex items-center gap-3 overflow-hidden"
 					>

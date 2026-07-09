@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactElement } from 'react';
+import { useEffect, type ReactElement } from 'react';
 import {
 	PluginRenderer,
 	type ApiService,
@@ -22,12 +22,15 @@ export interface AppProps {
 	/** FirebaseApiService or MockApiService — plugins can't tell the difference. */
 	readonly api: ApiService;
 	readonly role: UserRole;
+	/** Roteamento vive no composition root (main.tsx) — a Landing pública usa o mesmo estado. */
+	readonly path: string;
+	readonly navigate: (to: string) => void;
 	readonly session?: SessionInfo;
 }
 
-/** Rota privilegiada acessada sem role: volta para a Home sem renderizar nada. */
+/** Rota privilegiada acessada sem role: volta para o sistema logado sem renderizar nada. */
 function RedirectHome({ navigate }: { readonly navigate: (to: string) => void }): null {
-	useEffect(() => navigate('/'), [navigate]);
+	useEffect(() => navigate('/app'), [navigate]);
 	return null;
 }
 
@@ -63,25 +66,12 @@ function NotFound({ path }: { readonly path: string }): ReactElement {
  * PluginRenderer applies it per-mount, after the registry authorizes the
  * plugin — a global provider would hand services to unvalidated code.
  */
-export function App({ registry, principal, api, role, session }: AppProps): ReactElement {
-	const [path, setPath] = useState(() => window.location.pathname);
-
-	useEffect(() => {
-		const onPopState = (): void => setPath(window.location.pathname);
-		window.addEventListener('popstate', onPopState);
-		return () => window.removeEventListener('popstate', onPopState);
-	}, []);
-
-	const navigate = useCallback((to: string): void => {
-		window.history.pushState(null, '', to);
-		setPath(to);
-	}, []);
-
+export function App({ registry, principal, api, role, path, navigate, session }: AppProps): ReactElement {
 	const match = PLUGIN_ROUTE.exec(path);
 	let content: ReactElement;
 	if (match?.[1] !== undefined) {
 		content = <PluginRenderer pluginId={match[1]} registry={registry} principal={principal} api={api} />;
-	} else if (path === '/' || path === '') {
+	} else if (path === '/app') {
 		content = <Welcome />;
 	} else if (path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;

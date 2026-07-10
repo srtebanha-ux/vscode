@@ -243,6 +243,8 @@ const forbidden = [
 	'./modules-library/lidar-core-hub/CreativeHub.tsx',
 	'./modules-library/lidar-orchestrator/LidarOrchestrator.tsx',
 	'./modules-library/predictive-bi-agent/PredictiveBIAgent.tsx',
+	'./modules-library/virtual-cfo/VirtualCFO_Agent.tsx',
+	'./modules-library/virtual-cmo/VirtualCMO_Agent.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',

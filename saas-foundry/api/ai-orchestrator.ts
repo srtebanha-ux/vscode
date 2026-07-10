@@ -33,7 +33,17 @@ const MODULE_PROFILES: Readonly<Record<string, ModuleProfile>> = {
 	'predictive-bi-v1': {
 		name: 'Predictive BI Agent',
 		pitch: 'vigia margem, caixa e gargalos com uma LLM que executa regras de bloqueio',
-		keywords: ['bi', 'previs', 'margem', 'custo', 'insight', 'relat', 'frota', 'analista', 'indicador', 'intelig', 'caixa', 'dashboard']
+		keywords: ['bi', 'previs', 'insight', 'relat', 'frota', 'analista', 'indicador', 'intelig', 'dashboard']
+	},
+	'virtual-cfo-v1': {
+		name: 'Virtual CFO',
+		pitch: 'diagnostica runway, precificação e plano de corte a partir do seu extrato',
+		keywords: ['precific', 'preço', 'preco', 'caixa', 'fluxo', 'margem', 'custo', 'runway', 'financ', 'extrato', 'cobr']
+	},
+	'virtual-cmo-v1': {
+		name: 'Virtual CMO',
+		pitch: 'audita seu site e entrega roteiros de anúncio e landing page prontos',
+		keywords: ['marketing', 'anúncio', 'anuncio', 'instagram', 'campanha', 'convers', 'venda', 'landing', 'cliente novo', 'divulga', 'agência', 'agencia']
 	}
 };
 

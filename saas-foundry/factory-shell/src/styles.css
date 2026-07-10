@@ -7,6 +7,8 @@
 @source '../../modules-library/lidar-core-hub';
 @source '../../modules-library/lidar-orchestrator';
 @source '../../modules-library/predictive-bi-agent';
+@source '../../modules-library/virtual-cfo';
+@source '../../modules-library/virtual-cmo';
 @source '../../engine-core/src';
 
 @theme {

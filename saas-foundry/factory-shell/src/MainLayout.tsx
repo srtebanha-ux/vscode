@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { BrainCircuit, Hexagon, Home, LogOut, PanelLeftClose, PanelLeftOpen, Puzzle, Search, ShieldCheck, Store, UserRound, Workflow, type LucideIcon } from 'lucide-react';
+import { BrainCircuit, CircleDollarSign, Hexagon, Home, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Puzzle, Search, ShieldCheck, Store, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
 
 export interface SessionInfo {
@@ -22,7 +22,9 @@ export interface MainLayoutProps {
 /** Visual metadata stays in the shell — the registry keeps exposing security-relevant fields only. */
 const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
 	'lidar-orchestrator-v1': Workflow,
-	'predictive-bi-v1': BrainCircuit
+	'predictive-bi-v1': BrainCircuit,
+	'virtual-cfo-v1': CircleDollarSign,
+	'virtual-cmo-v1': Megaphone
 };
 
 export function MainLayout({ registry, currentPath, onNavigate, children, session, showAdmin = false }: MainLayoutProps): ReactElement {

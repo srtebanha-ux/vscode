@@ -1,0 +1,7 @@
+{
+  "id": "virtual-cfo-v1",
+  "displayName": "Virtual CFO",
+  "version": "1.0.0",
+  "permissions": ["read:insights", "write:insights"],
+  "entryPoint": "VirtualCFO_Agent.tsx"
+}

@@ -40,7 +40,9 @@ const MODULE_SCOPE_GRANTS: Readonly<Record<string, readonly string[]>> = {
 	'concrete-logistics-v1': ['read:logistics', 'write:logistics'],
 	'lidar-core-hub-v1': ['read:production', 'write:production'],
 	'lidar-orchestrator-v1': ['read:integrations', 'write:integrations'],
-	'predictive-bi-v1': ['read:insights', 'write:insights']
+	'predictive-bi-v1': ['read:insights', 'write:insights'],
+	'virtual-cfo-v1': ['read:insights', 'write:insights'],
+	'virtual-cmo-v1': ['read:insights', 'write:insights']
 };
 
 /** Produção: stripe.webhooks.constructEvent(rawBody, signature, whsec) — lança se inválido. */

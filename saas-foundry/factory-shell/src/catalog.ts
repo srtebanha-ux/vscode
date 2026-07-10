@@ -1,4 +1,4 @@
-import { BrainCircuit, Workflow, type LucideIcon } from 'lucide-react';
+import { BrainCircuit, CircleDollarSign, Megaphone, Workflow, type LucideIcon } from 'lucide-react';
 
 export interface AvailableModule {
 	readonly id: string;
@@ -53,6 +53,40 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 			'Detecte risco de margem antes do fechamento do mês',
 			'Regras de bloqueio executadas em 1 clique, com auditoria',
 			'Decisões sobre 1,2M eventos — não sobre achismo'
+		]
+	},
+	{
+		id: 'virtual-cfo-v1',
+		name: 'Virtual CFO',
+		description: 'O diretor financeiro de elite que cabe no caixa de uma PME.',
+		icon: CircleDollarSign,
+		price: 297,
+		tag: '💼 C-Level as a Service',
+		tagClasses: 'bg-emerald-500/10 text-emerald-300 ring-1 ring-inset ring-emerald-500/30',
+		headerGradient: 'from-emerald-500/25 via-zinc-900 to-zinc-900',
+		iconColor: 'text-emerald-400',
+		glowClass: 'hover:shadow-emerald-500/40 hover:ring-emerald-500/60',
+		benefits: [
+			'Cole o extrato e saiba seu runway em segundos',
+			'Preço certo do seu serviço, sem chute',
+			'Plano de corte pronto antes do caixa romper'
+		]
+	},
+	{
+		id: 'virtual-cmo-v1',
+		name: 'Virtual CMO',
+		description: 'Campanhas de agência cara, geradas na hora para o seu produto.',
+		icon: Megaphone,
+		price: 247,
+		tag: '🚀 Growth 24/7',
+		tagClasses: 'bg-amber-500/10 text-amber-300 ring-1 ring-inset ring-amber-500/30',
+		headerGradient: 'from-amber-500/25 via-zinc-900 to-zinc-900',
+		iconColor: 'text-amber-400',
+		glowClass: 'hover:shadow-amber-500/40 hover:ring-amber-500/60',
+		benefits: [
+			'Auditoria do seu site com veredito honesto',
+			'3 roteiros de Instagram validados por briefing',
+			'Texto da Landing Page pronto para colar hoje'
 		]
 	}
 ];

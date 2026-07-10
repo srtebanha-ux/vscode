@@ -20,7 +20,11 @@ export const SECURITY_SCOPES = [
 	'read:production', // read scenes/parameters of own creative pipeline
 	'write:production', // update scene status and parameter vault
 	'read:logistics', // read service orders of own namespace
-	'write:logistics' // create/update service orders
+	'write:logistics', // create/update service orders
+	'read:integrations', // read data-pipeline integrations of own namespace
+	'write:integrations', // manage routing rules and connections
+	'read:insights', // read LLM-generated predictive insights
+	'write:insights' // execute automated rules derived from insights
 ] as const;
 
 export type SecurityScope = (typeof SECURITY_SCOPES)[number];

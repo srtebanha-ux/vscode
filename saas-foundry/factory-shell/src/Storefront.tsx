@@ -27,8 +27,8 @@ function ModuleCard({ module, highlighted }: { readonly module: AvailableModule;
 			animate={highlighted ? { scale: [1, 1.04, 1.02] } : { scale: selected ? 1.01 : 1 }}
 			transition={{ type: 'spring', stiffness: 400, damping: 25 }}
 			data-highlighted={highlighted || undefined}
-			className={`group relative flex flex-col overflow-hidden rounded-2xl border-2 bg-white shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-xl hover:ring-2 hover:ring-indigo-500/50 ${
-				highlighted ? 'border-fuchsia-400 ring-2 ring-fuchsia-300/60' : selected ? 'border-gray-900' : 'border-transparent'
+			className={`group relative flex flex-col overflow-hidden rounded-2xl border bg-zinc-900 shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-2xl hover:ring-1 ${module.glowClass} ${
+				highlighted ? 'border-fuchsia-400 ring-2 ring-fuchsia-400/60' : selected ? 'border-indigo-500' : 'border-zinc-800'
 			}`}
 		>
 			{selected && (
@@ -36,15 +36,18 @@ function ModuleCard({ module, highlighted }: { readonly module: AvailableModule;
 					initial={{ scale: 0, opacity: 0 }}
 					animate={{ scale: 1, opacity: 1 }}
 					transition={{ type: 'spring', stiffness: 500, damping: 20 }}
-					className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-gray-900 text-white shadow-md"
+					className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-full bg-indigo-500 text-white shadow-md"
 					data-testid={`check-${module.id}`}
 				>
 					<Check className="h-4 w-4" aria-hidden />
 				</motion.span>
 			)}
 
-			{/* Header Visual: o módulo como objeto de desejo, não linha de sistema */}
-			<div className={`flex h-24 items-center justify-center bg-gradient-to-br ${module.headerGradient}`}>
+			{/* Header Visual: centro de comando, não linha de sistema */}
+			<div
+				className={`flex h-28 items-center justify-center bg-gradient-to-br ${module.headerGradient}`}
+				style={{ backgroundImage: undefined }}
+			>
 				<Icon className={`h-10 w-10 ${module.iconColor} transition-transform duration-200 group-hover:scale-110`} aria-hidden />
 			</div>
 
@@ -52,39 +55,35 @@ function ModuleCard({ module, highlighted }: { readonly module: AvailableModule;
 				<span className={`self-start rounded-full px-2.5 py-1 text-[11px] font-semibold ${module.tagClasses}`}>
 					{module.tag}
 				</span>
-				<h3 className="mt-2.5 text-base font-semibold tracking-tight text-gray-900">{module.name}</h3>
-				<p className="mt-1 text-sm leading-relaxed text-gray-500">{module.description}</p>
+				<h3 className="mt-2.5 text-lg font-semibold tracking-tight text-white">{module.name}</h3>
+				<p className="mt-1 text-sm leading-relaxed text-zinc-400">{module.description}</p>
 
-				{/* Problema -> Solução: o que ele resolve NA PRÁTICA */}
-				<ul className="mt-3 flex-1 space-y-1.5">
+				{/* ROI: o que a ferramenta substitui ou destrava */}
+				<ul className="mt-4 flex-1 space-y-2">
 					{module.benefits.map(benefit => (
-						<li key={benefit} className="flex items-start gap-2 text-xs leading-relaxed text-gray-600">
-							<Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" aria-hidden />
+						<li key={benefit} className="flex items-start gap-2 text-xs leading-relaxed text-zinc-300">
+							<Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
 							{benefit}
 						</li>
 					))}
 				</ul>
 
-				<div className="mt-4 flex items-center justify-between gap-3 border-t border-gray-50 pt-4">
-					<span className="text-sm font-semibold text-gray-900">
-						{module.price === 0 ? (
-							<span className="rounded-lg bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700">Gratuito</span>
-						) : (
-							<>
-								{brl.format(module.price)}
-								<span className="font-normal text-gray-400">/mês</span>
-							</>
-						)}
+				<div className="mt-5 flex items-center justify-between gap-3 border-t border-zinc-800 pt-4">
+					<span className="text-sm font-semibold text-white">
+						{brl.format(module.price)}
+						<span className="font-normal text-zinc-500">/mês</span>
 					</span>
 					<button
 						type="button"
 						onClick={onToggle}
 						aria-pressed={selected}
-						className={`rounded-xl px-3.5 py-2 text-xs font-semibold shadow-sm transition-all hover:scale-105 hover:shadow-md ${
-							selected ? 'bg-gray-100 text-gray-900 hover:bg-gray-200' : 'bg-gray-900 text-white'
+						className={`rounded-xl px-4 py-2.5 text-xs font-semibold shadow-sm transition-all hover:scale-105 ${
+							selected
+								? 'border border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+								: 'bg-white text-zinc-950 hover:shadow-lg hover:shadow-white/20'
 						}`}
 					>
-						{selected ? 'No seu Arsenal ✓' : 'Adicionar ao meu Arsenal'}
+						{selected ? 'Infraestrutura Ativa ✓' : 'Provisionar Infraestrutura'}
 					</button>
 				</div>
 			</div>
@@ -203,12 +202,14 @@ export function Storefront({ tenantId }: { readonly tenantId: string }): ReactEl
 			<div className="flex flex-col gap-6 lg:flex-row lg:items-start">
 				<section className="min-w-0 flex-1">
 					<header className="mb-6">
-						<h1 className="text-2xl font-semibold tracking-tight text-gray-900">Expanda seu Poder de Operação</h1>
-						<p className="mt-1.5 text-sm text-gray-500">
-							Escolha as ferramentas que vão automatizar o seu negócio hoje.
+						<h1 className="text-3xl font-semibold tracking-tight text-gray-900">
+							Infraestrutura de Elite. <span className="text-gray-400">Escale sua Operação.</span>
+						</h1>
+						<p className="mt-2 text-sm text-gray-500">
+							Motores de dados e automação para gargalos que planilha nenhuma resolve.
 						</p>
 					</header>
-					<div ref={gridRef} className="grid scroll-mt-6 grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+					<div ref={gridRef} className="grid scroll-mt-6 grid-cols-1 gap-5 xl:grid-cols-2">
 						{AVAILABLE_MODULES.map(module => (
 							<ModuleCard key={module.id} module={module} highlighted={highlightedIds.includes(module.id)} />
 						))}

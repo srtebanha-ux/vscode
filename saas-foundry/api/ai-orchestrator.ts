@@ -23,32 +23,17 @@ interface ModuleProfile {
 	readonly keywords: readonly string[];
 }
 
-/** Espelho de negócio do AVAILABLE_MODULES (a LLM real receberia o catálogo no system prompt). */
+/** Espelho de negócio do AVAILABLE_MODULES enterprise (a LLM real receberia o catálogo no system prompt). */
 const MODULE_PROFILES: Readonly<Record<string, ModuleProfile>> = {
-	'budget-calculator-v1': {
-		name: 'Calculadora de Orçamentos',
-		pitch: 'calcula volumes de concreto e custos de bombeamento',
-		keywords: ['orçament', 'orcament', 'concreto', 'laje', 'volume', 'bombeamento', 'calcul', 'custo', 'preço', 'preco', 'obra']
+	'lidar-orchestrator-v1': {
+		name: 'Lidar Orchestrator',
+		pitch: 'unifica SAP, DocuSign e bancos num fluxo auditável em tempo real',
+		keywords: ['sap', 'erp', 'integra', 'webhook', 'docusign', 'banco', 'financeir', 'concilia', 'roteamento', 'automa', 'planilha', 'sistema']
 	},
-	'supplies-v1': {
-		name: 'Gestão de Insumos',
-		pitch: 'controla pedidos recorrentes e estoque de materiais',
-		keywords: ['insumo', 'estoque', 'pedido', 'material', 'materiais', 'fornecedor', 'compra', 'suprimento']
-	},
-	'work-orders-v1': {
-		name: 'Ordens de Serviço',
-		pitch: 'gera e acompanha OS de entrega e bombeamento',
-		keywords: ['ordem de serviço', 'ordem de servico', ' os ', 'entrega', 'cronograma', 'bomba', 'agendamento']
-	},
-	'task-dashboard-v1': {
-		name: 'Gestão de Tarefas',
-		pitch: 'organiza o fluxo de trabalho do time',
-		keywords: ['tarefa', 'equipe', 'time', 'kanban', 'prazo', 'organiz', 'produtividade']
-	},
-	'creative-hub-v1': {
-		name: 'Production Hub 3D',
-		pitch: 'coordena cenas e parâmetros de produção com IAs generativas',
-		keywords: ['vídeo', 'video', '3d', 'render', 'cena', 'criativ', 'marketing', 'prompt', 'ia generativa']
+	'predictive-bi-v1': {
+		name: 'Predictive BI Agent',
+		pitch: 'vigia margem, caixa e gargalos com uma LLM que executa regras de bloqueio',
+		keywords: ['bi', 'previs', 'margem', 'custo', 'insight', 'relat', 'frota', 'analista', 'indicador', 'intelig', 'caixa', 'dashboard']
 	}
 };
 

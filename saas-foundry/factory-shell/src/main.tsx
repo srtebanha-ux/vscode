@@ -52,7 +52,11 @@ function AuthedApp({ registry: reg, router }: { readonly registry: PluginRegistr
 		() => ({
 			userId: user.uid,
 			tenantId: user.uid,
-			grantedScopes: ['read:tasks', 'write:tasks', 'read:production', 'write:production', 'read:logistics', 'write:logistics']
+			grantedScopes: [
+				'read:tasks', 'write:tasks', 'read:production', 'write:production',
+				'read:logistics', 'write:logistics', 'read:integrations', 'write:integrations',
+				'read:insights', 'write:insights'
+			]
 		}),
 		[user.uid]
 	);
@@ -74,7 +78,11 @@ function AuthedApp({ registry: reg, router }: { readonly registry: PluginRegistr
 const DEV_PRINCIPAL: AuthenticatedPrincipal = {
 	userId: 'dev-user',
 	tenantId: 'tnt-dev',
-	grantedScopes: ['read:tasks', 'write:tasks', 'read:production', 'write:production', 'read:logistics', 'write:logistics']
+	grantedScopes: [
+				'read:tasks', 'write:tasks', 'read:production', 'write:production',
+				'read:logistics', 'write:logistics', 'read:integrations', 'write:integrations',
+				'read:insights', 'write:insights'
+			]
 };
 
 const DEV_ROLE: UserRole = window.localStorage.getItem('foundry:dev-role') === 'USER' ? 'USER' : 'SUPER_ADMIN';

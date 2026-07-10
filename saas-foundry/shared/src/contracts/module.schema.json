@@ -19,7 +19,7 @@
     "scopes": {
       "type": "array",
       "uniqueItems": true,
-      "maxItems": 16,
+      "maxItems": 20,
       "items": {
         "enum": [
           "storage:read",
@@ -35,7 +35,11 @@
           "read:production",
           "write:production",
           "read:logistics",
-          "write:logistics"
+          "write:logistics",
+          "read:integrations",
+          "write:integrations",
+          "read:insights",
+          "write:insights"
         ]
       }
     },

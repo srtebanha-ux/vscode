@@ -241,6 +241,8 @@ const forbidden = [
 	'./modules-library/creative-production-hub/ModuleView.tsx',
 	'./modules-library/concrete-logistics/ConcreteOrderForm.tsx',
 	'./modules-library/lidar-core-hub/CreativeHub.tsx',
+	'./modules-library/lidar-orchestrator/LidarOrchestrator.tsx',
+	'./modules-library/predictive-bi-agent/PredictiveBIAgent.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',

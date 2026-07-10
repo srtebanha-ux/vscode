@@ -67,7 +67,7 @@ export function MagicPrompt({ onRecommendation }: MagicPromptProps): ReactElemen
 						value={prompt}
 						maxLength={500}
 						onChange={event => setPrompt(event.target.value)}
-						placeholder="Descreva seu negócio: “gerencio entregas de concreto usinado e preciso de orçamentos e controle de insumos”"
+						placeholder="Descreva seu gargalo: “integro SAP com meus bancos e preciso prever estouro de margem”"
 						className="w-full bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none"
 					/>
 				</div>

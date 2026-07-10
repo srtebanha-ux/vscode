@@ -5,6 +5,8 @@
 @source '../../modules-library/creative-production-hub';
 @source '../../modules-library/concrete-logistics';
 @source '../../modules-library/lidar-core-hub';
+@source '../../modules-library/lidar-orchestrator';
+@source '../../modules-library/predictive-bi-agent';
 @source '../../engine-core/src';
 
 @theme {

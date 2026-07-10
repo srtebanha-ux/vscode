@@ -1,22 +1,20 @@
 import { PluginRegistry } from '@foundry/engine-core/ui';
 import { telemetrySink } from './services/analytics';
-import taskDashboardManifest from '../../modules-library/task-dashboard/manifest.json';
-import creativeHubManifest from '../../modules-library/creative-production-hub/manifest.json';
-import concreteLogisticsManifest from '../../modules-library/concrete-logistics/manifest.json';
-import lidarCoreHubManifest from '../../modules-library/lidar-core-hub/manifest.json';
+import lidarOrchestratorManifest from '../../modules-library/lidar-orchestrator/manifest.json';
+import predictiveBiManifest from '../../modules-library/predictive-bi-agent/manifest.json';
 
 /**
- * Bundler-side lazy entries. Each value is a dynamic import, so Vite
- * code-splits every plugin into its own chunk — nothing is downloaded
- * until the PluginRegistry authorizes the load (lazy-loading). The keys
- * are the entryRefs handed to registerManifest below; the resolver only
- * ever receives refs the registry has already validated.
+ * Catálogo comercial ativo: apenas os motores Enterprise. Os módulos
+ * legados (tarefas, calculadoras, hub criativo) permanecem no repositório
+ * como fixtures da suíte de verificação do Core, mas não são registrados
+ * no shell nem vendidos na vitrine.
+ *
+ * Cada entrada é um dynamic import: Vite gera um chunk por motor, baixado
+ * somente após o PluginRegistry autorizar o load.
  */
 const bundledEntries: Readonly<Record<string, () => Promise<Record<string, unknown>>>> = {
-	'task-dashboard-v1': () => import('../../modules-library/task-dashboard/TaskDashboard.tsx'),
-	'creative-hub-v1': () => import('../../modules-library/creative-production-hub/ModuleView.tsx'),
-	'concrete-logistics-v1': () => import('../../modules-library/concrete-logistics/ConcreteOrderForm.tsx'),
-	'lidar-core-hub-v1': () => import('../../modules-library/lidar-core-hub/CreativeHub.tsx')
+	'lidar-orchestrator-v1': () => import('../../modules-library/lidar-orchestrator/LidarOrchestrator.tsx'),
+	'predictive-bi-v1': () => import('../../modules-library/predictive-bi-agent/PredictiveBIAgent.tsx')
 };
 
 export function createPluginRegistry(): PluginRegistry {
@@ -33,10 +31,8 @@ export function createPluginRegistry(): PluginRegistry {
 	);
 
 	for (const [entryRef, manifest] of [
-		['task-dashboard-v1', taskDashboardManifest],
-		['creative-hub-v1', creativeHubManifest],
-		['concrete-logistics-v1', concreteLogisticsManifest],
-		['lidar-core-hub-v1', lidarCoreHubManifest]
+		['lidar-orchestrator-v1', lidarOrchestratorManifest],
+		['predictive-bi-v1', predictiveBiManifest]
 	] as const) {
 		const result = registry.registerManifest(manifest, entryRef);
 		if (!result.ok) {

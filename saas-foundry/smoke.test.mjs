@@ -240,7 +240,7 @@ const forbidden = [
 	'./modules-library/task-dashboard/TaskDashboard.tsx',
 	'./modules-library/creative-production-hub/ModuleView.tsx',
 	'./modules-library/concrete-logistics/ConcreteOrderForm.tsx',
-	'./modules-library/moonsilver-hub/CreativeHub.tsx',
+	'./modules-library/lidar-core-hub/CreativeHub.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',
@@ -293,14 +293,14 @@ for (const bad of [
 assert.equal(serviceOrderSchema.safeParse({ ...order, total: order.total + 1 }).success, false);
 
 // Criativo: payload só passa COM as tags obrigatórias de estilo
-const scene = await sceneGridModule.run({ character: 'Zane & Naty', basePrompt: 'dueto no telhado ao pôr do sol' });
+const scene = await sceneGridModule.run({ character: 'Core Agent & Core Bridge', basePrompt: 'dueto no telhado ao pôr do sol' });
 assert.match(scene.payload, /estilo animação 3D Pixar/);
 assert.match(scene.payload, /textura do cabelo ondulada \(nunca liso\)/);
 assert.equal(scene.lockApplied, true);
 
-await assert.rejects(() => sceneGridModule.run({ character: 'Zane', basePrompt: 'retrato com cabelo liso' }), ContractViolationError);
+await assert.rejects(() => sceneGridModule.run({ character: 'Core Agent', basePrompt: 'retrato com cabelo liso' }), ContractViolationError);
 await assert.rejects(() => sceneGridModule.run({ character: 'Goku', basePrompt: 'cena qualquer válida' }), ContractViolationError);
-assert.equal(scenePayloadSchema.safeParse({ character: 'Zane', payload: 'sem trava', lockApplied: true }).success, false);
+assert.equal(scenePayloadSchema.safeParse({ character: 'Core Agent', payload: 'sem trava', lockApplied: true }).success, false);
 assert.equal(publicationSchema.safeParse({ id: 'pb1', title: 'Título ok', channel: 'Reels', status: 'weird' }).success, false);
 
 // 14. Auto-cura: crash transitório remonta do cache; crash persistente oferece restauração

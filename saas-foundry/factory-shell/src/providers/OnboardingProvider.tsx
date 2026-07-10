@@ -32,13 +32,13 @@ const TOURS: Readonly<Record<string, TourDefinition>> = {
 			}
 		]
 	},
-	'moonsilver-hub-v1': {
+	'lidar-core-hub-v1': {
 		flag: 'hasSeenCreativeTour',
 		steps: [
 			{
 				target: '[data-tour="consistency-tab"]',
 				title: 'Trava de Consistência 3D',
-				content: 'A regra “textura do cabelo ondulada (nunca liso)” já está ATIVADA para todas as gerações do Zane e da Naty — cada grid sai no padrão da marca, sem refação.'
+				content: 'A regra “textura do cabelo ondulada (nunca liso)” já está ATIVADA para todas as gerações do Core Agent e da Core Bridge — cada grid sai no padrão da marca, sem refação.'
 			}
 		]
 	}

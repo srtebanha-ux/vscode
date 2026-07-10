@@ -83,9 +83,9 @@ export function createMockTaskApi(): MockApiService {
 		],
 		orders: [],
 		publications: [
-			{ id: 'pb1', title: 'Teaser — Zane no telhado ao pôr do sol', channel: 'Reels · @moonsilver', status: 'pending' },
-			{ id: 'pb2', title: 'Post — Naty golden hour (grid 3x3)', channel: 'Feed · @moonsilver', status: 'pending' },
-			{ id: 'pb3', title: 'Short — dueto Zane & Naty na chuva', channel: 'YouTube · MoonSilver', status: 'pending' }
+			{ id: 'pb1', title: 'Teaser — Core Agent no telhado ao pôr do sol', channel: 'Reels · @lidar-core', status: 'pending' },
+			{ id: 'pb2', title: 'Post — Core Bridge golden hour (grid 3x3)', channel: 'Feed · @lidar-core', status: 'pending' },
+			{ id: 'pb3', title: 'Short — dueto Core Agent & Core Bridge na chuva', channel: 'YouTube · Lidar Core', status: 'pending' }
 		],
 		parameters: [
 			{

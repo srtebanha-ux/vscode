@@ -5,7 +5,7 @@ import { BaseModule, type ModuleIO } from './ModuleContract.js';
 export const VISUAL_LOCK = ', estilo animação 3D Pixar, textura do cabelo ondulada (nunca liso)';
 export const REQUIRED_STYLE_TAGS = Object.freeze(['estilo animação 3D Pixar', 'textura do cabelo ondulada (nunca liso)'] as const);
 
-export const characterSchema = z.enum(['Zane', 'Naty', 'Zane & Naty'], { error: 'personagem fora do elenco travado' });
+export const characterSchema = z.enum(['Core Agent', 'Core Bridge', 'Core Agent & Core Bridge'], { error: 'personagem fora do elenco travado' });
 
 export const sceneRequestSchema = z.strictObject({
 	character: characterSchema,
@@ -46,7 +46,7 @@ export type PublicationRecord = z.infer<typeof publicationSchema>;
 
 /** Ferramenta de geração de grid no contrato rígido: a trava é aplicada E verificada. */
 export class SceneGridModule extends BaseModule<SceneRequest, ScenePayload> {
-	protected readonly moduleId = 'moonsilver-hub-v1';
+	protected readonly moduleId = 'lidar-core-hub-v1';
 	protected readonly schema: ModuleIO<SceneRequest, ScenePayload> = {
 		input: sceneRequestSchema,
 		output: scenePayloadSchema

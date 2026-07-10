@@ -45,7 +45,7 @@ export function generateScenePayload(basePrompt: string): string {
 	return `${basePrompt.trim()}${VISUAL_LOCK}`;
 }
 
-const CHARACTERS = ['Zane', 'Naty', 'Zane & Naty'] as const;
+const CHARACTERS = ['Core Agent', 'Core Bridge', 'Core Agent & Core Bridge'] as const;
 
 const STATUS_BADGES: Readonly<Record<PublicationStatus, { readonly label: string; readonly classes: string }>> = {
 	pending: { label: 'Pendente', classes: 'bg-gray-100 text-gray-600' },
@@ -60,7 +60,7 @@ function AccessDenied(): React.JSX.Element {
 				<ShieldAlert className="h-6 w-6" aria-hidden />
 			</span>
 			<h2 className="text-xl font-semibold tracking-tight text-gray-900">Acesso negado</h2>
-			<p className="mt-2 text-sm text-gray-500">Você não possui as permissões necessárias para o MoonSilver Hub.</p>
+			<p className="mt-2 text-sm text-gray-500">Você não possui as permissões necessárias para o Lidar Core Hub.</p>
 		</div>
 	);
 }
@@ -83,13 +83,13 @@ function Hub(): React.JSX.Element {
 	];
 
 	return (
-		<section className="moonsilver-hub rounded-2xl bg-white p-6 shadow-sm">
+		<section className="lidar-core-hub rounded-2xl bg-white p-6 shadow-sm">
 			<header className="mb-5">
 				<h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
 					<Clapperboard className="h-5 w-5 text-gray-400" aria-hidden />
-					MoonSilver Hub
+					Lidar Core Hub
 				</h1>
-				<p className="mt-1 text-sm text-gray-500">Produção e consistência visual do universo Zane & Naty.</p>
+				<p className="mt-1 text-sm text-gray-500">Produção e consistência visual do universo Core Agent & Core Bridge.</p>
 			</header>
 
 			<div role="tablist" aria-label="Áreas do hub" className="mb-6 flex gap-1 border-b border-gray-100">
@@ -156,7 +156,7 @@ function PublicationsTab(): React.JSX.Element {
 			<EmptyState
 				icon={Inbox}
 				title="Nenhuma publicação pendente."
-				description="Tudo aprovado — o feed MoonSilver está em dia."
+				description="Tudo aprovado — o feed Lidar Core está em dia."
 				actionLabel="Atualizar"
 				onAction={() => window.location.reload()}
 			/>
@@ -165,7 +165,7 @@ function PublicationsTab(): React.JSX.Element {
 
 	return (
 		<div>
-			<h2 className="mb-3 text-sm font-medium text-gray-500">Publicações MoonSilver Pendentes de Aprovação</h2>
+			<h2 className="mb-3 text-sm font-medium text-gray-500">Publicações Lidar Core Pendentes de Aprovação</h2>
 			<ul className="space-y-3">
 				{publications.map(publication => {
 					const badge = STATUS_BADGES[publication.status];
@@ -212,7 +212,7 @@ function PublicationsTab(): React.JSX.Element {
 function ConsistencyTab(): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
-	const [character, setCharacter] = useState<(typeof CHARACTERS)[number]>('Zane & Naty');
+	const [character, setCharacter] = useState<(typeof CHARACTERS)[number]>('Core Agent & Core Bridge');
 	const [basePrompt, setBasePrompt] = useState('');
 	const [payload, setPayload] = useState<string | null>(null);
 
@@ -221,7 +221,7 @@ function ConsistencyTab(): React.JSX.Element {
 			// Contrato rígido: entrada validada e a saída só passa COM as tags de estilo.
 			const scene = await sceneGridModule.run({ character, basePrompt });
 			setPayload(scene.payload);
-			track('Cálculo Realizado', { moduleId: 'moonsilver-hub-v1', kind: 'scene-grid', character });
+			track('Cálculo Realizado', { moduleId: 'lidar-core-hub-v1', kind: 'scene-grid', character });
 			toast.success('Payload do grid gerado com a trava visual aplicada.');
 		} catch (err) {
 			if (err instanceof ContractViolationError) {

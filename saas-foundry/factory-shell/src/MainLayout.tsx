@@ -24,7 +24,7 @@ const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
 	'task-dashboard-v1': LayoutDashboard,
 	'creative-hub-v1': Clapperboard,
 	'concrete-logistics-v1': Truck,
-	'moonsilver-hub-v1': Film
+	'lidar-core-hub-v1': Film
 };
 
 export function MainLayout({ registry, currentPath, onNavigate, children, session, showAdmin = false }: MainLayoutProps): ReactElement {

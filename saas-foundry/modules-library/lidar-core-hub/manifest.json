@@ -1,6 +1,6 @@
 {
-  "id": "moonsilver-hub-v1",
-  "displayName": "MoonSilver Hub",
+  "id": "lidar-core-hub-v1",
+  "displayName": "Lidar Core Hub",
   "version": "1.0.0",
   "permissions": ["read:production", "write:production"],
   "entryPoint": "CreativeHub.tsx"

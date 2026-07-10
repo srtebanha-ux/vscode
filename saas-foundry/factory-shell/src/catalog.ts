@@ -96,15 +96,15 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 		benefits: ['Calcula volumes exatos de 35 MPa', 'Gera OS com brita mista', 'Evita atraso de bombas']
 	},
 	{
-		id: 'moonsilver-hub-v1',
-		name: 'MoonSilver Hub',
-		description: 'Identidade visual blindada em cada geração do Zane e da Naty.',
+		id: 'lidar-core-hub-v1',
+		name: 'Lidar Core Hub',
+		description: 'Identidade visual blindada em cada geração do Core Agent e da Core Bridge.',
 		icon: Film,
 		price: 39.9,
 		tag: '🎯 Consistência travada',
 		tagClasses: 'bg-violet-50 text-violet-700',
 		headerGradient: 'from-violet-50 to-indigo-100',
 		iconColor: 'text-violet-600',
-		benefits: ['Trava regras visuais (cabelo sempre ondulado)', 'Aprovação em 1 clique', 'Grids Zane & Naty sem refação']
+		benefits: ['Trava regras visuais (cabelo sempre ondulado)', 'Aprovação em 1 clique', 'Grids Core Agent & Core Bridge sem refação']
 	}
 ];

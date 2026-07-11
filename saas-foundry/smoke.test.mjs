@@ -356,7 +356,16 @@ try {
 	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-cognitive-')), 'route.mjs');
 	try {
 		await writeFile(compiled, outputFiles[0].text);
-		const { POST, default: methodHandler, SYSTEM_PROMPTS, extractBearerToken } = await import(pathToFileURL(compiled).href);
+		const {
+			POST,
+			default: methodHandler,
+			SYSTEM_PROMPTS,
+			extractBearerToken,
+			extractTenantId,
+			quotaStore,
+			BASIC_PLAN_MONTHLY_TOKENS,
+			QUOTA_EXCEEDED_MESSAGE
+		} = await import(pathToFileURL(compiled).href);
 
 		// Identidade decidida no servidor: personas rígidas por agente
 		assert.match(SYSTEM_PROMPTS.CFO, /Diretor Financeiro implacável/);
@@ -364,12 +373,17 @@ try {
 		assert.match(SYSTEM_PROMPTS.CMO, /Growth Hacker/);
 		assert.match(SYSTEM_PROMPTS.CMO, /baixo custo de aquisição/);
 
-		// Bearer estrutural: só JWT com 3 segmentos base64url passa
+		// Bearer estrutural: só JWT com 3 segmentos base64url passa. payload = {"uid":"u1"}
 		const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ1aWQiOiJ1MSJ9.c2ln';
 		assert.equal(extractBearerToken(`Bearer ${jwt}`), jwt);
 		for (const bad of [null, '', 'Basic abc', 'Bearer', `bearer ${jwt}`, 'Bearer not-a-jwt', 'Bearer a.b', `Bearer ${jwt} extra`]) {
 			assert.equal(extractBearerToken(bad), null, `header "${bad}" deveria ser rejeitado`);
 		}
+
+		// Identidade do tenant sai do payload do JWT
+		assert.equal(extractTenantId(jwt), 'u1');
+		const noUidJwt = 'eyJhbGciOiJSUzI1NiJ9.e30.c2ln'; // payload = {}
+		assert.equal(extractTenantId(noUidJwt), null);
 
 		const call = (init) => POST(new Request('https://lidarcore.example/api/cognitive-engine', { method: 'POST', ...init }));
 		const authed = { authorization: `Bearer ${jwt}`, 'content-type': 'application/json' };
@@ -378,6 +392,8 @@ try {
 		// Sem login não gasta token de LLM
 		assert.equal((await call({ body: validBody })).status, 401);
 		assert.equal((await call({ headers: { authorization: 'Bearer solto' }, body: validBody })).status, 401);
+		// Token válido na estrutura, mas sem tenant -> 401 (nunca chega à quota nem à LLM)
+		assert.equal((await call({ headers: { authorization: `Bearer ${noUidJwt}`, 'content-type': 'application/json' }, body: validBody })).status, 401);
 
 		// Contrato de entrada fail-closed
 		assert.equal((await call({ headers: authed, body: 'não é json' })).status, 400);
@@ -401,10 +417,28 @@ try {
 		assert.equal(cfoBody.engine, 'simulated');
 		assert.match(cfoBody.analysis, /runway/);
 
+		// Guardião de Custos: primeira chamada do tenant deduz do plano cheio
+		assert.ok(cfoBody.usedTokens > 0, 'a resposta deve custar tokens');
+		assert.equal(cfoBody.remainingTokens, BASIC_PLAN_MONTHLY_TOKENS - cfoBody.usedTokens);
+
 		const okCmo = await call({ headers: authed, body: JSON.stringify({ agentType: 'CMO', contextData: 'Nosso sistema tem agenda, relatórios e integrações.' }) });
 		const cmoBody = await okCmo.json();
 		assert.equal(cmoBody.agentType, 'CMO');
 		assert.match(cmoBody.analysis, /características, não benefícios|conversão/);
+		// Saldo é acumulativo por tenant: segunda chamada desconta ainda mais
+		assert.equal(cmoBody.remainingTokens, cfoBody.remainingTokens - cmoBody.usedTokens);
+
+		// Pre-flight 402: tenant sem saldo é abortado ANTES da LLM
+		const brokeJwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ1aWQiOiJ0ZW5hbnQtc2VtLXNhbGRvIn0.c2ln'; // uid: tenant-sem-saldo
+		await quotaStore.setBalance('tenant-sem-saldo', 0);
+		const brokeRes = await call({ headers: { authorization: `Bearer ${brokeJwt}`, 'content-type': 'application/json' }, body: validBody });
+		assert.equal(brokeRes.status, 402);
+		const brokeBody = await brokeRes.json();
+		assert.equal(brokeBody.error, 'quota-exceeded');
+		assert.equal(brokeBody.message, QUOTA_EXCEEDED_MESSAGE);
+		assert.equal(brokeBody.remainingTokens, 0);
+		// A LLM/simulação não rodou: o saldo continua zerado, não ficou negativo
+		assert.equal(await quotaStore.getBalance('tenant-sem-saldo'), 0);
 
 		// Handler default (functions clássico): método errado -> 405
 		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/cognitive-engine', { method: 'GET' }))).status, 405);

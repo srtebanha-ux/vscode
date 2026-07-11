@@ -9,6 +9,11 @@
  * Segurança: Bearer Token obrigatório. Só usuário logado no Lidar Core consome
  * tokens da API (em produção o token é o ID token do Firebase Auth, verificado
  * com firebase-admin `verifyIdToken`; aqui validamos a estrutura JWT fail-closed).
+ *
+ * Guardião de Custos: toda chamada passa pelo TokenQuotaStore — pre-flight
+ * aborta com 402 quando o saldo do tenant acabou, e o custo real (usage) é
+ * deduzido do saldo após cada resposta. remainingTokens volta em toda resposta
+ * para o front exibir a barra de consumo do plano.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -35,6 +40,10 @@ export interface CognitiveResponse {
 	readonly analysis: string;
 	readonly engine: 'anthropic' | 'simulated';
 	readonly model: string;
+	/** Custo exato desta resposta (input + output), já deduzido do saldo. */
+	readonly usedTokens: number;
+	/** Saldo restante do plano — o front renderiza a barra "você usou X% da cota". */
+	readonly remainingTokens: number;
 }
 
 /** Personas rígidas — a identidade do agente é decidida no servidor, nunca pelo cliente. */
@@ -56,10 +65,65 @@ export const SYSTEM_PROMPTS: Readonly<Record<AgentType, string>> = {
 const ANTHROPIC_MODEL = 'claude-opus-4-8';
 const MAX_OUTPUT_TOKENS = 2048;
 
+// ── Guardião de Custos: quota de tokens por tenant ──────────────────────────
+
+export const BASIC_PLAN_MONTHLY_TOKENS = 100_000;
+
+export const QUOTA_EXCEEDED_MESSAGE =
+	'Limite de Inteligência atingido. Faça um upgrade no seu plano para continuar operando.';
+
+/**
+ * Porta para o banco (Firestore/Supabase). O doc do tenant carrega
+ * `tokenBalance`, renovado todo ciclo de cobrança pelo webhook do Stripe
+ * (invoice.paid -> setBalance(tenantId, tokens do plano)).
+ */
+export interface TokenQuotaStore {
+	getBalance(tenantId: string): Promise<number>;
+	/** Deduz o custo real da resposta e devolve o saldo restante. */
+	deductTokens(tenantId: string, tokens: number): Promise<number>;
+	/** Renovação mensal / upgrade de plano (chamado pelo webhook de billing). */
+	setBalance(tenantId: string, balance: number): Promise<void>;
+}
+
+/**
+ * MOCK em memória — produção substitui por Firestore com decremento atômico
+ * (transação, nunca read-modify-write no app):
+ *
+ *   const ref = db.collection('tenants').doc(tenantId);
+ *   // getBalance:    (await ref.get()).data()?.tokenBalance ?? 0
+ *   // deductTokens:  await ref.update({ tokenBalance: FieldValue.increment(-tokens) })
+ *   // setBalance:    await ref.set({ tokenBalance }, { merge: true })
+ *
+ * (Supabase: update tenants set token_balance = token_balance - $tokens
+ *  where id = $tenantId returning token_balance;)
+ */
+class InMemoryTokenQuotaStore implements TokenQuotaStore {
+	private readonly balances = new Map<string, number>();
+
+	async getBalance(tenantId: string): Promise<number> {
+		return this.balances.get(tenantId) ?? BASIC_PLAN_MONTHLY_TOKENS;
+	}
+
+	async deductTokens(tenantId: string, tokens: number): Promise<number> {
+		const remaining = (this.balances.get(tenantId) ?? BASIC_PLAN_MONTHLY_TOKENS) - tokens;
+		this.balances.set(tenantId, remaining);
+		return remaining;
+	}
+
+	async setBalance(tenantId: string, balance: number): Promise<void> {
+		this.balances.set(tenantId, balance);
+	}
+}
+
+/** Singleton do processo (exportado para testes e para o webhook de billing). */
+export const quotaStore: TokenQuotaStore = new InMemoryTokenQuotaStore();
+
+// ── Autenticação ─────────────────────────────────────────────────────────────
+
 /**
  * Fail-closed: exige `Authorization: Bearer <jwt>` estruturalmente válido.
  * PRODUÇÃO: `await getAuth().verifyIdToken(token)` (firebase-admin) — assinatura,
- * expiração e revogação; o uid resultante vira a chave de rate-limit por tenant.
+ * expiração e revogação; o uid resultante vira a chave de quota por tenant.
  */
 export function extractBearerToken(authorizationHeader: string | null): string | null {
 	if (!authorizationHeader) return null;
@@ -71,24 +135,43 @@ export function extractBearerToken(authorizationHeader: string | null): string |
 	return token;
 }
 
-/** Fallback determinístico quando ANTHROPIC_API_KEY não está no ambiente (dev/preview). */
-function simulateAnalysis(payload: CognitiveRequest): string {
-	const preview = payload.contextData.slice(0, 120);
-	if (payload.agentType === 'CFO') {
-		return (
-			`[SIMULADO] Diagnóstico CFO sobre o contexto recebido ("${preview}…"): ` +
-			'caixa sob pressão — priorize renegociar os 3 maiores custos fixos, reajuste o preço ' +
-			'do serviço principal e congele despesas não essenciais até o runway passar de 90 dias.'
-		);
+/** Tenant = uid do payload do JWT (produção: uid retornado pelo verifyIdToken). */
+export function extractTenantId(token: string): string | null {
+	try {
+		const payloadSegment = token.split('.')[1] ?? '';
+		const payload: unknown = JSON.parse(atob(payloadSegment.replace(/-/g, '+').replace(/_/g, '/')));
+		if (typeof payload !== 'object' || payload === null) return null;
+		const uid = (payload as Record<string, unknown>)['uid'];
+		return typeof uid === 'string' && uid.length > 0 ? uid : null;
+	} catch {
+		return null;
 	}
-	return (
-		`[SIMULADO] Auditoria CMO sobre o material recebido ("${preview}…"): ` +
-		'a copy atual descreve características, não benefícios. Reescreva o herói da página com a ' +
-		'dor do cliente, adicione prova social e teste 3 ganchos de anúncio focados em conversão.'
-	);
 }
 
-async function callAnthropic(apiKey: string, payload: CognitiveRequest): Promise<string> {
+// ── Motor cognitivo ──────────────────────────────────────────────────────────
+
+interface EngineResult {
+	readonly analysis: string;
+	readonly totalTokens: number;
+}
+
+/** Fallback determinístico quando ANTHROPIC_API_KEY não está no ambiente (dev/preview). */
+function simulateAnalysis(payload: CognitiveRequest): EngineResult {
+	const preview = payload.contextData.slice(0, 120);
+	const analysis =
+		payload.agentType === 'CFO'
+			? `[SIMULADO] Diagnóstico CFO sobre o contexto recebido ("${preview}…"): ` +
+				'caixa sob pressão — priorize renegociar os 3 maiores custos fixos, reajuste o preço ' +
+				'do serviço principal e congele despesas não essenciais até o runway passar de 90 dias.'
+			: `[SIMULADO] Auditoria CMO sobre o material recebido ("${preview}…"): ` +
+				'a copy atual descreve características, não benefícios. Reescreva o herói da página com a ' +
+				'dor do cliente, adicione prova social e teste 3 ganchos de anúncio focados em conversão.';
+	// Mesma heurística de billing dos provedores: ~4 caracteres por token.
+	const totalTokens = Math.ceil((payload.contextData.length + analysis.length) / 4);
+	return { analysis, totalTokens };
+}
+
+async function callAnthropic(apiKey: string, payload: CognitiveRequest): Promise<EngineResult> {
 	const client = new Anthropic({ apiKey });
 	const message = await client.messages.create({
 		model: ANTHROPIC_MODEL,
@@ -111,14 +194,22 @@ async function callAnthropic(apiKey: string, payload: CognitiveRequest): Promise
 	if (analysis.length === 0) {
 		throw new Error('empty-completion');
 	}
-	return analysis;
+	// Anthropic separa input/output; a soma equivale ao usage.total_tokens da OpenAI.
+	const totalTokens = message.usage.input_tokens + message.usage.output_tokens;
+	return { analysis, totalTokens };
 }
+
+// ── Handler ──────────────────────────────────────────────────────────────────
 
 export async function POST(request: Request): Promise<Response> {
 	// 1) Autenticação antes de qualquer parse: quem não está logado não gasta tokens.
 	const token = extractBearerToken(request.headers.get('authorization'));
 	if (!token) {
 		return Response.json({ error: 'unauthorized', message: 'Bearer token ausente ou inválido.' }, { status: 401 });
+	}
+	const tenantId = extractTenantId(token);
+	if (!tenantId) {
+		return Response.json({ error: 'unauthorized', message: 'Token sem identidade de tenant.' }, { status: 401 });
 	}
 
 	// 2) Payload não confiável: JSON + contrato zod fail-closed.
@@ -137,23 +228,34 @@ export async function POST(request: Request): Promise<Response> {
 	}
 	const payload = parsed.data;
 
-	// 3) Motor cognitivo: Anthropic com system prompt injetado, ou simulação sem chave.
+	// 3) Pre-flight do Guardião de Custos: sem saldo, a LLM nem é chamada.
+	const balance = await quotaStore.getBalance(tenantId);
+	if (balance <= 0) {
+		return Response.json(
+			{ error: 'quota-exceeded', message: QUOTA_EXCEEDED_MESSAGE, remainingTokens: 0 },
+			{ status: 402 }
+		);
+	}
+
+	// 4) Motor cognitivo: Anthropic com system prompt injetado, ou simulação sem chave.
 	try {
 		const apiKey = process.env['ANTHROPIC_API_KEY'];
-		if (!apiKey) {
-			const simulated: CognitiveResponse = {
-				agentType: payload.agentType,
-				analysis: simulateAnalysis(payload),
-				engine: 'simulated',
-				model: 'deterministic-fallback'
-			};
-			return Response.json(simulated);
-		}
+		const engine: CognitiveResponse['engine'] = apiKey ? 'anthropic' : 'simulated';
+		const { analysis, totalTokens } = apiKey
+			? await callAnthropic(apiKey, payload)
+			: simulateAnalysis(payload);
+
+		// 5) Contabilidade pós-requisição: deduz o custo REAL da resposta do saldo.
+		//    (Serverless: aguardamos a escrita — em edge runtimes use ctx.waitUntil.)
+		const remainingTokens = await quotaStore.deductTokens(tenantId, totalTokens);
+
 		const result: CognitiveResponse = {
 			agentType: payload.agentType,
-			analysis: await callAnthropic(apiKey, payload),
-			engine: 'anthropic',
-			model: ANTHROPIC_MODEL
+			analysis,
+			engine,
+			model: apiKey ? ANTHROPIC_MODEL : 'deterministic-fallback',
+			usedTokens: totalTokens,
+			remainingTokens: Math.max(remainingTokens, 0)
 		};
 		return Response.json(result);
 	} catch (error) {

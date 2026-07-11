@@ -341,4 +341,76 @@ try {
 	await rm(healLib, { recursive: true, force: true });
 }
 
+// 15. Cognitive Engine (/api/cognitive-engine): Bearer fail-closed + contrato zod + personas
+{
+	const esbuild = await import('esbuild');
+	const routeUrl = new URL('./api/cognitive-engine/route.ts', import.meta.url);
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [routeUrl.pathname],
+		bundle: true,
+		format: 'esm',
+		platform: 'node',
+		write: false,
+		logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-cognitive-')), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { POST, default: methodHandler, SYSTEM_PROMPTS, extractBearerToken } = await import(pathToFileURL(compiled).href);
+
+		// Identidade decidida no servidor: personas rígidas por agente
+		assert.match(SYSTEM_PROMPTS.CFO, /Diretor Financeiro implacável/);
+		assert.match(SYSTEM_PROMPTS.CFO, /cortes de custos operacionais de PMEs/);
+		assert.match(SYSTEM_PROMPTS.CMO, /Growth Hacker/);
+		assert.match(SYSTEM_PROMPTS.CMO, /baixo custo de aquisição/);
+
+		// Bearer estrutural: só JWT com 3 segmentos base64url passa
+		const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ1aWQiOiJ1MSJ9.c2ln';
+		assert.equal(extractBearerToken(`Bearer ${jwt}`), jwt);
+		for (const bad of [null, '', 'Basic abc', 'Bearer', `bearer ${jwt}`, 'Bearer not-a-jwt', 'Bearer a.b', `Bearer ${jwt} extra`]) {
+			assert.equal(extractBearerToken(bad), null, `header "${bad}" deveria ser rejeitado`);
+		}
+
+		const call = (init) => POST(new Request('https://lidarcore.example/api/cognitive-engine', { method: 'POST', ...init }));
+		const authed = { authorization: `Bearer ${jwt}`, 'content-type': 'application/json' };
+		const validBody = JSON.stringify({ agentType: 'CFO', contextData: '03/07 PIX +4200; 05/07 FOLHA -9800', userPrompt: 'Qual meu runway?' });
+
+		// Sem login não gasta token de LLM
+		assert.equal((await call({ body: validBody })).status, 401);
+		assert.equal((await call({ headers: { authorization: 'Bearer solto' }, body: validBody })).status, 401);
+
+		// Contrato de entrada fail-closed
+		assert.equal((await call({ headers: authed, body: 'não é json' })).status, 400);
+		for (const badPayload of [
+			{ agentType: 'CEO', contextData: 'contexto suficiente aqui' },
+			{ agentType: 'CFO', contextData: 'curto' },
+			{ agentType: 'CFO', contextData: 'contexto suficiente aqui', extra: 'x' },
+			{ agentType: 'CMO' }
+		]) {
+			const denied = await call({ headers: authed, body: JSON.stringify(badPayload) });
+			assert.equal(denied.status, 400, `payload ${JSON.stringify(badPayload)} deveria falhar`);
+			assert.ok((await denied.json()).issues.length > 0);
+		}
+
+		// Sem ANTHROPIC_API_KEY: modo simulado responde com a persona certa
+		delete process.env.ANTHROPIC_API_KEY;
+		const okCfo = await call({ headers: authed, body: validBody });
+		assert.equal(okCfo.status, 200);
+		const cfoBody = await okCfo.json();
+		assert.equal(cfoBody.agentType, 'CFO');
+		assert.equal(cfoBody.engine, 'simulated');
+		assert.match(cfoBody.analysis, /runway/);
+
+		const okCmo = await call({ headers: authed, body: JSON.stringify({ agentType: 'CMO', contextData: 'Nosso sistema tem agenda, relatórios e integrações.' }) });
+		const cmoBody = await okCmo.json();
+		assert.equal(cmoBody.agentType, 'CMO');
+		assert.match(cmoBody.analysis, /características, não benefícios|conversão/);
+
+		// Handler default (functions clássico): método errado -> 405
+		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/cognitive-engine', { method: 'GET' }))).status, 405);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
 console.log('ALL SMOKE TESTS PASSED');

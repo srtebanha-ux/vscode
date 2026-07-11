@@ -4,21 +4,27 @@ import lidarOrchestratorManifest from '../../modules-library/lidar-orchestrator/
 import predictiveBiManifest from '../../modules-library/predictive-bi-agent/manifest.json';
 import virtualCfoManifest from '../../modules-library/virtual-cfo/manifest.json';
 import virtualCmoManifest from '../../modules-library/virtual-cmo/manifest.json';
+import constructionCalcManifest from '../../modules-library/essentials/construction-calculator/manifest.json';
+import quickReceiptManifest from '../../modules-library/essentials/quick-receipt/manifest.json';
+import marginCalcManifest from '../../modules-library/essentials/margin-calculator/manifest.json';
 
 /**
- * Catálogo comercial ativo: apenas os motores Enterprise. Os módulos
- * legados (tarefas, calculadoras, hub criativo) permanecem no repositório
- * como fixtures da suíte de verificação do Core, mas não são registrados
- * no shell nem vendidos na vitrine.
+ * Catálogo comercial ativo: os motores Enterprise (Tier Elite) mais o
+ * Arsenal Essencial (Tier 1) — utilitários de alta retenção para PMEs. Os
+ * módulos legados (tarefas, hub criativo) permanecem no repositório como
+ * fixtures da suíte de verificação do Core, mas não são registrados aqui.
  *
- * Cada entrada é um dynamic import: Vite gera um chunk por motor, baixado
+ * Cada entrada é um dynamic import: Vite gera um chunk por módulo, baixado
  * somente após o PluginRegistry autorizar o load.
  */
 const bundledEntries: Readonly<Record<string, () => Promise<Record<string, unknown>>>> = {
 	'lidar-orchestrator-v1': () => import('../../modules-library/lidar-orchestrator/LidarOrchestrator.tsx'),
 	'predictive-bi-v1': () => import('../../modules-library/predictive-bi-agent/PredictiveBIAgent.tsx'),
 	'virtual-cfo-v1': () => import('../../modules-library/virtual-cfo/VirtualCFO_Agent.tsx'),
-	'virtual-cmo-v1': () => import('../../modules-library/virtual-cmo/VirtualCMO_Agent.tsx')
+	'virtual-cmo-v1': () => import('../../modules-library/virtual-cmo/VirtualCMO_Agent.tsx'),
+	'construction-calculator-v1': () => import('../../modules-library/essentials/construction-calculator/ConstructionCalculator.tsx'),
+	'quick-receipt-maker-v1': () => import('../../modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx'),
+	'margin-calculator-v1': () => import('../../modules-library/essentials/margin-calculator/MarginCalculator.tsx')
 };
 
 export function createPluginRegistry(): PluginRegistry {
@@ -38,7 +44,10 @@ export function createPluginRegistry(): PluginRegistry {
 		['lidar-orchestrator-v1', lidarOrchestratorManifest],
 		['predictive-bi-v1', predictiveBiManifest],
 		['virtual-cfo-v1', virtualCfoManifest],
-		['virtual-cmo-v1', virtualCmoManifest]
+		['virtual-cmo-v1', virtualCmoManifest],
+		['construction-calculator-v1', constructionCalcManifest],
+		['quick-receipt-maker-v1', quickReceiptManifest],
+		['margin-calculator-v1', marginCalcManifest]
 	] as const) {
 		const result = registry.registerManifest(manifest, entryRef);
 		if (!result.ok) {

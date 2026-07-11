@@ -1,0 +1,7 @@
+{
+  "id": "quick-receipt-maker-v1",
+  "displayName": "Recibo Rápido",
+  "version": "1.0.0",
+  "permissions": ["ui:render"],
+  "entryPoint": "QuickReceiptMaker.tsx"
+}

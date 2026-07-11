@@ -1,4 +1,4 @@
-import { BrainCircuit, CircleDollarSign, Megaphone, Workflow, type LucideIcon } from 'lucide-react';
+import { BrainCircuit, Calculator, CircleDollarSign, FileText, Megaphone, TrendingUp, Workflow, type LucideIcon } from 'lucide-react';
 
 export interface AvailableModule {
 	readonly id: string;
@@ -87,6 +87,57 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 			'Auditoria do seu site com veredito honesto',
 			'3 roteiros de Instagram validados por briefing',
 			'Texto da Landing Page pronto para colar hoje'
+		]
+	},
+	{
+		id: 'construction-calculator-v1',
+		name: 'Calculadora de Insumos',
+		description: 'Volume de concreto e custo da obra calculados enquanto você digita.',
+		icon: Calculator,
+		price: 39,
+		tag: '🔧 Essencial',
+		tagClasses: 'bg-sky-500/10 text-sky-300 ring-1 ring-inset ring-sky-500/30',
+		headerGradient: 'from-sky-500/25 via-zinc-900 to-zinc-900',
+		iconColor: 'text-sky-400',
+		glowClass: 'hover:shadow-sky-500/40 hover:ring-sky-500/60',
+		benefits: [
+			'Orçamento de obra em 2 segundos, sem planilha',
+			'Volume e custo total em tempo real',
+			'Salve e reenvie o orçamento na hora'
+		]
+	},
+	{
+		id: 'quick-receipt-maker-v1',
+		name: 'Recibo Rápido',
+		description: 'Recibo de serviço em PDF na hora — sem Word, sem retrabalho.',
+		icon: FileText,
+		price: 29,
+		tag: '🔧 Essencial',
+		tagClasses: 'bg-sky-500/10 text-sky-300 ring-1 ring-inset ring-sky-500/30',
+		headerGradient: 'from-sky-500/25 via-zinc-900 to-zinc-900',
+		iconColor: 'text-sky-400',
+		glowClass: 'hover:shadow-sky-500/40 hover:ring-sky-500/60',
+		benefits: [
+			'Preview do recibo preenchido em tempo real',
+			'PDF profissional pronto para enviar',
+			'Nunca mais monte recibo no Word'
+		]
+	},
+	{
+		id: 'margin-calculator-v1',
+		name: 'Precificação Segura',
+		description: 'O preço de venda que embute impostos e protege o seu lucro.',
+		icon: TrendingUp,
+		price: 29,
+		tag: '🔧 Essencial',
+		tagClasses: 'bg-sky-500/10 text-sky-300 ring-1 ring-inset ring-sky-500/30',
+		headerGradient: 'from-sky-500/25 via-zinc-900 to-zinc-900',
+		iconColor: 'text-sky-400',
+		glowClass: 'hover:shadow-sky-500/40 hover:ring-sky-500/60',
+		benefits: [
+			'Preço ideal de venda em destaque, sem chute',
+			'Alerta por cor: nunca pague para trabalhar',
+			'Impostos e margem embutidos automaticamente'
 		]
 	}
 ];

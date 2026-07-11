@@ -53,6 +53,7 @@ function AuthedApp({ registry: reg, router }: { readonly registry: PluginRegistr
 			userId: user.uid,
 			tenantId: user.uid,
 			grantedScopes: [
+				'ui:render',
 				'read:tasks', 'write:tasks', 'read:production', 'write:production',
 				'read:logistics', 'write:logistics', 'read:integrations', 'write:integrations',
 				'read:insights', 'write:insights'
@@ -79,6 +80,7 @@ const DEV_PRINCIPAL: AuthenticatedPrincipal = {
 	userId: 'dev-user',
 	tenantId: 'tnt-dev',
 	grantedScopes: [
+				'ui:render',
 				'read:tasks', 'write:tasks', 'read:production', 'write:production',
 				'read:logistics', 'write:logistics', 'read:integrations', 'write:integrations',
 				'read:insights', 'write:insights'

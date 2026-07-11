@@ -11,6 +11,9 @@
     { "path": "modules-library/predictive-bi-agent" },
     { "path": "modules-library/virtual-cfo" },
     { "path": "modules-library/virtual-cmo" },
+    { "path": "modules-library/essentials/construction-calculator" },
+    { "path": "modules-library/essentials/quick-receipt" },
+    { "path": "modules-library/essentials/margin-calculator" },
     { "path": "engine-core" },
     { "path": "sandbox-runtime" },
     { "path": "api-gateway" }

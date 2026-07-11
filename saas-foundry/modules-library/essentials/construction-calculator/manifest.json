@@ -1,0 +1,7 @@
+{
+  "id": "construction-calculator-v1",
+  "displayName": "Calculadora de Insumos",
+  "version": "1.0.0",
+  "permissions": ["ui:render"],
+  "entryPoint": "ConstructionCalculator.tsx"
+}

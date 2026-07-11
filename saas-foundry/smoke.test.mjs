@@ -245,6 +245,9 @@ const forbidden = [
 	'./modules-library/predictive-bi-agent/PredictiveBIAgent.tsx',
 	'./modules-library/virtual-cfo/VirtualCFO_Agent.tsx',
 	'./modules-library/virtual-cmo/VirtualCMO_Agent.tsx',
+	'./modules-library/essentials/construction-calculator/ConstructionCalculator.tsx',
+	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
+	'./modules-library/essentials/margin-calculator/MarginCalculator.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',
@@ -552,6 +555,37 @@ try {
 	const low = await renderBilling(70_000);
 	assert.doesNotMatch(low.innerHTML, /Adicionar Pacote de Dados/);
 	assert.equal(low.querySelector('[role="progressbar"]').getAttribute('aria-valuenow'), '30000');
+}
+
+// 18. Arsenal Essencial (Tier 1): scope-gate ui:render + render inicial dos utilitários
+{
+	const { default: ConstructionCalculator } = await import('./modules-library/essentials/construction-calculator/dist/ConstructionCalculator.js');
+	const { default: QuickReceiptMaker } = await import('./modules-library/essentials/quick-receipt/dist/QuickReceiptMaker.js');
+	const { default: MarginCalculator } = await import('./modules-library/essentials/margin-calculator/dist/MarginCalculator.js');
+
+	const withServices = (Component, grantedScopes) =>
+		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
+
+	for (const Component of [ConstructionCalculator, QuickReceiptMaker, MarginCalculator]) {
+		// Sem ui:render -> fecha o acesso (fail-closed, igual aos módulos enterprise)
+		assert.match(withServices(Component, []), /Acesso negado/);
+		// Fora do host -> lança (nunca renderiza sem os serviços do Core)
+		assert.throws(() => renderToStaticMarkup(createElement(Component)), /outside the Core plugin host/);
+	}
+
+	// Autorizados: render inicial mostra os campos-resultado zerados
+	const construction = withServices(ConstructionCalculator, ['ui:render']);
+	assert.match(construction, /Volume de Concreto/);
+	assert.match(construction, /Custo Total Estimado/);
+	assert.match(construction, /Salvar Orçamento/);
+
+	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
+	assert.match(receipt, /Recibo de Prestação de Serviço/);
+	assert.match(receipt, /Baixar PDF/);
+
+	const margin = withServices(MarginCalculator, ['ui:render']);
+	assert.match(margin, /Preço Ideal de Venda/);
+	assert.match(margin, /Informe o custo para começar/); // estado neutro sem input
 }
 
 console.log('ALL SMOKE TESTS PASSED');

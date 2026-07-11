@@ -9,6 +9,7 @@
 @source '../../modules-library/predictive-bi-agent';
 @source '../../modules-library/virtual-cfo';
 @source '../../modules-library/virtual-cmo';
+@source '../../modules-library/essentials';
 @source '../../engine-core/src';
 
 @theme {

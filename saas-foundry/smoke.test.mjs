@@ -447,4 +447,111 @@ try {
 	}
 }
 
+// 16. Stripe webhook (/api/webhooks/stripe): assinatura fail-closed + renovação de cota
+{
+	const esbuild = await import('esbuild');
+	const routeUrl = new URL('./api/webhooks/stripe/route.ts', import.meta.url);
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [routeUrl.pathname],
+		bundle: true,
+		format: 'esm',
+		platform: 'node',
+		write: false,
+		logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-webhook-')), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { POST, default: methodHandler, verifyStripeSignature, applyBillingEvent, quotaStore } = await import(pathToFileURL(compiled).href);
+
+		const validSig = 't=1720656000,v1=deadbeefcafe';
+		assert.equal(verifyStripeSignature('{"x":1}', validSig, 'whsec_test'), true);
+		for (const [body, sig, secret] of [
+			['', validSig, 'whsec_test'],           // corpo vazio
+			['{"x":1}', null, 'whsec_test'],          // sem header
+			['{"x":1}', 'v1=abc', 'whsec_test'],      // sem timestamp
+			['{"x":1}', 't=1', 'whsec_test'],         // sem v1
+			['{"x":1}', validSig, 'sk_live_x']        // secret errada
+		]) {
+			assert.equal(verifyStripeSignature(body, sig, secret), false, `sig "${sig}" secret "${secret}" deveria falhar`);
+		}
+
+		// Núcleo puro: invoice.payment_succeeded recarrega a cota do plano
+		const paidEvent = {
+			id: 'evt_1', type: 'invoice.payment_succeeded',
+			data: { object: { id: 'in_1', metadata: { tenantId: 'acme', planId: 'lidar-core-scale' } } }
+		};
+		await quotaStore.setBalance('acme', 0); // cota esgotada
+		const outcome = await applyBillingEvent(paidEvent);
+		assert.equal(outcome.handled, true);
+		assert.equal(outcome.tenantId, 'acme');
+		assert.equal(outcome.tokenBalance, 1_000_000); // cota do plano scale
+		assert.equal(await quotaStore.getBalance('acme'), 1_000_000); // a IA volta a funcionar
+
+		// planId ausente -> cai no básico (nunca deixa o cliente sem cota)
+		const basicOutcome = await applyBillingEvent({ id: 'evt_2', type: 'invoice.payment_succeeded', data: { object: { id: 'in_2', metadata: { tenantId: 'acme2' } } } });
+		assert.equal(basicOutcome.tokenBalance, 100_000);
+
+		// Evento sem tenant e evento ignorado não recarregam nada
+		assert.equal((await applyBillingEvent({ id: 'evt_3', type: 'invoice.payment_succeeded', data: { object: { id: 'in_3' } } })).handled, false);
+		assert.equal((await applyBillingEvent({ id: 'evt_4', type: 'customer.subscription.updated', data: { object: { id: 'sub_1' } } })).reason, 'ignored-event');
+
+		// HTTP: sem secret no ambiente -> 500 (misconfig, fail-closed)
+		delete process.env.STRIPE_WEBHOOK_SECRET;
+		const noSecret = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: JSON.stringify(paidEvent), headers: { 'stripe-signature': validSig } }));
+		assert.equal(noSecret.status, 500);
+
+		// Com secret: assinatura inválida -> 400; válida -> 200 e recarga
+		process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
+		const badSig = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: JSON.stringify(paidEvent), headers: { 'stripe-signature': 'garbage' } }));
+		assert.equal(badSig.status, 400);
+
+		await quotaStore.setBalance('acme', 0);
+		const okRes = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: JSON.stringify(paidEvent), headers: { 'stripe-signature': validSig } }));
+		assert.equal(okRes.status, 200);
+		assert.equal((await okRes.json()).tokenBalance, 1_000_000);
+
+		// Método errado -> 405
+		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'GET' }))).status, 405);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 17. BillingDashboard: barra de consumo + alerta >80% + histórico de faturas
+{
+	const { BillingDashboard } = await import('@foundry/engine-core/ui');
+	const invoices = [
+		{ id: 'in_a', date: '01 jul 2026', amount: 'R$ 197,00', status: 'Pago' },
+		{ id: 'in_b', date: '01 jun 2026', amount: 'R$ 197,00', status: 'Pago' }
+	];
+	const renderBilling = async (remainingTokens) => {
+		const container = dom.window.document.createElement('div');
+		createRoot(container).render(createElement(BillingDashboard, {
+			planName: 'Lidar Core Pro', planPriceLabel: 'R$ 197/mês',
+			totalTokens: 100_000, remainingTokens, invoices,
+			onManageSubscription: () => {}, onUpsell: () => {}
+		}));
+		await new Promise(resolve => setTimeout(resolve, 50));
+		return container;
+	};
+
+	// Uso alto (85%): mostra alerta, upsell e a fração exata
+	const high = await renderBilling(15_000);
+	assert.match(high.innerHTML, /85\.000/);   // usados (pt-BR)
+	assert.match(high.innerHTML, /100\.000/);  // total
+	assert.match(high.innerHTML, /Adicionar Pacote de Dados/);
+	assert.match(high.innerHTML, /Lidar Core Pro/);
+	assert.match(high.innerHTML, /R\$ 197\/mês/);
+	assert.match(high.innerHTML, /Gerenciar Assinatura/);
+	assert.match(high.innerHTML, /Histórico de Faturas/);
+	const progressHigh = high.querySelector('[role="progressbar"]');
+	assert.equal(progressHigh.getAttribute('aria-valuenow'), '85000');
+
+	// Uso baixo (30%): sem upsell, sem alerta
+	const low = await renderBilling(70_000);
+	assert.doesNotMatch(low.innerHTML, /Adicionar Pacote de Dados/);
+	assert.equal(low.querySelector('[role="progressbar"]').getAttribute('aria-valuenow'), '30000');
+}
+
 console.log('ALL SMOKE TESTS PASSED');

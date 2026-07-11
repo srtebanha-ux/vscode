@@ -11,6 +11,7 @@ export * from './components/EmptyState.js';
 export * from './components/LoadingSkeleton.js';
 export * from './components/ToastProvider.js';
 export * from './components/Tooltip.js';
+export * from './billing/BillingDashboard.js';
 export * from './hooks/useTrackEvent.js';
 export * from './contracts/ModuleContract.js';
 export * from './contracts/LogisticsContract.js';

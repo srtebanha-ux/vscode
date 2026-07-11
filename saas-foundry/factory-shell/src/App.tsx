@@ -9,6 +9,7 @@ import { useToast } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
 import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } from 'lucide-react';
 import { MasterDashboard } from './admin/MasterDashboard';
+import { BillingPage } from './billing/BillingPage';
 import type { UserRole } from './auth/AuthProvider';
 import { MainLayout, type SessionInfo } from './MainLayout';
 import { OnboardingProvider } from './providers/OnboardingProvider';
@@ -56,8 +57,8 @@ function Welcome({ navigate, isAdmin }: { readonly navigate: (to: string) => voi
 		{
 			icon: Receipt,
 			title: 'Ver faturamento',
-			description: isAdmin ? 'MRR, tenants e assinaturas da plataforma.' : 'Resumo da sua assinatura e módulos ativos.',
-			run: () => navigate(isAdmin ? '/admin' : '/storefront')
+			description: isAdmin ? 'MRR, tenants e assinaturas da plataforma.' : 'Consumo de IA, plano e histórico de faturas.',
+			run: () => navigate(isAdmin ? '/admin' : '/billing')
 		},
 		{
 			icon: Settings,
@@ -131,6 +132,8 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 		content = <Welcome navigate={navigate} isAdmin={role === 'SUPER_ADMIN'} />;
 	} else if (path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
+	} else if (path === '/billing') {
+		content = <BillingPage tenantId={principal.tenantId} />;
 	} else if (path === '/admin') {
 		// RBAC: só SUPER_ADMIN renderiza; qualquer outro nível volta para a Home.
 		content = role === 'SUPER_ADMIN' ? <MasterDashboard /> : <RedirectHome navigate={navigate} />;

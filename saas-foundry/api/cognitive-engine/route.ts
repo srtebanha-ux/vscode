@@ -18,6 +18,11 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
+import { quotaStore, BASIC_PLAN_MONTHLY_TOKENS, QUOTA_EXCEEDED_MESSAGE } from '../lib/tokenQuota';
+
+// Re-export para consumidores existentes (testes / composição da API).
+export { quotaStore, BASIC_PLAN_MONTHLY_TOKENS, QUOTA_EXCEEDED_MESSAGE } from '../lib/tokenQuota';
+export type { TokenQuotaStore } from '../lib/tokenQuota';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
@@ -64,59 +69,6 @@ export const SYSTEM_PROMPTS: Readonly<Record<AgentType, string>> = {
 
 const ANTHROPIC_MODEL = 'claude-opus-4-8';
 const MAX_OUTPUT_TOKENS = 2048;
-
-// ── Guardião de Custos: quota de tokens por tenant ──────────────────────────
-
-export const BASIC_PLAN_MONTHLY_TOKENS = 100_000;
-
-export const QUOTA_EXCEEDED_MESSAGE =
-	'Limite de Inteligência atingido. Faça um upgrade no seu plano para continuar operando.';
-
-/**
- * Porta para o banco (Firestore/Supabase). O doc do tenant carrega
- * `tokenBalance`, renovado todo ciclo de cobrança pelo webhook do Stripe
- * (invoice.paid -> setBalance(tenantId, tokens do plano)).
- */
-export interface TokenQuotaStore {
-	getBalance(tenantId: string): Promise<number>;
-	/** Deduz o custo real da resposta e devolve o saldo restante. */
-	deductTokens(tenantId: string, tokens: number): Promise<number>;
-	/** Renovação mensal / upgrade de plano (chamado pelo webhook de billing). */
-	setBalance(tenantId: string, balance: number): Promise<void>;
-}
-
-/**
- * MOCK em memória — produção substitui por Firestore com decremento atômico
- * (transação, nunca read-modify-write no app):
- *
- *   const ref = db.collection('tenants').doc(tenantId);
- *   // getBalance:    (await ref.get()).data()?.tokenBalance ?? 0
- *   // deductTokens:  await ref.update({ tokenBalance: FieldValue.increment(-tokens) })
- *   // setBalance:    await ref.set({ tokenBalance }, { merge: true })
- *
- * (Supabase: update tenants set token_balance = token_balance - $tokens
- *  where id = $tenantId returning token_balance;)
- */
-class InMemoryTokenQuotaStore implements TokenQuotaStore {
-	private readonly balances = new Map<string, number>();
-
-	async getBalance(tenantId: string): Promise<number> {
-		return this.balances.get(tenantId) ?? BASIC_PLAN_MONTHLY_TOKENS;
-	}
-
-	async deductTokens(tenantId: string, tokens: number): Promise<number> {
-		const remaining = (this.balances.get(tenantId) ?? BASIC_PLAN_MONTHLY_TOKENS) - tokens;
-		this.balances.set(tenantId, remaining);
-		return remaining;
-	}
-
-	async setBalance(tenantId: string, balance: number): Promise<void> {
-		this.balances.set(tenantId, balance);
-	}
-}
-
-/** Singleton do processo (exportado para testes e para o webhook de billing). */
-export const quotaStore: TokenQuotaStore = new InMemoryTokenQuotaStore();
 
 // ── Autenticação ─────────────────────────────────────────────────────────────
 

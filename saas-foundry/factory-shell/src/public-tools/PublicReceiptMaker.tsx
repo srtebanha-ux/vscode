@@ -1,9 +1,12 @@
-import { useMemo, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { brlToNumber, maskBRL, useLocalStorageDraft } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
-import { CalendarDays, FileDown, Hexagon, Sparkles, User, Wrench } from 'lucide-react';
+import { CalendarDays, Eraser, FileDown, Hexagon, Loader2, Sparkles, TriangleAlert, User, Wrench } from 'lucide-react';
 import { LeadCaptureModal } from './LeadCaptureModal';
 import { getStoredLead, storeLead, type Lead } from './leadStore';
-import { toNumber } from './pricing';
 
 export interface PublicReceiptMakerProps {
 	readonly onLeadCapture: (lead: Lead, tool: string) => void;
@@ -11,16 +14,20 @@ export interface PublicReceiptMakerProps {
 }
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+const DRAFT_KEY = 'lidar:draft:public-receipt';
 
-interface ReceiptData {
-	readonly client: string;
-	readonly service: string;
-	readonly amount: string;
-	readonly date: string;
-}
+/** Schema estrito: cliente obrigatório, valor > 0 (não-negativo pela máscara), data válida. */
+const receiptSchema = z.object({
+	client: z.string().trim().min(2, { error: 'Informe o nome do cliente' }).max(80, { error: 'Nome muito longo' }),
+	service: z.string().trim().max(200, { error: 'Descrição muito longa (máx. 200)' }),
+	amount: z.string().refine(value => brlToNumber(value) > 0, { error: 'Informe um valor maior que zero' }),
+	date: z.string().min(1, { error: 'Selecione a data' })
+});
 
-function escapeHtml(value: string): string {
-	return value.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
+type ReceiptForm = z.infer<typeof receiptSchema>;
+
+function todayISO(): string {
+	return new Date().toISOString().slice(0, 10);
 }
 
 function formatDate(iso: string): string {
@@ -29,39 +36,112 @@ function formatDate(iso: string): string {
 	return day && month && year ? `${day}/${month}/${year}` : iso;
 }
 
-function printReceipt(data: ReceiptData, value: number): void {
-	const win = window.open('', '_blank', 'width=720,height=900');
-	if (!win) return;
-	win.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Recibo</title>
-		<style>*{box-sizing:border-box;margin:0}body{font-family:'Inter',system-ui,sans-serif;color:#111827;padding:48px}
-		.paper{max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:16px;padding:40px}
-		.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px}.dot{width:32px;height:32px;border-radius:9px;background:#111827;color:#fff;display:flex;align-items:center;justify-content:center}
-		h1{font-size:13px;text-transform:uppercase;letter-spacing:.14em;color:#9ca3af;margin:32px 0 6px}.value{font-size:34px;font-weight:800;margin:4px 0 24px}
-		.row{padding:14px 0;border-top:1px solid #f3f4f6}.k{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#9ca3af}.v{font-size:15px;font-weight:600;margin-top:2px}
-		.sign{margin-top:48px;border-top:1px solid #111827;width:260px;padding-top:8px;font-size:12px;color:#6b7280}</style></head>
-		<body onload="window.print()"><div class="paper"><div class="brand"><span class="dot">◈</span> Lidar Core</div>
-		<h1>Recibo de Prestação de Serviço</h1><div class="value">${escapeHtml(brl.format(value))}</div>
-		<div class="row"><div class="k">Recebemos de</div><div class="v">${escapeHtml(data.client || '—')}</div></div>
-		<div class="row"><div class="k">Referente a</div><div class="v">${escapeHtml(data.service || '—')}</div></div>
-		<div class="row"><div class="k">Data</div><div class="v">${escapeHtml(formatDate(data.date))}</div></div>
-		<div class="sign">Assinatura</div></div></body></html>`);
-	win.document.close();
-}
-
 export function PublicReceiptMaker({ onLeadCapture, onEnter }: PublicReceiptMakerProps): ReactElement {
-	const [data, setData] = useState<ReceiptData>({ client: '', service: '', amount: '', date: new Date().toISOString().slice(0, 10) });
+	const EMPTY = useMemo<ReceiptForm>(() => ({ client: '', service: '', amount: '', date: todayISO() }), []);
+	const [draft, saveDraft, clearDraft] = useLocalStorageDraft<ReceiptForm>(DRAFT_KEY, EMPTY);
+
+	const {
+		register,
+		watch,
+		reset,
+		handleSubmit,
+		formState: { errors }
+	} = useForm<ReceiptForm>({ resolver: zodResolver(receiptSchema), mode: 'onChange', defaultValues: draft });
+
 	const [lead, setLead] = useState<Lead | null>(() => getStoredLead());
 	const [modalOpen, setModalOpen] = useState(false);
-	const set = (patch: Partial<ReceiptData>): void => setData(prev => ({ ...prev, ...patch }));
-	const value = useMemo(() => toNumber(data.amount), [data.amount]);
+	const [generating, setGenerating] = useState(false);
+	const [pdfError, setPdfError] = useState(false);
 	const unlocked = lead !== null;
 
-	const requestDownload = (): void => {
-		if (unlocked) {
-			printReceipt(data, value);
+	// Cada tecla vira rascunho — F5 recarrega o que estava sendo digitado.
+	useEffect(() => {
+		const sub = watch(values => saveDraft({ ...EMPTY, ...values }));
+		return () => sub.unsubscribe();
+	}, [watch, saveDraft, EMPTY]);
+
+	const data = watch();
+	const value = brlToNumber(String(data.amount ?? ''));
+
+	/**
+	 * Motor de PDF inquebrável: jsPDF desenha o recibo em vetor/texto, carregado
+	 * sob demanda (chunk separado), com trava anti-duplo-clique. Desenho direto
+	 * (sem rasterizar o DOM) é determinístico e imune ao CSS da página — zero
+	 * dependência de html2canvas, que trava com as cores oklch do Tailwind v4.
+	 */
+	const generatePdf = async (): Promise<void> => {
+		if (generating) return; // trava: um clique por vez trava o celular
+		setGenerating(true);
+		setPdfError(false);
+		try {
+			const { jsPDF } = await import('jspdf');
+			const doc = new jsPDF({ unit: 'pt', format: 'a4', compress: true });
+			const M = 56;
+			const right = 540;
+			let y = 72;
+
+			doc.setFillColor(17, 24, 39);
+			doc.roundedRect(M, y - 15, 22, 22, 5, 5, 'F');
+			doc.setTextColor(17, 24, 39);
+			doc.setFont('helvetica', 'bold');
+			doc.setFontSize(15);
+			doc.text('Lidar Core', M + 30, y + 1);
+
+			y += 44;
+			doc.setFont('helvetica', 'bold');
+			doc.setFontSize(9);
+			doc.setTextColor(148, 163, 184);
+			doc.text('RECIBO DE PRESTAÇÃO DE SERVIÇO', M, y);
+
+			y += 30;
+			doc.setFont('helvetica', 'bold');
+			doc.setFontSize(30);
+			doc.setTextColor(17, 24, 39);
+			doc.text(brl.format(value), M, y);
+
+			const row = (label: string, content: string): void => {
+				y += 26;
+				doc.setDrawColor(241, 245, 249);
+				doc.line(M, y, right, y);
+				y += 18;
+				doc.setFont('helvetica', 'bold');
+				doc.setFontSize(8);
+				doc.setTextColor(148, 163, 184);
+				doc.text(label.toUpperCase(), M, y);
+				y += 16;
+				doc.setFont('helvetica', 'normal');
+				doc.setFontSize(12);
+				doc.setTextColor(17, 24, 39);
+				doc.text(content || '—', M, y);
+			};
+			row('Recebemos de', String(data.client ?? ''));
+			row('Referente a', String(data.service ?? ''));
+			row('Data', formatDate(String(data.date ?? '')));
+
+			y += 54;
+			doc.setDrawColor(17, 24, 39);
+			doc.line(M, y, M + 190, y);
+			y += 15;
+			doc.setFont('helvetica', 'normal');
+			doc.setFontSize(9);
+			doc.setTextColor(107, 114, 128);
+			doc.text('Assinatura', M, y);
+
+			doc.save('recibo-lidar-core.pdf');
+		} catch {
+			setPdfError(true);
+		} finally {
+			setGenerating(false);
+		}
+	};
+
+	// handleSubmit valida antes: form inválido nunca chega ao gate nem ao PDF.
+	const onValid = (): void => {
+		if (!unlocked) {
+			setModalOpen(true);
 			return;
 		}
-		setModalOpen(true);
+		void generatePdf();
 	};
 
 	const captureLead = (captured: Lead): void => {
@@ -69,11 +149,22 @@ export function PublicReceiptMaker({ onLeadCapture, onEnter }: PublicReceiptMake
 		setLead(captured);
 		setModalOpen(false);
 		onLeadCapture(captured, 'receipt-maker');
-		printReceipt(data, value); // recompensa imediata: o PDF abre no mesmo clique
+		void generatePdf(); // recompensa imediata no mesmo clique
 	};
 
-	const inputCls =
-		'w-full rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-sm text-white outline-none transition-all placeholder:text-white/30 focus:border-indigo-400/60 focus:bg-white/10';
+	const clearAll = (): void => {
+		clearDraft();
+		reset(EMPTY);
+		setPdfError(false);
+	};
+
+	const amountField = register('amount');
+
+	const inputCls = (invalid: boolean): string =>
+		`w-full rounded-xl border bg-white/5 px-4 py-3 text-sm text-white outline-none transition-all placeholder:text-white/30 focus:bg-white/10 ${
+			invalid ? 'border-rose-400/70 focus:border-rose-400' : 'border-white/15 focus:border-indigo-400/60'
+		}`;
+	const errorText = 'mt-1 text-xs text-rose-300';
 
 	return (
 		<div className="min-h-screen bg-gray-950 font-sans text-white antialiased">
@@ -93,7 +184,6 @@ export function PublicReceiptMaker({ onLeadCapture, onEnter }: PublicReceiptMake
 			</nav>
 
 			<main className="relative mx-auto grid max-w-6xl items-start gap-10 px-6 py-10 lg:grid-cols-2 lg:py-16">
-				{/* Copy + formulário */}
 				<section>
 					<span className="inline-flex items-center gap-1.5 rounded-full bg-white/5 px-3 py-1 text-xs font-medium text-indigo-300 ring-1 ring-inset ring-white/10">
 						<Sparkles className="h-3.5 w-3.5" aria-hidden /> Ferramenta gratuita
@@ -104,33 +194,68 @@ export function PublicReceiptMaker({ onLeadCapture, onEnter }: PublicReceiptMake
 					</h1>
 					<p className="mt-4 max-w-md text-lg leading-relaxed text-white/60">Nunca mais monte recibo no Word. Preencha, veja pronto e baixe o PDF.</p>
 
-					<div className="mt-8 flex flex-col gap-4 rounded-3xl border border-white/15 bg-white/10 p-6 shadow-2xl backdrop-blur-2xl">
+					<form onSubmit={handleSubmit(onValid)} noValidate className="mt-8 flex flex-col gap-4 rounded-3xl border border-white/15 bg-white/10 p-6 shadow-2xl backdrop-blur-2xl">
+						<div className="flex items-center justify-between">
+							<span className="text-sm font-semibold text-white/80">Dados do recibo</span>
+							<button type="button" onClick={clearAll} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-white/40 transition-colors hover:bg-white/5 hover:text-white/70">
+								<Eraser className="h-3.5 w-3.5" aria-hidden /> Limpar Rascunho
+							</button>
+						</div>
+
 						<label className="block">
 							<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-white/70"><User className="h-4 w-4 text-white/40" aria-hidden /> Nome do Cliente</span>
-							<input value={data.client} onChange={e => set({ client: e.target.value })} placeholder="Ex.: Marcos Andrade" aria-label="Nome do Cliente" className={inputCls} />
+							<input {...register('client')} placeholder="Ex.: Marcos Andrade" aria-label="Nome do Cliente" aria-invalid={Boolean(errors.client)} className={inputCls(Boolean(errors.client))} />
+							{errors.client && <p className={errorText}>{errors.client.message}</p>}
 						</label>
+
 						<label className="block">
 							<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-white/70"><Wrench className="h-4 w-4 text-white/40" aria-hidden /> Descrição do Serviço</span>
-							<textarea value={data.service} onChange={e => set({ service: e.target.value })} rows={2} placeholder="Ex.: Instalação elétrica de 3 pontos" aria-label="Descrição do Serviço" className={`${inputCls} resize-none`} />
+							<textarea {...register('service')} rows={2} placeholder="Ex.: Instalação elétrica de 3 pontos" aria-label="Descrição do Serviço" aria-invalid={Boolean(errors.service)} className={`${inputCls(Boolean(errors.service))} resize-none`} />
+							{errors.service && <p className={errorText}>{errors.service.message}</p>}
 						</label>
+
 						<div className="grid grid-cols-2 gap-4">
 							<label className="block">
-								<span className="mb-1.5 block text-sm font-medium text-white/70">Valor (R$)</span>
-								<input type="number" inputMode="decimal" min={0} step="any" value={data.amount} onChange={e => set({ amount: e.target.value })} placeholder="850" aria-label="Valor" className={inputCls} />
+								<span className="mb-1.5 block text-sm font-medium text-white/70">Valor</span>
+								<input
+									inputMode="numeric"
+									placeholder="R$ 0,00"
+									aria-label="Valor"
+									aria-invalid={Boolean(errors.amount)}
+									{...amountField}
+									onChange={event => {
+										event.target.value = maskBRL(event.target.value);
+										void amountField.onChange(event);
+									}}
+									className={inputCls(Boolean(errors.amount))}
+								/>
+								{errors.amount && <p className={errorText}>{errors.amount.message}</p>}
 							</label>
 							<label className="block">
 								<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-white/70"><CalendarDays className="h-4 w-4 text-white/40" aria-hidden /> Data</span>
-								<input type="date" value={data.date} onChange={e => set({ date: e.target.value })} aria-label="Data" className={`${inputCls} [color-scheme:dark]`} />
+								<input type="date" {...register('date')} aria-label="Data" aria-invalid={Boolean(errors.date)} className={`${inputCls(Boolean(errors.date))} [color-scheme:dark]`} />
+								{errors.date && <p className={errorText}>{errors.date.message}</p>}
 							</label>
 						</div>
-						<button type="button" onClick={requestDownload} className="mt-1 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.02]">
-							<FileDown className="h-4 w-4" aria-hidden />
-							Fazer Download do PDF
+
+						{pdfError && (
+							<p className="flex items-center gap-1.5 rounded-xl bg-rose-500/15 px-3 py-2 text-xs text-rose-200">
+								<TriangleAlert className="h-3.5 w-3.5" aria-hidden /> Não foi possível gerar o PDF. Tente novamente.
+							</p>
+						)}
+
+						<button
+							type="submit"
+							disabled={generating}
+							className="mt-1 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-sky-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:scale-100"
+						>
+							{generating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <FileDown className="h-4 w-4" aria-hidden />}
+							{generating ? 'Gerando PDF…' : 'Fazer Download do PDF'}
 						</button>
-					</div>
+					</form>
 				</section>
 
-				{/* Preview do recibo em papel, em tempo real */}
+				{/* Preview do recibo em papel, em tempo real (nó capturado pelo html2canvas) */}
 				<section className="lg:pt-16">
 					<motion.div layout className="mx-auto w-full max-w-md rounded-2xl bg-white p-8 text-gray-900 shadow-2xl" data-testid="public-receipt-preview">
 						<div className="flex items-center gap-2 text-base font-bold tracking-tight">
@@ -142,7 +267,7 @@ export function PublicReceiptMaker({ onLeadCapture, onEnter }: PublicReceiptMake
 						<dl className="mt-6 divide-y divide-gray-50">
 							<div className="py-3"><dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-gray-400">Recebemos de</dt><dd className="mt-0.5 text-sm font-semibold">{data.client || '—'}</dd></div>
 							<div className="py-3"><dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-gray-400">Referente a</dt><dd className="mt-0.5 text-sm font-semibold">{data.service || '—'}</dd></div>
-							<div className="py-3"><dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-gray-400">Data</dt><dd className="mt-0.5 text-sm font-semibold">{formatDate(data.date)}</dd></div>
+							<div className="py-3"><dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-gray-400">Data</dt><dd className="mt-0.5 text-sm font-semibold">{formatDate(String(data.date ?? ''))}</dd></div>
 						</dl>
 						<div className="mt-10 w-48 border-t border-gray-900 pt-2 text-xs text-gray-500">Assinatura</div>
 					</motion.div>

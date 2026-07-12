@@ -623,4 +623,23 @@ try {
 	}
 }
 
+// 20. Máscara monetária BRL (programação defensiva): dígitos como centavos, nunca negativo
+{
+	const { maskBRL, brlToNumber, centsToBRL, numberToBRL, onlyDigits } = await import('@foundry/engine-core');
+	const nbsp = ' '; // Intl BRL usa espaço não-quebrável entre "R$" e o número
+
+	assert.equal(maskBRL('12345'), `R$${nbsp}123,45`);
+	assert.equal(maskBRL('1'), `R$${nbsp}0,01`);
+	assert.equal(maskBRL(''), `R$${nbsp}0,00`);
+	assert.equal(maskBRL('R$ 1.234,56'), `R$${nbsp}1.234,56`); // reaplicar é idempotente
+	assert.equal(maskBRL('abc-99'), `R$${nbsp}0,99`);          // lixo/sinal viram dígitos positivos
+
+	assert.equal(brlToNumber('R$ 123,45'), 123.45);
+	assert.equal(brlToNumber('-50'), 0.5);   // negativo é impossível: só dígitos contam
+	assert.equal(brlToNumber('abc'), 0);
+	assert.equal(centsToBRL(-100), `R$${nbsp}0,00`); // clamp em zero
+	assert.equal(numberToBRL(197), `R$${nbsp}197,00`);
+	assert.equal(onlyDigits('R$ 1.234,56'), '123456');
+}
+
 console.log('ALL SMOKE TESTS PASSED');

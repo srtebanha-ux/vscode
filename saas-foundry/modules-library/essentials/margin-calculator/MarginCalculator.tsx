@@ -1,18 +1,33 @@
-import { useMemo, useState } from 'react';
-import { hasScopes, useCoreService } from '@foundry/engine-core/ui';
+import { useEffect, useMemo } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { brlToNumber, hasScopes, maskBRL, useCoreService, useLocalStorageDraft } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Coins, Percent, Receipt, ShieldAlert, ShieldCheck, TrendingUp } from 'lucide-react';
+import { Coins, Eraser, Percent, Receipt, ShieldAlert, ShieldCheck, TrendingUp } from 'lucide-react';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
+const DRAFT_KEY = 'lidar:draft:margin-calculator';
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-const pct = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
 
-function toNumber(value: string): number {
-	const parsed = Number(value.replace(',', '.'));
-	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
+/** Schema estrito: dinheiro nunca negativo (garantido pela máscara), margem <= 1000%. */
+const marginSchema = z.object({
+	cost: z.string(),
+	taxPct: z.coerce
+		.number({ error: 'Use apenas números' })
+		.min(0, { error: 'Não pode ser negativo' })
+		.max(100, { error: 'Máximo de 100%' }),
+	marginPct: z.coerce
+		.number({ error: 'Use apenas números' })
+		.min(0, { error: 'Não pode ser negativo' })
+		.max(1000, { error: 'Máximo de 1000%' })
+});
+
+type MarginForm = z.input<typeof marginSchema>;
+
+const EMPTY: MarginForm = { cost: '', taxPct: '', marginPct: '' };
 
 interface Pricing {
 	readonly price: number;
@@ -32,41 +47,50 @@ function price(cost: number, taxPct: number, marginPct: number): Pricing {
 		return { price: 0, netProfit: 0, viable: false, healthy: false };
 	}
 	const sell = cost / divisor;
-	const netProfit = sell * (marginPct / 100);
-	return { price: sell, netProfit, viable: true, healthy: marginPct >= 10 };
+	return { price: sell, netProfit: sell * (marginPct / 100), viable: true, healthy: marginPct >= 10 };
 }
 
-interface FieldProps {
-	readonly icon: typeof Coins;
-	readonly label: string;
-	readonly suffix: string;
-	readonly value: string;
-	readonly onChange: (value: string) => void;
-	readonly placeholder: string;
-}
-
-function Field({ icon: Icon, label, suffix, value, onChange, placeholder }: FieldProps): React.JSX.Element {
-	return (
-		<label className="block">
-			<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-700">
-				<Icon className="h-4 w-4 text-gray-400" aria-hidden />
-				{label}
-			</span>
-			<div className="flex items-center rounded-xl border border-gray-200 bg-white shadow-sm transition-all focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
-				<input type="number" inputMode="decimal" min={0} step="any" value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full rounded-xl bg-transparent px-3.5 py-2.5 text-sm text-gray-900 outline-none placeholder:text-gray-300" />
-				<span className="whitespace-nowrap px-3 text-xs font-medium text-gray-400">{suffix}</span>
-			</div>
-		</label>
-	);
+function toPct(value: string): number {
+	const parsed = Number(String(value).replace(',', '.'));
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function MarginTool(): React.JSX.Element {
-	const [cost, setCost] = useState('');
-	const [tax, setTax] = useState('');
-	const [margin, setMargin] = useState('');
+	const [draft, saveDraft, clearDraft] = useLocalStorageDraft<MarginForm>(DRAFT_KEY, EMPTY);
 
-	const result = useMemo(() => price(toNumber(cost), toNumber(tax), toNumber(margin)), [cost, tax, margin]);
-	const hasInput = toNumber(cost) > 0;
+	const {
+		register,
+		watch,
+		reset,
+		formState: { errors }
+	} = useForm<MarginForm>({
+		resolver: zodResolver(marginSchema),
+		mode: 'onChange',
+		defaultValues: draft
+	});
+
+	// Cada tecla vira rascunho no cache (anti-frustração no F5).
+	useEffect(() => {
+		const sub = watch(values => saveDraft({ ...EMPTY, ...values }));
+		return () => sub.unsubscribe();
+	}, [watch, saveDraft]);
+
+	const cost = watch('cost');
+	const taxPct = watch('taxPct');
+	const marginPct = watch('marginPct');
+
+	const result = useMemo(
+		() => price(brlToNumber(String(cost ?? '')), toPct(String(taxPct ?? '')), toPct(String(marginPct ?? ''))),
+		[cost, taxPct, marginPct]
+	);
+	const hasInput = brlToNumber(String(cost ?? '')) > 0;
+
+	const clearAll = (): void => {
+		clearDraft();
+		reset(EMPTY);
+	};
+
+	const costField = register('cost');
 
 	const tone = !hasInput
 		? { ring: 'ring-gray-100', bg: 'from-gray-50 to-white', text: 'text-gray-900', badge: 'bg-gray-100 text-gray-500' }
@@ -76,22 +100,99 @@ function MarginTool(): React.JSX.Element {
 				? { ring: 'ring-emerald-200', bg: 'from-emerald-50 to-white', text: 'text-emerald-600', badge: 'bg-emerald-100 text-emerald-700' }
 				: { ring: 'ring-amber-200', bg: 'from-amber-50 to-white', text: 'text-amber-600', badge: 'bg-amber-100 text-amber-700' };
 
+	const fieldShell = (invalid: boolean): string =>
+		`flex items-center rounded-xl border bg-white shadow-sm transition-all ${
+			invalid
+				? 'border-rose-300 ring-2 ring-rose-100'
+				: 'border-gray-200 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100'
+		}`;
+
 	return (
 		<section className="mx-auto max-w-3xl overflow-hidden rounded-2xl bg-white shadow-sm">
-			<header className="border-b border-gray-100 px-6 py-4">
-				<h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
-					<TrendingUp className="h-5 w-5 text-indigo-500" aria-hidden />
-					Precificação Segura
-					<span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-semibold text-indigo-600">Essencial</span>
-				</h1>
-				<p className="mt-1 text-sm text-gray-500">Descubra o preço que protege o seu lucro.</p>
+			<header className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+				<div>
+					<h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
+						<TrendingUp className="h-5 w-5 text-indigo-500" aria-hidden />
+						Precificação Segura
+						<span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-semibold text-indigo-600">Essencial</span>
+					</h1>
+					<p className="mt-1 text-sm text-gray-500">Descubra o preço que protege o seu lucro.</p>
+				</div>
+				<button
+					type="button"
+					onClick={clearAll}
+					className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600"
+				>
+					<Eraser className="h-3.5 w-3.5" aria-hidden />
+					Limpar Rascunho
+				</button>
 			</header>
 
 			<div className="grid gap-6 p-6 md:grid-cols-2">
 				<div className="flex flex-col gap-4">
-					<Field icon={Coins} label="Custo do Produto/Serviço" suffix="R$" value={cost} onChange={setCost} placeholder="100" />
-					<Field icon={Receipt} label="Impostos" suffix="%" value={tax} onChange={setTax} placeholder="12" />
-					<Field icon={Percent} label="Margem de Lucro Desejada" suffix="%" value={margin} onChange={setMargin} placeholder="30" />
+					{/* Custo — máscara BRL, nunca negativo */}
+					<label className="block">
+						<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-700">
+							<Coins className="h-4 w-4 text-gray-400" aria-hidden /> Custo do Produto/Serviço
+						</span>
+						<div className={fieldShell(false)}>
+							<input
+								inputMode="numeric"
+								placeholder="R$ 0,00"
+								aria-label="Custo do Produto/Serviço"
+								{...costField}
+								onChange={event => {
+									event.target.value = maskBRL(event.target.value);
+									void costField.onChange(event);
+								}}
+								className="w-full rounded-xl bg-transparent px-3.5 py-2.5 text-sm text-gray-900 outline-none placeholder:text-gray-300"
+							/>
+						</div>
+					</label>
+
+					{/* Impostos (%) */}
+					<label className="block">
+						<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-700">
+							<Receipt className="h-4 w-4 text-gray-400" aria-hidden /> Impostos
+						</span>
+						<div className={fieldShell(Boolean(errors.taxPct))}>
+							<input
+								type="number"
+								inputMode="decimal"
+								min={0}
+								step="any"
+								placeholder="12"
+								aria-label="Impostos"
+								aria-invalid={Boolean(errors.taxPct)}
+								{...register('taxPct')}
+								className="w-full rounded-xl bg-transparent px-3.5 py-2.5 text-sm text-gray-900 outline-none placeholder:text-gray-300"
+							/>
+							<span className="whitespace-nowrap px-3 text-xs font-medium text-gray-400">%</span>
+						</div>
+						{errors.taxPct && <p className="mt-1 text-xs text-rose-500">{errors.taxPct.message}</p>}
+					</label>
+
+					{/* Margem (%) — máximo 1000% */}
+					<label className="block">
+						<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-700">
+							<Percent className="h-4 w-4 text-gray-400" aria-hidden /> Margem de Lucro Desejada
+						</span>
+						<div className={fieldShell(Boolean(errors.marginPct))}>
+							<input
+								type="number"
+								inputMode="decimal"
+								min={0}
+								step="any"
+								placeholder="30"
+								aria-label="Margem de Lucro Desejada"
+								aria-invalid={Boolean(errors.marginPct)}
+								{...register('marginPct')}
+								className="w-full rounded-xl bg-transparent px-3.5 py-2.5 text-sm text-gray-900 outline-none placeholder:text-gray-300"
+							/>
+							<span className="whitespace-nowrap px-3 text-xs font-medium text-gray-400">%</span>
+						</div>
+						{errors.marginPct && <p className="mt-1 text-xs text-rose-500">{errors.marginPct.message}</p>}
+					</label>
 				</div>
 
 				<div className={`flex flex-col justify-center rounded-2xl bg-gradient-to-br ${tone.bg} p-6 text-center ring-1 ring-inset ${tone.ring}`}>

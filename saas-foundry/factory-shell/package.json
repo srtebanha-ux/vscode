@@ -12,12 +12,16 @@
   "dependencies": {
     "@foundry/engine-core": "0.1.0",
     "@foundry/shared": "0.1.0",
+    "@hookform/resolvers": "^5.4.0",
     "firebase": "^12.15.0",
     "framer-motion": "^12.42.2",
+    "jspdf": "^4.2.1",
     "lucide-react": "^1.23.0",
     "posthog-js": "^1.399.1",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "react-hook-form": "^7.81.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.2",

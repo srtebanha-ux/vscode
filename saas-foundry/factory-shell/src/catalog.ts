@@ -125,19 +125,19 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'margin-calculator-v1',
-		name: 'Precificação Segura',
-		description: 'O preço de venda que embute impostos e protege o seu lucro.',
+		name: 'Precificação Inteligente',
+		description: 'Motor de markup reverso que embute cada taxa oculta e trava o prejuízo.',
 		icon: TrendingUp,
-		price: 29,
+		price: 39,
 		tag: '🔧 Essencial',
 		tagClasses: 'bg-sky-500/10 text-sky-300 ring-1 ring-inset ring-sky-500/30',
 		headerGradient: 'from-sky-500/25 via-zinc-900 to-zinc-900',
 		iconColor: 'text-sky-400',
 		glowClass: 'hover:shadow-sky-500/40 hover:ring-sky-500/60',
 		benefits: [
-			'Preço ideal de venda em destaque, sem chute',
-			'Alerta por cor: nunca pague para trabalhar',
-			'Impostos e margem embutidos automaticamente'
+			'Markup reverso: margem real sobre a venda, não sobre o custo',
+			'Raio-X do preço: veja para onde vai cada centavo',
+			'Trava anti-prejuízo quando as taxas comem a margem'
 		]
 	}
 ];

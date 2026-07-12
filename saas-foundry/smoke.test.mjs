@@ -247,7 +247,7 @@ const forbidden = [
 	'./modules-library/virtual-cmo/VirtualCMO_Agent.tsx',
 	'./modules-library/essentials/construction-calculator/ConstructionCalculator.tsx',
 	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
-	'./modules-library/essentials/margin-calculator/MarginCalculator.tsx',
+	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',
@@ -561,12 +561,12 @@ try {
 {
 	const { default: ConstructionCalculator } = await import('./modules-library/essentials/construction-calculator/dist/ConstructionCalculator.js');
 	const { default: QuickReceiptMaker } = await import('./modules-library/essentials/quick-receipt/dist/QuickReceiptMaker.js');
-	const { default: MarginCalculator } = await import('./modules-library/essentials/margin-calculator/dist/MarginCalculator.js');
+	const { default: SmartPricingEngine } = await import('./modules-library/essentials/margin-calculator/dist/SmartPricingEngine.js');
 
 	const withServices = (Component, grantedScopes) =>
 		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
 
-	for (const Component of [ConstructionCalculator, QuickReceiptMaker, MarginCalculator]) {
+	for (const Component of [ConstructionCalculator, QuickReceiptMaker, SmartPricingEngine]) {
 		// Sem ui:render -> fecha o acesso (fail-closed, igual aos módulos enterprise)
 		assert.match(withServices(Component, []), /Acesso negado/);
 		// Fora do host -> lança (nunca renderiza sem os serviços do Core)
@@ -583,9 +583,11 @@ try {
 	assert.match(receipt, /Recibo de Prestação de Serviço/);
 	assert.match(receipt, /Baixar PDF/);
 
-	const margin = withServices(MarginCalculator, ['ui:render']);
-	assert.match(margin, /Preço Ideal de Venda/);
-	assert.match(margin, /Informe o custo para começar/); // estado neutro sem input
+	const pricing = withServices(SmartPricingEngine, ['ui:render']);
+	assert.match(pricing, /Motor de Precificação Defensiva/);
+	assert.match(pricing, /Preço de Venda Sugerido/);
+	assert.match(pricing, /Custos Ocultos e Taxas/);
+	assert.match(pricing, /Raio-X do Preço/);
 }
 
 // 19. Isca digital (public-tools): a matemática da precificação é a mesma do Tier 1
@@ -640,6 +642,39 @@ try {
 	assert.equal(centsToBRL(-100), `R$${nbsp}0,00`); // clamp em zero
 	assert.equal(numberToBRL(197), `R$${nbsp}197,00`);
 	assert.equal(onlyDigits('R$ 1.234,56'), '123456');
+}
+
+// 21. Motor de Precificação Defensiva: markup divisor reverso + trava anti-prejuízo
+{
+	const { computePricing } = await import('./modules-library/essentials/margin-calculator/dist/SmartPricingEngine.js');
+
+	// material 100 + mão de obra 50 = 150 direto; carga = 3,5+6+0+20 = 29,5%
+	// preço = 150 / (1 - 0.295) = 212,7659...
+	const ok = computePricing({ materialCost: 'R$ 100,00', laborCost: 'R$ 50,00', gatewayPct: '3.5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	assert.equal(ok.viable, true);
+	assert.equal(ok.danger, false);
+	assert.equal(ok.healthy, true);
+	assert.ok(Math.abs(ok.price - 150 / 0.705) < 1e-6, 'markup divisor reverso');
+	assert.ok(Math.abs(ok.netProfit - ok.price * 0.2) < 1e-9, 'lucro real sobre a venda');
+	// o raio-x fecha a conta: soma dos segmentos == preço
+	const segTotal = ok.segments.reduce((s, seg) => s + seg.amount, 0);
+	assert.ok(Math.abs(segTotal - ok.price) < 1e-6, 'cada centavo é alocado');
+	assert.ok(Math.abs(ok.segments.reduce((s, seg) => s + seg.share, 0) - 1) < 1e-9, 'shares somam 100%');
+
+	// carga > 99% -> inviável + trava de prejuízo
+	const overloaded = computePricing({ materialCost: 'R$ 100,00', laborCost: '', gatewayPct: '40', taxPct: '40', commissionPct: '10', marginPct: '15' });
+	assert.equal(overloaded.viable, false);
+	assert.equal(overloaded.danger, true);
+
+	// margem 0 -> lucro zero -> perigo (pagando para trabalhar)
+	const noProfit = computePricing({ materialCost: 'R$ 80,00', laborCost: '', gatewayPct: '5', taxPct: '6', commissionPct: '0', marginPct: '0' });
+	assert.equal(noProfit.danger, true);
+
+	// sem custo direto -> estado neutro, sem alarme falso
+	const empty = computePricing({ materialCost: '', laborCost: '', gatewayPct: '5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	assert.equal(empty.hasCost, false);
+	assert.equal(empty.danger, false);
+	assert.equal(empty.viable, false);
 }
 
 console.log('ALL SMOKE TESTS PASSED');

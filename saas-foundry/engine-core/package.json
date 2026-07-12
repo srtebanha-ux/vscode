@@ -13,6 +13,10 @@
     "./ui": {
       "types": "./dist/ui.d.ts",
       "default": "./dist/ui.js"
+    },
+    "./pricing": {
+      "types": "./dist/pricing/oracle.d.ts",
+      "default": "./dist/pricing/oracle.js"
     }
   },
   "scripts": {

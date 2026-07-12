@@ -1,76 +1,39 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { hasScopes, numberToBRL, useCoreService } from '@foundry/engine-core/ui';
+import { analyzePricing, type OracleAnalysis } from '@foundry/engine-core/pricing';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, ArrowRight, Boxes, Loader2, MapPin, Radar, ShieldAlert, Sparkles, TrendingUp, Wand2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Boxes, EyeOff, Info, MapPin, Radar, ShieldAlert, Sparkles, TrendingUp, Wand2 } from 'lucide-react';
 import { SmartPricingEngine, type PricingPrefill } from './SmartPricingEngine.js';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
-type Segment = 'produtos' | 'servicos' | 'ambos';
+type OracleReport = OracleAnalysis;
 
-export interface OracleReport {
-	readonly niche: string;
-	readonly region: string;
-	readonly segment: Segment;
-	readonly materialCost: number;
-	readonly materialBreakdown: string;
-	readonly marketLow: number;
-	readonly marketHigh: number;
+/**
+ * Chama a Serverless Function que injeta o system prompt na LLM. Sem backend no
+ * dev, cai no mesmo oráculo determinístico com latência simulada — a UI é idêntica.
+ */
+async function askOracle(description: string, region: string): Promise<OracleReport> {
+	try {
+		const response = await fetch('/api/pricing-oracle', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ description, region })
+		});
+		if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
+			return (await response.json()) as OracleReport;
+		}
+	} catch {
+		// dev: sem função serverless rodando
+	}
+	await new Promise(resolve => setTimeout(resolve, 400));
+	return analyzePricing(description, region);
 }
 
-interface NicheProfile {
-	readonly label: string;
-	readonly keywords: readonly string[];
-	readonly segment: Segment;
-	readonly materialCost: number;
-	readonly materialBreakdown: string;
-	readonly marketLow: number;
-	readonly marketHigh: number;
-}
-
-/** Base de conhecimento do Oráculo (stand-in determinístico da LLM; em produção, RAG + LLM). */
-const PROFILES: readonly NicheProfile[] = [
-	{ label: 'Tatuagem', keywords: ['tatua', 'tattoo', 'cheyenne', 'agulha'], segment: 'ambos', materialCost: 45, materialBreakdown: 'tintas, agulhas e descartáveis', marketLow: 350, marketHigh: 500 },
-	{ label: 'Pintura Residencial', keywords: ['pintura', 'parede', 'suvinil', 'tinta', 'm²', 'm2'], segment: 'ambos', materialCost: 450, materialBreakdown: 'tinta, rolos, lixa e fita', marketLow: 1200, marketHigh: 1800 },
-	{ label: 'Confeitaria', keywords: ['bolo', 'confeit', 'doce', 'brigadeiro', 'festa'], segment: 'ambos', materialCost: 40, materialBreakdown: 'ingredientes e embalagem', marketLow: 120, marketHigh: 200 },
-	{ label: 'Marcenaria', keywords: ['marcenaria', 'móvel', 'movel', 'madeira', 'planejado'], segment: 'ambos', materialCost: 600, materialBreakdown: 'MDF, ferragens e acabamento', marketLow: 1800, marketHigh: 2600 },
-	{ label: 'Design Gráfico', keywords: ['logo', 'design', 'identidade visual', 'branding', 'arte'], segment: 'servicos', materialCost: 0, materialBreakdown: 'licenças de fontes e mockups', marketLow: 800, marketHigh: 2000 },
-	{ label: 'Fotografia', keywords: ['foto', 'ensaio', 'fotograf', 'casamento'], segment: 'ambos', materialCost: 80, materialBreakdown: 'edição, backup e impressões', marketLow: 600, marketHigh: 1200 },
-	{ label: 'Manicure', keywords: ['unha', 'manicure', 'esmalt', 'gel'], segment: 'ambos', materialCost: 25, materialBreakdown: 'esmaltes, descartáveis e gel', marketLow: 70, marketHigh: 130 }
-];
-
-const DEFAULT_PROFILE: NicheProfile = { label: 'Serviço Geral', keywords: [], segment: 'ambos', materialCost: 100, materialBreakdown: 'insumos e materiais diretos', marketLow: 300, marketHigh: 600 };
-
-/** Regiões caras puxam a média de mercado para cima; interior, para baixo. */
-function regionFactor(region: string): number {
-	const r = ` ${region.toLowerCase()} `;
-	if (/s[aã]o paulo|\bsp\b|rio de janeiro|\brj\b|bras[ií]lia|\bdf\b/.test(r)) return 1.2;
-	if (/interior|cidade pequena|zona rural/.test(r)) return 0.85;
-	return 1;
-}
-
-const round10 = (value: number): number => Math.round(value / 10) * 10;
-
-/** Oráculo determinístico (exportado para testes). Cruza a descrição com o nicho e ajusta pela região. */
-export function analyzeMarket(description: string, region: string): OracleReport {
-	const text = ` ${description.toLowerCase()} `;
-	const profile = PROFILES.find(p => p.keywords.some(keyword => text.includes(keyword))) ?? DEFAULT_PROFILE;
-	const factor = regionFactor(region);
-	return {
-		niche: profile.label,
-		region: region.trim(),
-		segment: profile.segment,
-		materialCost: profile.materialCost,
-		materialBreakdown: profile.materialBreakdown,
-		marketLow: round10(profile.marketLow * factor),
-		marketHigh: round10(profile.marketHigh * factor)
-	};
-}
-
-/** Relatório -> sementes da calculadora. Taxas típicas prontas; a margem fica a cargo do usuário. */
+/** Relatório -> sementes da calculadora. O "Custo" recebe o material estimado; a margem fica pro usuário. */
 function toPrefill(report: OracleReport): PricingPrefill {
 	return {
 		segment: report.segment,
@@ -130,12 +93,15 @@ function Oracle(): React.JSX.Element {
 			if (index === 0) return;
 			timers.current.push(window.setTimeout(() => setStepIndex(index), index * stepMs));
 		});
-		timers.current.push(
-			window.setTimeout(() => {
-				setReport(analyzeMarket(description, region));
-				setPhase('result');
-			}, LOADING_STEPS.length * stepMs + 200)
-		);
+		// A LLM (ou o fallback) roda em paralelo às mensagens; o resultado só entra
+		// quando ambos terminam, para o loading não piscar rápido demais.
+		const minDelay = new Promise<void>(resolve => {
+			timers.current.push(window.setTimeout(resolve, LOADING_STEPS.length * stepMs + 200));
+		});
+		void Promise.all([askOracle(description, region), minDelay]).then(([oracleReport]) => {
+			setReport(oracleReport);
+			setPhase('result');
+		});
 	};
 
 	const restart = (): void => {
@@ -267,23 +233,46 @@ function Oracle(): React.JSX.Element {
 						<div className="grid gap-4 p-6 sm:grid-cols-2">
 							<div className="rounded-2xl border border-gray-100 p-5">
 								<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-500">
-									<Boxes className="h-4 w-4 text-indigo-500" aria-hidden /> Custo de Material
+									<Boxes className="h-4 w-4 text-indigo-500" aria-hidden /> Custo de Material Estimado
 								</span>
 								<p className="mt-1.5 text-3xl font-bold tracking-tight text-gray-900" data-testid="oracle-material">{brl.format(report.materialCost)}</p>
 								<p className="mt-1 text-xs text-gray-400">estimado em {report.materialBreakdown}</p>
 							</div>
 							<div className="rounded-2xl border border-gray-100 p-5">
 								<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-500">
-									<TrendingUp className="h-4 w-4 text-emerald-500" aria-hidden /> Preço na Região
+									<TrendingUp className="h-4 w-4 text-emerald-500" aria-hidden /> Média de Mercado na Região
 								</span>
 								<p className="mt-1.5 text-2xl font-bold tracking-tight text-gray-900" data-testid="oracle-market">
 									{brl.format(report.marketLow)} <span className="text-gray-300">a</span> {brl.format(report.marketHigh)}
 								</p>
-								<p className="mt-1 text-xs text-gray-400">média cobrada por profissionais em {report.region}</p>
+								<p className="mt-1 text-xs text-gray-400">faixa cobrada por profissionais em {report.region}</p>
 							</div>
 						</div>
 
-						<div className="flex flex-col gap-3 border-t border-gray-100 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
+						{/* Custos Ocultos Comuns do nicho — o que o empreendedor esquece de cobrar */}
+						<div className="mx-6 rounded-2xl bg-amber-50/60 p-5 ring-1 ring-inset ring-amber-100">
+							<span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
+								<EyeOff className="h-4 w-4" aria-hidden /> Custos Ocultos Comuns do seu nicho
+							</span>
+							<ul className="mt-3 grid gap-2 sm:grid-cols-3">
+								{report.hiddenCosts.map(cost => (
+									<li key={cost} className="flex items-start gap-1.5 text-sm text-amber-900">
+										<span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" aria-hidden />
+										{cost}
+									</li>
+								))}
+							</ul>
+						</div>
+
+						{/* Micro-copy de segurança da faixa */}
+						<div className="mx-6 mt-4 flex items-start gap-2 rounded-xl bg-gray-50 p-4 text-xs leading-relaxed text-gray-500">
+							<Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+							<span data-testid="range-microcopy">
+								Esta é uma margem segura de mercado. Posicione seu preço mais próximo do mínimo se quiser ganhar no volume, ou do máximo se o seu serviço for premium.
+							</span>
+						</div>
+
+						<div className="mt-2 flex flex-col gap-3 border-t border-gray-100 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
 							<button type="button" onClick={restart} className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600">
 								<ArrowLeft className="h-4 w-4" aria-hidden /> Refazer análise
 							</button>
@@ -292,7 +281,7 @@ function Oracle(): React.JSX.Element {
 								onClick={() => setPhase('calculator')}
 								className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md"
 							>
-								<Wand2 className="h-4 w-4" aria-hidden /> Usar estes valores na Calculadora Mágica
+								<Wand2 className="h-4 w-4" aria-hidden /> Transferir para a Calculadora
 								<ArrowRight className="h-4 w-4" aria-hidden />
 							</button>
 						</div>

@@ -686,31 +686,77 @@ try {
 	assert.equal(empty.viable, false);
 }
 
-// 22. Oráculo de Custos e Mercado: análise determinística + ajuste por região
+// 22. Oráculo Universal: análise determinística, custos ocultos e faixa por região
 {
-	const { analyzeMarket } = await import('./modules-library/essentials/margin-calculator/dist/AIPricingOracle.js');
+	const { analyzePricing, ORACLE_SYSTEM_PROMPT } = await import('@foundry/engine-core/pricing');
 
-	// nicho detectado por palavra-chave; material e faixa de mercado plausíveis
-	const tattoo = analyzeMarket('tatuagem realista de 15cm na máquina Cheyenne', 'Curitiba - PR');
+	// System prompt universal e proibido de cravar valor exato
+	assert.match(ORACLE_SYSTEM_PROMPT, /Especialista Universal em Precificação/);
+	assert.match(ORACLE_SYSTEM_PROMPT, /ESTRITAMENTE PROIBIDO/);
+	assert.match(ORACLE_SYSTEM_PROMPT, /faixa/i);
+
+	// nicho detectado + custos ocultos comuns do nicho
+	const tattoo = analyzePricing('tatuagem realista de 15cm na máquina Cheyenne', 'Curitiba - PR');
 	assert.equal(tattoo.niche, 'Tatuagem');
 	assert.equal(tattoo.segment, 'ambos');
 	assert.equal(tattoo.materialCost, 45);
-	assert.ok(tattoo.marketLow < tattoo.marketHigh);
+	assert.ok(tattoo.marketLow < tattoo.marketHigh, 'sempre faixa, nunca exato');
+	assert.ok(tattoo.hiddenCosts.some(c => /biossegurança/i.test(c)), 'lembra da biossegurança');
 
-	// região cara puxa a média de mercado para cima (SP = 1.2x); material não muda
-	const spTattoo = analyzeMarket('tatuagem grande', 'São Paulo - SP');
+	const cake = analyzePricing('bolo de casamento 3 andares', 'Curitiba - PR');
+	assert.ok(cake.hiddenCosts.some(c => /gás|embalagem/i.test(c)), 'bolo -> gás e embalagem');
+
+	const consult = analyzePricing('consultoria de gestão para pequenas empresas', 'Recife - PE');
+	assert.equal(consult.segment, 'servicos');
+	assert.ok(consult.hiddenCosts.some(c => /hora técnica/i.test(c)), 'consultoria -> hora técnica');
+
+	// região cara puxa a faixa para cima (SP = 1.2x); material não muda
+	const spTattoo = analyzePricing('tatuagem grande', 'São Paulo - SP');
 	assert.ok(spTattoo.marketHigh > tattoo.marketHigh, 'SP encarece o mercado');
 	assert.equal(spTattoo.materialCost, tattoo.materialCost);
 
-	// serviço puro sem material -> segmento servicos, custo de material zero
-	const design = analyzeMarket('preciso de um logo e identidade visual', 'Recife - PE');
-	assert.equal(design.segment, 'servicos');
-	assert.equal(design.materialCost, 0);
-
-	// nicho desconhecido -> fallback genérico, nunca quebra
-	const unknown = analyzeMarket('trabalho aleatorio sem categoria conhecida', 'Belém - PA');
+	// nicho desconhecido -> fallback genérico com faixa, nunca quebra
+	const unknown = analyzePricing('trabalho aleatorio sem categoria conhecida', 'Belém - PA');
 	assert.equal(unknown.niche, 'Serviço Geral');
-	assert.ok(unknown.materialCost > 0);
+	assert.ok(unknown.marketHigh > unknown.marketLow);
+	assert.ok(unknown.hiddenCosts.length > 0);
+}
+
+// 23. Rota /api/pricing-oracle: injeta o system prompt e SEMPRE devolve faixa
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./api/pricing-oracle/route.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-oracle-')), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { POST, default: methodHandler, ORACLE_SYSTEM_PROMPT } = await import(pathToFileURL(compiled).href);
+		const call = (body) => POST(new Request('https://lidarcore.example/api/pricing-oracle', { method: 'POST', headers: { 'content-type': 'application/json' }, body }));
+
+		assert.match(ORACLE_SYSTEM_PROMPT, /Especialista Universal em Precificação/);
+
+		// contrato de entrada fail-closed
+		assert.equal((await call('não é json')).status, 400);
+		assert.equal((await call(JSON.stringify({ description: 'curto', region: 'SP' }))).status, 400);
+		assert.equal((await call(JSON.stringify({ description: 'pintura de 50m² parede interna', region: '' }))).status, 400);
+
+		// sem ANTHROPIC_API_KEY -> simulado, mas SEMPRE em faixa (nunca preço exato)
+		delete process.env.ANTHROPIC_API_KEY;
+		const res = await call(JSON.stringify({ description: 'pintura de 50m² de parede interna com Suvinil', region: 'São Paulo - SP' }));
+		assert.equal(res.status, 200);
+		const body = await res.json();
+		assert.equal(body.engine, 'simulated');
+		assert.equal(body.niche, 'Pintura Residencial');
+		assert.ok(body.marketHigh > body.marketLow, 'resposta é uma faixa, não um valor exato');
+		assert.ok(Array.isArray(body.hiddenCosts) && body.hiddenCosts.length > 0);
+
+		// método errado -> 405
+		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/pricing-oracle', { method: 'GET' }))).status, 405);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
 }
 
 console.log('ALL SMOKE TESTS PASSED');

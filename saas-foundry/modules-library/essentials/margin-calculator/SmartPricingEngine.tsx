@@ -2,12 +2,10 @@ import { useEffect, useMemo, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { brlToNumber, hasScopes, maskBRL, useCoreService, useLocalStorageDraft } from '@foundry/engine-core/ui';
-import type { SecurityScope } from '@foundry/shared';
+import { brlToNumber, maskBRL, useLocalStorageDraft } from '@foundry/engine-core/ui';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Boxes, Clock, Coins, Eraser, HandCoins, Landmark, Package, Percent, ReceiptText, ScanLine, ShieldAlert, ShieldCheck, Timer, Truck, TrendingUp } from 'lucide-react';
 
-const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 const DRAFT_KEY = 'lidar:draft:smart-pricing';
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -62,6 +60,9 @@ const pricingSchema = z.object({
 });
 
 type PricingForm = z.input<typeof pricingSchema>;
+
+/** Valores que o AIPricingOracle injeta na calculadora ao "usar na Calculadora Mágica". */
+export type PricingPrefill = Partial<PricingForm>;
 
 const EMPTY: PricingForm = {
 	segment: 'produtos',
@@ -253,7 +254,12 @@ function SegmentedControl({ value, onChange }: { readonly value: Segment; readon
 	);
 }
 
-function PricingEngine(): React.JSX.Element {
+export interface SmartPricingEngineProps {
+	/** Sementes vindas do Oráculo de IA; sobrescrevem o rascunho salvo no mount. */
+	readonly prefill?: PricingPrefill;
+}
+
+export function SmartPricingEngine({ prefill }: SmartPricingEngineProps = {}): React.JSX.Element {
 	const [draft, saveDraft, clearDraft] = useLocalStorageDraft<PricingForm>(DRAFT_KEY, EMPTY);
 	const {
 		register,
@@ -261,7 +267,7 @@ function PricingEngine(): React.JSX.Element {
 		reset,
 		setValue,
 		formState: { errors }
-	} = useForm<PricingForm>({ resolver: zodResolver(pricingSchema), mode: 'onChange', defaultValues: draft });
+	} = useForm<PricingForm>({ resolver: zodResolver(pricingSchema), mode: 'onChange', defaultValues: { ...draft, ...prefill } });
 
 	useEffect(() => {
 		const sub = watch(values => saveDraft({ ...EMPTY, ...values }));
@@ -432,27 +438,3 @@ function PricingEngine(): React.JSX.Element {
 	);
 }
 
-function AccessDenied(): React.JSX.Element {
-	return (
-		<div role="alert" className="plugin-access-denied mx-auto max-w-md rounded-2xl bg-white p-10 text-center shadow-sm">
-			<span className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-500">
-				<ShieldAlert className="h-6 w-6" aria-hidden />
-			</span>
-			<h2 className="text-xl font-semibold tracking-tight text-gray-900">Acesso negado</h2>
-			<p className="mt-2 text-sm text-gray-500">Sua conta não possui o Motor de Precificação ativo.</p>
-		</div>
-	);
-}
-
-export default function SmartPricingEngine(): React.JSX.Element {
-	const core = useCoreService();
-	if (!hasScopes(core, REQUIRED_SCOPES)) {
-		return <AccessDenied />;
-	}
-	return <PricingEngine />;
-}
-
-/** Registry entry contract. */
-export function createPlugin(): typeof SmartPricingEngine {
-	return SmartPricingEngine;
-}

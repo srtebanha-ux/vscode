@@ -1,7 +1,7 @@
 {
   "id": "margin-calculator-v1",
-  "displayName": "Precificação Inteligente",
-  "version": "2.0.0",
+  "displayName": "Oráculo de Preços IA",
+  "version": "3.0.0",
   "permissions": ["ui:render"],
-  "entryPoint": "SmartPricingEngine.tsx"
+  "entryPoint": "AIPricingOracle.tsx"
 }

@@ -248,6 +248,7 @@ const forbidden = [
 	'./modules-library/essentials/construction-calculator/ConstructionCalculator.tsx',
 	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
 	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
+	'./modules-library/essentials/margin-calculator/AIPricingOracle.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',
@@ -561,12 +562,12 @@ try {
 {
 	const { default: ConstructionCalculator } = await import('./modules-library/essentials/construction-calculator/dist/ConstructionCalculator.js');
 	const { default: QuickReceiptMaker } = await import('./modules-library/essentials/quick-receipt/dist/QuickReceiptMaker.js');
-	const { default: SmartPricingEngine } = await import('./modules-library/essentials/margin-calculator/dist/SmartPricingEngine.js');
+	const { default: AIPricingOracle } = await import('./modules-library/essentials/margin-calculator/dist/AIPricingOracle.js');
 
 	const withServices = (Component, grantedScopes) =>
 		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
 
-	for (const Component of [ConstructionCalculator, QuickReceiptMaker, SmartPricingEngine]) {
+	for (const Component of [ConstructionCalculator, QuickReceiptMaker, AIPricingOracle]) {
 		// Sem ui:render -> fecha o acesso (fail-closed, igual aos módulos enterprise)
 		assert.match(withServices(Component, []), /Acesso negado/);
 		// Fora do host -> lança (nunca renderiza sem os serviços do Core)
@@ -583,13 +584,11 @@ try {
 	assert.match(receipt, /Recibo de Prestação de Serviço/);
 	assert.match(receipt, /Baixar PDF/);
 
-	const pricing = withServices(SmartPricingEngine, ['ui:render']);
-	assert.match(pricing, /Motor de Precificação Defensiva/);
-	assert.match(pricing, /Preço de Venda Sugerido/);
-	assert.match(pricing, /Vendo Produtos/); // segmented control (progressive disclosure)
-	assert.match(pricing, /Presto Serviços/);
-	assert.match(pricing, /Custos Ocultos e Meta/);
-	assert.match(pricing, /Raio-X do Preço/);
+	// O Oráculo abre na descoberta (assistente de contexto antes da calculadora)
+	const oracle = withServices(AIPricingOracle, ['ui:render']);
+	assert.match(oracle, /O que você vai precificar hoje\?/);
+	assert.match(oracle, /Localização\/Região/);
+	assert.match(oracle, /Analisar Mercado/);
 }
 
 // 19. Isca digital (public-tools): a matemática da precificação é a mesma do Tier 1
@@ -685,6 +684,33 @@ try {
 	assert.equal(empty.hasCost, false);
 	assert.equal(empty.danger, false);
 	assert.equal(empty.viable, false);
+}
+
+// 22. Oráculo de Custos e Mercado: análise determinística + ajuste por região
+{
+	const { analyzeMarket } = await import('./modules-library/essentials/margin-calculator/dist/AIPricingOracle.js');
+
+	// nicho detectado por palavra-chave; material e faixa de mercado plausíveis
+	const tattoo = analyzeMarket('tatuagem realista de 15cm na máquina Cheyenne', 'Curitiba - PR');
+	assert.equal(tattoo.niche, 'Tatuagem');
+	assert.equal(tattoo.segment, 'ambos');
+	assert.equal(tattoo.materialCost, 45);
+	assert.ok(tattoo.marketLow < tattoo.marketHigh);
+
+	// região cara puxa a média de mercado para cima (SP = 1.2x); material não muda
+	const spTattoo = analyzeMarket('tatuagem grande', 'São Paulo - SP');
+	assert.ok(spTattoo.marketHigh > tattoo.marketHigh, 'SP encarece o mercado');
+	assert.equal(spTattoo.materialCost, tattoo.materialCost);
+
+	// serviço puro sem material -> segmento servicos, custo de material zero
+	const design = analyzeMarket('preciso de um logo e identidade visual', 'Recife - PE');
+	assert.equal(design.segment, 'servicos');
+	assert.equal(design.materialCost, 0);
+
+	// nicho desconhecido -> fallback genérico, nunca quebra
+	const unknown = analyzeMarket('trabalho aleatorio sem categoria conhecida', 'Belém - PA');
+	assert.equal(unknown.niche, 'Serviço Geral');
+	assert.ok(unknown.materialCost > 0);
 }
 
 console.log('ALL SMOKE TESTS PASSED');

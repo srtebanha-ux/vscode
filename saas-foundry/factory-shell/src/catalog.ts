@@ -125,19 +125,19 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'margin-calculator-v1',
-		name: 'Precificação Inteligente',
-		description: 'Motor de markup reverso que embute cada taxa oculta e trava o prejuízo.',
+		name: 'Oráculo de Preços IA',
+		description: 'A IA estima seu custo e a média de mercado da região, e já monta o preço.',
 		icon: TrendingUp,
-		price: 39,
-		tag: '🔧 Essencial',
-		tagClasses: 'bg-sky-500/10 text-sky-300 ring-1 ring-inset ring-sky-500/30',
-		headerGradient: 'from-sky-500/25 via-zinc-900 to-zinc-900',
-		iconColor: 'text-sky-400',
-		glowClass: 'hover:shadow-sky-500/40 hover:ring-sky-500/60',
+		price: 49,
+		tag: '🔮 IA aplicada',
+		tagClasses: 'bg-fuchsia-500/10 text-fuchsia-300 ring-1 ring-inset ring-fuchsia-500/30',
+		headerGradient: 'from-fuchsia-500/25 via-zinc-900 to-zinc-900',
+		iconColor: 'text-fuchsia-400',
+		glowClass: 'hover:shadow-fuchsia-500/40 hover:ring-fuchsia-500/60',
 		benefits: [
-			'Markup reverso: margem real sobre a venda, não sobre o custo',
-			'Raio-X do preço: veja para onde vai cada centavo',
-			'Trava anti-prejuízo quando as taxas comem a margem'
+			'Não sabe seu custo? A IA estima material e desgaste por você',
+			'Média de mercado da sua região, não um chute nacional',
+			'Markup reverso com Raio-X e trava anti-prejuízo embutidos'
 		]
 	}
 ];

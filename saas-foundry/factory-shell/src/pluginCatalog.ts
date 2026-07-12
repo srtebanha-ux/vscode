@@ -24,7 +24,7 @@ const bundledEntries: Readonly<Record<string, () => Promise<Record<string, unkno
 	'virtual-cmo-v1': () => import('../../modules-library/virtual-cmo/VirtualCMO_Agent.tsx'),
 	'construction-calculator-v1': () => import('../../modules-library/essentials/construction-calculator/ConstructionCalculator.tsx'),
 	'quick-receipt-maker-v1': () => import('../../modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx'),
-	'margin-calculator-v1': () => import('../../modules-library/essentials/margin-calculator/SmartPricingEngine.tsx')
+	'margin-calculator-v1': () => import('../../modules-library/essentials/margin-calculator/AIPricingOracle.tsx')
 };
 
 export function createPluginRegistry(): PluginRegistry {

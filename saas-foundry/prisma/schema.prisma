@@ -1,0 +1,110 @@
+// Lidar Core — camada de dados relacional multi-tenant (PostgreSQL + Prisma).
+// Jornada modelada: Isca Digital (Lead) -> conversão (Tenant + User) -> auditoria de consumo de IA (UsageLog).
+// Convenção: campos camelCase no ORM mapeados para colunas snake_case no banco (@map / @@map).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums — valores fechados garantem integridade no banco e type-safety no cliente.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Planos comerciais: definem a cota de tokens e os módulos liberados.
+enum Plan {
+  FREE
+  PRO
+  ENTERPRISE
+}
+
+/// RBAC: papel do usuário dentro do próprio tenant.
+enum UserRole {
+  ADMIN
+  MEMBRO
+}
+
+/// Agentes de IA que queimam tokens — chave do rateio de custo por empresa.
+enum AiAgent {
+  CFO
+  CMO
+  ORACULO
+}
+
+/// Ferramenta de isca que originou o lead (atribuição de marketing).
+enum LeadTool {
+  CALCULADORA
+  RECIBO
+  ORACULO
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Modelos
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Isca Digital: contatos capturados nas ferramentas públicas ANTES do cadastro.
+/// Standalone de propósito (ainda não há tenant) — combustível de campanhas futuras,
+/// rastreando origem por nicho + ferramenta.
+model Lead {
+  id              String   @id @default(cuid())
+  email           String   @unique
+  nome            String?
+  nichoMercado    String?  @map("nicho_mercado") // detectado pelo Oráculo de IA
+  ferramentaUsada LeadTool @map("ferramenta_usada") // Calculadora | Recibo | Oráculo
+  dataCaptura     DateTime @default(now()) @map("data_captura")
+
+  @@index([ferramentaUsada]) // segmentação de campanhas por origem
+  @@map("leads")
+}
+
+/// A Empresa: unidade de isolamento multi-tenant. Dona do saldo de IA e do billing.
+model Tenant {
+  id               String   @id @default(cuid())
+  nomeEmpresa      String   @map("nome_empresa")
+  planoAtual       Plan     @default(FREE) @map("plano_atual")
+  tokenBalance     Int      @default(0) @map("token_balance") // cota de IA restante no ciclo
+  stripeCustomerId String?  @unique @map("stripe_customer_id") // vínculo com o faturamento
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  users     User[] // 1:N — colaboradores da empresa
+  usageLogs UsageLog[] // 1:N — trilha de consumo de IA
+
+  @@index([stripeCustomerId])
+  @@map("tenants")
+}
+
+/// O Empreendedor logado. Pertence a exatamente UM tenant (fronteira de isolamento de dados).
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  senhaHash String   @map("senha_hash") // hash bcrypt/argon2 — nunca senha em texto puro
+  role      UserRole @default(MEMBRO)
+  tenantId  String   @map("tenant_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId]) // toda query de usuário é escopada por tenant
+  @@map("users")
+}
+
+/// Auditoria de consumo: 1 linha por chamada de IA para conciliar custo real vs. plano pago.
+/// É o que impede um tenant de estourar a cota da LLM que a plataforma banca.
+model UsageLog {
+  id                String   @id @default(cuid())
+  tenantId          String   @map("tenant_id")
+  agenteIaUtilizado AiAgent  @map("agente_ia_utilizado")
+  tokensGastos      Int      @map("tokens_gastos")
+  timestamp         DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, timestamp]) // relatórios de consumo por empresa/período
+  @@map("usage_logs")
+}

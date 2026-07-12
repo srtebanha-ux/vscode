@@ -586,7 +586,9 @@ try {
 	const pricing = withServices(SmartPricingEngine, ['ui:render']);
 	assert.match(pricing, /Motor de Precificação Defensiva/);
 	assert.match(pricing, /Preço de Venda Sugerido/);
-	assert.match(pricing, /Custos Ocultos e Taxas/);
+	assert.match(pricing, /Vendo Produtos/); // segmented control (progressive disclosure)
+	assert.match(pricing, /Presto Serviços/);
+	assert.match(pricing, /Custos Ocultos e Meta/);
 	assert.match(pricing, /Raio-X do Preço/);
 }
 
@@ -644,34 +646,42 @@ try {
 	assert.equal(onlyDigits('R$ 1.234,56'), '123456');
 }
 
-// 21. Motor de Precificação Defensiva: markup divisor reverso + trava anti-prejuízo
+// 21. Motor de Precificação Defensiva: markup reverso adaptado ao nicho + trava anti-prejuízo
 {
 	const { computePricing } = await import('./modules-library/essentials/margin-calculator/dist/SmartPricingEngine.js');
+	const base = { segment: 'produtos', materialCost: '', packagingCost: '', shippingCost: '', hourlyRate: '', hours: '', gatewayPct: '', taxPct: '', commissionPct: '', marginPct: '' };
 
-	// material 100 + mão de obra 50 = 150 direto; carga = 3,5+6+0+20 = 29,5%
-	// preço = 150 / (1 - 0.295) = 212,7659...
-	const ok = computePricing({ materialCost: 'R$ 100,00', laborCost: 'R$ 50,00', gatewayPct: '3.5', taxPct: '6', commissionPct: '0', marginPct: '20' });
-	assert.equal(ok.viable, true);
-	assert.equal(ok.danger, false);
-	assert.equal(ok.healthy, true);
-	assert.ok(Math.abs(ok.price - 150 / 0.705) < 1e-6, 'markup divisor reverso');
-	assert.ok(Math.abs(ok.netProfit - ok.price * 0.2) < 1e-9, 'lucro real sobre a venda');
-	// o raio-x fecha a conta: soma dos segmentos == preço
-	const segTotal = ok.segments.reduce((s, seg) => s + seg.amount, 0);
-	assert.ok(Math.abs(segTotal - ok.price) < 1e-6, 'cada centavo é alocado');
-	assert.ok(Math.abs(ok.segments.reduce((s, seg) => s + seg.share, 0) - 1) < 1e-9, 'shares somam 100%');
+	// PRODUTOS: material 100 + embalagem 30 + frete 20 = 150; carga 3,5+6+0+20 = 29,5%
+	const prod = computePricing({ ...base, segment: 'produtos', materialCost: 'R$ 100,00', packagingCost: 'R$ 30,00', shippingCost: 'R$ 20,00', gatewayPct: '3.5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	assert.equal(prod.viable, true);
+	assert.equal(prod.healthy, true);
+	assert.ok(Math.abs(prod.price - 150 / 0.705) < 1e-6, 'markup reverso sobre custos de produto');
+	assert.ok(Math.abs(prod.netProfit - prod.price * 0.2) < 1e-9, 'lucro real sobre a venda');
+	assert.ok(Math.abs(prod.segments.reduce((s, p) => s + p.amount, 0) - prod.price) < 1e-6, 'raio-x fecha a conta');
+	// no nicho produtos não existe segmento de mão de obra
+	assert.equal(prod.segments.some(p => p.label === 'Mão de Obra'), false);
+
+	// SERVIÇOS: hora 80 x 5h = 400 direto; campos de produto são ignorados mesmo se preenchidos
+	const serv = computePricing({ ...base, segment: 'servicos', materialCost: 'R$ 999,00', hourlyRate: 'R$ 80,00', hours: '5', gatewayPct: '3.5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	assert.ok(Math.abs(serv.price - 400 / 0.705) < 1e-6, 'serviço = hora x horas, produto ignorado');
+	assert.equal(serv.segments.some(p => p.label === 'Insumos & Envio'), false);
+	assert.equal(serv.segments.some(p => p.label === 'Mão de Obra'), true);
+
+	// HÍBRIDO: soma produto (150) + serviço (400) = 550 direto
+	const both = computePricing({ ...base, segment: 'ambos', materialCost: 'R$ 150,00', hourlyRate: 'R$ 100,00', hours: '4', gatewayPct: '3.5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	assert.ok(Math.abs(both.price - 550 / 0.705) < 1e-6, 'híbrido soma as duas frentes');
+	assert.equal(both.segments.filter(p => p.label === 'Insumos & Envio' || p.label === 'Mão de Obra').length, 2);
 
 	// carga > 99% -> inviável + trava de prejuízo
-	const overloaded = computePricing({ materialCost: 'R$ 100,00', laborCost: '', gatewayPct: '40', taxPct: '40', commissionPct: '10', marginPct: '15' });
+	const overloaded = computePricing({ ...base, segment: 'produtos', materialCost: 'R$ 100,00', gatewayPct: '40', taxPct: '40', commissionPct: '10', marginPct: '15' });
 	assert.equal(overloaded.viable, false);
 	assert.equal(overloaded.danger, true);
 
-	// margem 0 -> lucro zero -> perigo (pagando para trabalhar)
-	const noProfit = computePricing({ materialCost: 'R$ 80,00', laborCost: '', gatewayPct: '5', taxPct: '6', commissionPct: '0', marginPct: '0' });
-	assert.equal(noProfit.danger, true);
+	// margem 0 -> lucro zero -> perigo
+	assert.equal(computePricing({ ...base, segment: 'produtos', materialCost: 'R$ 80,00', gatewayPct: '5', taxPct: '6', commissionPct: '0', marginPct: '0' }).danger, true);
 
-	// sem custo direto -> estado neutro, sem alarme falso
-	const empty = computePricing({ materialCost: '', laborCost: '', gatewayPct: '5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	// sem custo direto -> neutro, sem alarme falso
+	const empty = computePricing({ ...base, segment: 'produtos', gatewayPct: '5', taxPct: '6', commissionPct: '0', marginPct: '20' });
 	assert.equal(empty.hasCost, false);
 	assert.equal(empty.danger, false);
 	assert.equal(empty.viable, false);

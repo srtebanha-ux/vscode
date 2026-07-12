@@ -759,4 +759,58 @@ try {
 	}
 }
 
+// 24. Gatilho de Boas-Vindas: template React Email + Magic Link + falha silenciosa
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./services/email/WelcomeEmailService.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent',
+		jsx: 'automatic', // igual ao tsconfig (react-jsx): usa react/jsx-runtime
+		// libs de node com require dinâmico ficam externas (resolvidas em runtime)
+		external: ['resend', 'nodemailer', 'jsonwebtoken', '@react-email/render', '@react-email/components', 'react', 'react/jsx-runtime']
+	});
+	// Temp DENTRO do projeto: os externals resolvem pelo node_modules do saas-foundry.
+	const dir = await mkdtemp(join(new URL('.', import.meta.url).pathname, '.email-smoke-'));
+	const compiled = join(dir, 'service.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		// Seções anteriores deixaram `document` global (jsdom) sem `Element`; o prismjs
+		// (transitivo do @react-email) toma o caminho DOM e quebra. Em serverless real
+		// não há `document`, então isto é só um remendo do harness de teste.
+		globalThis.Element = globalThis.Element ?? globalThis.window?.Element ?? class {};
+		const { renderWelcomeEmail, createMagicLink, sendWelcomeLeadEmail } = await import(pathToFileURL(compiled).href);
+
+		// Magic Link: JWT de 3 segmentos apontando para o endpoint de login sem senha
+		const link = createMagicLink('ana@barbearia.com');
+		assert.match(link, /\/auth\/magic\?token=/);
+		const token = decodeURIComponent(link.split('token=')[1]);
+		assert.equal(token.split('.').length, 3, 'magic link carrega um JWT');
+
+		// Template: variáveis dinâmicas + copy exata + CTA com o magic link.
+		// React SSR insere marcadores <!-- --> entre nós de texto; removidos p/ asserção.
+		const clean = s => s.replace(/<!-- -->/g, '');
+		const { subject, html } = await renderWelcomeEmail({ email: 'ana@barbearia.com', nome: 'Ana Souza', ferramenta_usada: 'Calculadora' });
+		assert.match(subject, /Seu acesso ao Lidar Core está liberado/);
+		assert.match(clean(html), /Bem-vindo\(a\), Ana!/); // primeiro nome derivado
+		assert.match(html, /Seu acesso ao Lidar Core está liberado/);
+		assert.match(html, /relatório da sua <strong>Calculadora<\/strong> está[\s\S]*salvo na sua conta/);
+		assert.match(html, /Assistente de Cobranças/);
+		assert.match(html, /href="[^"]*\/auth\/magic\?token=/); // botão = magic link
+
+		// nome ausente -> fallback "empreendedor" (nunca quebra)
+		const anon = await renderWelcomeEmail({ email: 'x@y.com', ferramenta_usada: 'Recibo' });
+		assert.match(clean(anon.html), /Bem-vindo\(a\), empreendedor!/);
+		assert.match(anon.html, /<strong>Recibo<\/strong>/);
+
+		// Sem provedor configurado -> "skipped", e NUNCA lança (falha silenciosa)
+		delete process.env.RESEND_API_KEY;
+		delete process.env.SMTP_HOST;
+		const result = await sendWelcomeLeadEmail({ email: 'ana@barbearia.com', nome: 'Ana', ferramenta_usada: 'Oráculo' });
+		assert.equal(result.sent, false);
+		assert.equal(result.provider, 'skipped');
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
 console.log('ALL SMOKE TESTS PASSED');

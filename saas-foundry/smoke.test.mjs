@@ -588,4 +588,39 @@ try {
 	assert.match(margin, /Informe o custo para começar/); // estado neutro sem input
 }
 
+// 19. Isca digital (public-tools): a matemática da precificação é a mesma do Tier 1
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./factory-shell/src/public-tools/pricing.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-pricing-')), 'pricing.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { computePrice, toNumber } = await import(pathToFileURL(compiled).href);
+
+		// custo 100, imposto 12%, margem 30% -> 100 / 0.58 = 172,41...
+		const healthy = computePrice(100, 12, 30);
+		assert.ok(Math.abs(healthy.price - 172.4137931) < 1e-6);
+		assert.equal(healthy.viable, true);
+		assert.equal(healthy.healthy, true);
+		assert.ok(Math.abs(healthy.netProfit - healthy.price * 0.3) < 1e-9);
+
+		// margem < 10% -> ainda viável, mas não saudável
+		assert.equal(computePrice(100, 5, 5).healthy, false);
+		// impostos + margem >= 100% -> pagaria para trabalhar (inviável)
+		assert.equal(computePrice(100, 60, 50).viable, false);
+		assert.equal(computePrice(0, 10, 30).viable, false);
+
+		// toNumber: vírgula BR, negativos e lixo viram 0
+		assert.equal(toNumber('1.234,5'.replace('.', '')), 1234.5);
+		assert.equal(toNumber('-5'), 0);
+		assert.equal(toNumber('abc'), 0);
+		assert.equal(toNumber(''), 0);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
 console.log('ALL SMOKE TESTS PASSED');

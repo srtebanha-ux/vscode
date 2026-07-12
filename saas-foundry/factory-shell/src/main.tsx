@@ -13,6 +13,9 @@ import { capturePageview, identifyTenant, posthogClient, telemetrySink } from '.
 import { AuthProvider, RequireAuth, useAuth, type UserRole } from './auth/AuthProvider';
 import { createPluginRegistry } from './pluginCatalog';
 import { LandingPage } from './public/LandingPage';
+import { LeadMagnetTool } from './public-tools/LeadMagnetTool';
+import { PublicReceiptMaker } from './public-tools/PublicReceiptMaker';
+import type { Lead } from './public-tools/leadStore';
 import { getFirebase, isFirebaseConfigured } from './services/firebaseConfig';
 import { FirebaseApiService } from './services/FirebaseApiService';
 import './styles.css';
@@ -98,6 +101,16 @@ function Root(): ReactElement {
 
 	if (router.path === '/' || router.path === '') {
 		return <LandingPage onStart={() => router.navigate('/storefront')} onEnter={() => router.navigate('/app')} />;
+	}
+
+	// Iscas digitais públicas (PLG): ferramenta pronta, captura de lead, sem auth nem shell.
+	const captureLead = (lead: Lead, tool: string): void =>
+		telemetrySink.capture('Lead Capturado', { tool, email: lead.email, name: lead.name });
+	if (router.path === '/tools/pricing') {
+		return <LeadMagnetTool onLeadCapture={captureLead} onEnter={() => router.navigate('/app')} />;
+	}
+	if (router.path === '/tools/receipt') {
+		return <PublicReceiptMaker onLeadCapture={captureLead} onEnter={() => router.navigate('/app')} />;
 	}
 
 	if (isFirebaseConfigured) {

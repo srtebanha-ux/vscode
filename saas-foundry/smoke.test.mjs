@@ -262,6 +262,9 @@ const forbidden = [
 	'./factory-shell/src/security/RoleGuard.tsx',
 	'./factory-shell/src/security/RoleContext.tsx',
 	'./factory-shell/src/security/navigation.tsx',
+	// Configurações fiscais: UI de cofre + validação pura do certificado, sem Firebase.
+	'./factory-shell/src/settings/TaxSettings.tsx',
+	'./factory-shell/src/settings/certFile.ts',
 	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
 	'./api/lib/security/apiGuard.ts',
 	'./api/secure-invoices/route.ts',
@@ -1208,6 +1211,37 @@ try {
 		delete process.env.JWT_SECRET;
 		await rm(join(compiled, '..'), { recursive: true, force: true });
 		if (guardDir) await rm(guardDir, { recursive: true, force: true });
+	}
+}
+
+// 33. Configurações Fiscais: validação do Certificado A1 (.pfx/.p12) fail-closed
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./factory-shell/src/settings/certFile.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-cert-')), 'certFile.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { CERT_EXTENSIONS, MAX_CERT_BYTES, isAllowedCertFile, validateCertFile } = await import(pathToFileURL(compiled).href);
+
+		// Só PKCS#12 (.pfx / .p12) — case-insensitive; qualquer outra coisa é barrada
+		assert.deepEqual([...CERT_EXTENSIONS], ['.pfx', '.p12']);
+		assert.equal(isAllowedCertFile('empresa.pfx'), true);
+		assert.equal(isAllowedCertFile('EMPRESA.P12'), true);
+		assert.equal(isAllowedCertFile('certificado.pem'), false); // formato errado
+		assert.equal(isAllowedCertFile('virus.pfx.exe'), false);   // dupla extensão
+		assert.equal(isAllowedCertFile(''), false);
+
+		// validateCertFile: extensão + tamanho (fail-closed)
+		assert.equal(validateCertFile({ name: 'a1.pfx', size: 4096 }).ok, true);
+		assert.equal(validateCertFile({ name: 'a1.txt', size: 4096 }).ok, false); // formato
+		assert.equal(validateCertFile({ name: 'a1.pfx', size: 0 }).ok, false);    // vazio
+		assert.equal(validateCertFile({ name: 'a1.pfx', size: MAX_CERT_BYTES + 1 }).ok, false); // grande demais
+		assert.match(validateCertFile({ name: 'a1.txt', size: 10 }).error, /\.pfx ou \.p12/);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
 	}
 }
 

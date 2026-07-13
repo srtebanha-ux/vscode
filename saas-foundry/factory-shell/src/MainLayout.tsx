@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { BrainCircuit, Calculator, CircleDollarSign, FileText, Hexagon, Home, Landmark, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Puzzle, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
+import { BrainCircuit, Calculator, CircleDollarSign, FileText, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Puzzle, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
 
 export interface SessionInfo {
@@ -46,6 +46,7 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 			{ id: 'nav-home', label: 'Início', hint: 'Painel principal', icon: Home, keywords: 'home dashboard painel', run: () => onNavigate('/app') },
 			{ id: 'nav-store', label: 'Marketplace', hint: 'Ativar módulos e assinatura', icon: Store, keywords: 'loja store módulos assinatura', run: () => onNavigate('/marketplace') },
 			{ id: 'nav-billing', label: 'Faturamento', hint: 'Consumo de IA, plano e faturas', icon: Receipt, keywords: 'faturamento billing assinatura fatura tokens cota plano stripe', run: () => onNavigate('/billing') },
+			{ id: 'nav-tax-settings', label: 'Configurações Fiscais', hint: 'Certificado A1 e emissão automática', icon: Lock, keywords: 'certificado a1 fiscal emissão nota configurações segurança pfx p12', run: () => onNavigate('/settings/fiscal') },
 			...plugins.map(plugin => ({
 				id: `mod-${plugin.id}`,
 				label: plugin.displayName ?? plugin.id,

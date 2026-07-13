@@ -262,6 +262,9 @@ const forbidden = [
 	'./factory-shell/src/security/RoleGuard.tsx',
 	'./factory-shell/src/security/RoleContext.tsx',
 	'./factory-shell/src/security/navigation.tsx',
+	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
+	'./api/lib/security/apiGuard.ts',
+	'./api/secure-invoices/route.ts',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',
@@ -1062,6 +1065,111 @@ try {
 		assert.equal(decodeRoleFromJwt(''), null);
 	} finally {
 		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 32. Zero-Trust API (apiGuard + /api/secure-invoices): auth + RBAC + isolamento
+{
+	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+	process.env.JWT_SECRET = SECRET;
+	const { default: jsonwebtoken } = await import('jsonwebtoken');
+	const sign = (claims, opts = {}) => jsonwebtoken.sign(claims, SECRET, { algorithm: 'HS256', ...opts });
+
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./api/secure-invoices/route.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken']
+	});
+	// Temp dir sob a raiz do repo: 'jsonwebtoken' (external) resolve pelo node_modules do projeto.
+	const compiled = join(await mkdtemp(new URL('./.smoke-apiguard-', import.meta.url).pathname), 'route.mjs');
+	let guardDir = null;
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { GET, POST, default: methodHandler } = await import(pathToFileURL(compiled).href);
+
+		// Também compila o guard isolado para checar as primitivas puras + o contrato de cargos.
+		const guardBuild = await esbuild.build({
+			entryPoints: [new URL('./api/lib/security/apiGuard.ts', import.meta.url).pathname],
+			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken']
+		});
+		guardDir = await mkdtemp(new URL('./.smoke-guardlib-', import.meta.url).pathname);
+		const guardFile = join(guardDir, 'guard.mjs');
+		await writeFile(guardFile, guardBuild.outputFiles[0].text);
+		const { SERVER_ROLES, extractBearer, extractCookieToken, hasRequiredRole, scopeWhere, scopeCreate, assertOwnership, TenantIsolationError } = await import(pathToFileURL(guardFile).href);
+
+		// Contrato de cargos idêntico ao RBAC do front-end (evita drift servidor/cliente)
+		assert.deepEqual([...SERVER_ROLES], ['ROLE_PME', 'ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER']);
+
+		// Extração de token: Bearer e cookie de sessão; lixo -> null
+		const goodJwt = sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
+		assert.equal(extractBearer(`Bearer ${goodJwt}`), goodJwt);
+		for (const bad of [null, '', 'Basic x', 'Bearer', 'Bearer a.b', `Bearer ${goodJwt} extra`]) assert.equal(extractBearer(bad), null);
+		assert.equal(extractCookieToken(`foo=1; __lidar_session=${goodJwt}; bar=2`), goodJwt);
+		assert.equal(extractCookieToken('foo=1; bar=2'), null);
+
+		// Primitivas de isolamento: tenantId injetado por último vence o do cliente
+		const principal = { userId: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' };
+		assert.deepEqual(scopeWhere(principal, { id: 'x', tenantId: 'tnt_beta' }), { id: 'x', tenantId: 'tnt_alpha' });
+		assert.deepEqual(scopeCreate(principal, { valor: 10, tenantId: 'tnt_beta' }), { valor: 10, tenantId: 'tnt_alpha' });
+		assert.equal(hasRequiredRole('ROLE_PME', ['ROLE_ADMIN_CONTROLLER']), false);
+		assert.throws(() => assertOwnership(principal, { tenantId: 'tnt_beta' }), TenantIsolationError);
+		assert.equal(assertOwnership(principal, { tenantId: 'tnt_alpha' }).tenantId, 'tnt_alpha');
+
+		const url = 'https://lidarcore.example/api/secure-invoices';
+		const get = (headers) => GET(new Request(url, { method: 'GET', headers }));
+		const bearer = t => ({ authorization: `Bearer ${t}` });
+
+		// 1) AUTENTICAÇÃO: sem token / token inválido / assinado com outro segredo -> 401
+		assert.equal((await get({})).status, 401);
+		assert.equal((await get(bearer('a.b.c'))).status, 401);
+		// Token bem-formado, porém assinado com outro segredo -> assinatura inválida -> 401
+		const forgedSig = jsonwebtoken.sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' }, 'OUTRO-SEGREDO-COMPLETAMENTE-DIFERENTE', { algorithm: 'HS256' });
+		assert.equal((await get(bearer(forgedSig))).status, 401);
+		// Token expirado -> 401 (verify valida exp)
+		const expired = sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' }, { expiresIn: -30 });
+		assert.equal((await get(bearer(expired))).status, 401);
+		// Claims fora do contrato (sem tenantId / role desconhecido) -> 401
+		assert.equal((await get(bearer(sign({ uid: 'u1', role: 'ROLE_ADMIN_CONTROLLER' })))).status, 401);
+		assert.equal((await get(bearer(sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_HACKER' })))).status, 401);
+
+		// 2) RBAC no servidor: PME autenticado numa rota Enterprise -> 403 (não 401)
+		const pmeToken = sign({ uid: 'u9', tenantId: 'tnt_alpha', role: 'ROLE_PME' });
+		assert.equal((await get(bearer(pmeToken))).status, 403);
+
+		// 3) ISOLAMENTO: admin de alpha só enxerga notas de alpha
+		const alpha = sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
+		const listRes = await get(bearer(alpha));
+		assert.equal(listRes.status, 200);
+		const list = await listRes.json();
+		assert.equal(list.tenantId, 'tnt_alpha');
+		assert.ok(list.count >= 2 && list.invoices.every(inv => inv.tenantId === 'tnt_alpha'), 'só notas do próprio tenant');
+
+		// IDOR: forçar o id de uma nota de OUTRO tenant (inv_b1 é de tnt_beta) -> 404, nunca vaza
+		const idorRes = await get({ ...bearer(alpha) });
+		assert.equal(idorRes.status, 200); // sanity
+		const forced = await GET(new Request(`${url}?id=inv_b1`, { method: 'GET', headers: bearer(alpha) }));
+		assert.equal(forced.status, 404, 'nota de outro tenant é invisível (IDOR bloqueado)');
+		// A própria nota, por id, é acessível
+		const own = await GET(new Request(`${url}?id=inv_a1`, { method: 'GET', headers: bearer(alpha) }));
+		assert.equal(own.status, 200);
+
+		// POST válido: a nota nasce carimbada com o tenant do TOKEN (não do corpo)
+		const created = await POST(new Request(url, { method: 'POST', headers: { ...bearer(alpha), 'content-type': 'application/json' }, body: JSON.stringify({ cliente: 'Nova Alpha', valor: 5000 }) }));
+		assert.equal(created.status, 201);
+		assert.equal((await created.json()).invoice.tenantId, 'tnt_alpha', 'nota criada pertence ao tenant do token');
+		// Injeção de tenantId no corpo: strictObject barra o campo extra -> 422 (fail-closed)
+		const injected = await POST(new Request(url, { method: 'POST', headers: { ...bearer(alpha), 'content-type': 'application/json' }, body: JSON.stringify({ cliente: 'Forjada', valor: 5000, tenantId: 'tnt_beta' }) }));
+		assert.equal(injected.status, 422, 'campo tenantId forjado no corpo é rejeitado');
+		// Corpo inválido (valor negativo) -> 422
+		const badBody = await POST(new Request(url, { method: 'POST', headers: { ...bearer(alpha), 'content-type': 'application/json' }, body: JSON.stringify({ cliente: 'x', valor: -1 }) }));
+		assert.equal(badBody.status, 422);
+
+		// Método não suportado -> 405
+		assert.equal((await methodHandler(new Request(url, { method: 'DELETE', headers: bearer(alpha) }))).status, 405);
+	} finally {
+		delete process.env.JWT_SECRET;
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+		if (guardDir) await rm(guardDir, { recursive: true, force: true });
 	}
 }
 

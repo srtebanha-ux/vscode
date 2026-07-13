@@ -1,3 +1,7 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Smoke-test transient build dirs
+.smoke-apiguard-*/
+.smoke-guardlib-*/

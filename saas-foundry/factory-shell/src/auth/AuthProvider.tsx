@@ -1,13 +1,18 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import {
+	GoogleAuthProvider,
+	createUserWithEmailAndPassword,
 	onAuthStateChanged,
+	sendSignInLinkToEmail,
 	signInWithEmailAndPassword,
+	signInWithPopup,
 	signOut as firebaseSignOut,
+	updateProfile,
 	type User
 } from 'firebase/auth';
 import { Loader2 } from 'lucide-react';
 import { getFirebase } from '../services/firebaseConfig';
-import { LoginScreen } from './LoginScreen';
+import { AuthPage } from './AuthPage';
 
 export type UserRole = 'SUPER_ADMIN' | 'USER';
 
@@ -17,8 +22,17 @@ export interface AuthState {
 	readonly role: UserRole;
 	readonly loading: boolean;
 	readonly signIn: (email: string, password: string) => Promise<void>;
+	readonly signUp: (email: string, password: string, company: string) => Promise<void>;
+	readonly signInWithGoogle: () => Promise<void>;
+	readonly sendMagicLink: (email: string) => Promise<void>;
 	readonly signOut: () => Promise<void>;
 }
+
+/** Onde o usuário volta a cair ao clicar no link mágico do e-mail. */
+const MAGIC_LINK_SETTINGS = {
+	get url(): string { return `${window.location.origin}/app`; },
+	handleCodeInApp: true
+} as const;
 
 const AuthContext = createContext<AuthState | null>(null);
 
@@ -60,6 +74,19 @@ export function AuthProvider({ children }: { readonly children: ReactNode }): Re
 			signIn: async (email, password) => {
 				await signInWithEmailAndPassword(auth, email, password);
 			},
+			signUp: async (email, password, company) => {
+				const credential = await createUserWithEmailAndPassword(auth, email, password);
+				if (company.trim()) {
+					await updateProfile(credential.user, { displayName: company.trim() });
+				}
+			},
+			signInWithGoogle: async () => {
+				await signInWithPopup(auth, new GoogleAuthProvider());
+			},
+			sendMagicLink: async email => {
+				await sendSignInLinkToEmail(auth, email, { url: MAGIC_LINK_SETTINGS.url, handleCodeInApp: MAGIC_LINK_SETTINGS.handleCodeInApp });
+				window.localStorage.setItem('foundry:magic-email', email);
+			},
 			signOut: () => firebaseSignOut(auth)
 		}),
 		[auth, user, role, loading]
@@ -68,9 +95,9 @@ export function AuthProvider({ children }: { readonly children: ReactNode }): Re
 	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-/** Route guard: unauthenticated sessions only ever see the login screen. */
+/** Route guard: unauthenticated sessions only ever see a tela unificada de acesso. */
 export function RequireAuth({ children }: { readonly children: ReactNode }): ReactElement {
-	const { user, loading } = useAuth();
+	const { user, loading, signIn, signUp, signInWithGoogle, sendMagicLink } = useAuth();
 
 	if (loading) {
 		return (
@@ -80,7 +107,16 @@ export function RequireAuth({ children }: { readonly children: ReactNode }): Rea
 		);
 	}
 	if (!user) {
-		return <LoginScreen />;
+		return (
+			<AuthPage
+				handlers={{
+					onPasswordLogin: ({ email, password }) => signIn(email, password),
+					onSignUp: ({ email, password, company }) => signUp(email, password, company),
+					onGoogle: signInWithGoogle,
+					onMagicLink: sendMagicLink
+				}}
+			/>
+		);
 	}
 	return <>{children}</>;
 }

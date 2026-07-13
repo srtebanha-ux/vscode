@@ -255,6 +255,8 @@ const forbidden = [
 	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
 	'./modules-library/essentials/margin-calculator/AIPricingOracle.tsx',
 	'./modules-library/essentials/smart-invoice/SmartInvoiceHelper.tsx',
+	// A tela de acesso é apresentacional e desacoplada: o Firebase mora só no AuthProvider.
+	'./factory-shell/src/auth/AuthPage.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',

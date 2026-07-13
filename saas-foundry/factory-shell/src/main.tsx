@@ -11,6 +11,7 @@ import { PostHogProvider } from 'posthog-js/react';
 import { App } from './App';
 import { capturePageview, identifyTenant, posthogClient, telemetrySink } from './services/analytics';
 import { AuthProvider, RequireAuth, useAuth, type UserRole } from './auth/AuthProvider';
+import { AuthPage } from './auth/AuthPage';
 import { createPluginRegistry } from './pluginCatalog';
 import { LandingPage } from './public/LandingPage';
 import { EnterpriseContact, type EnterpriseLead } from './public/EnterpriseContact';
@@ -128,6 +129,11 @@ function Root(): ReactElement {
 	}
 	if (router.path === '/tools/receipt') {
 		return <PublicReceiptMaker onLeadCapture={captureLead} onEnter={() => router.navigate('/app')} />;
+	}
+
+	// Tela unificada de acesso, navegável direto (modo demonstração quando não há Firebase).
+	if (router.path === '/auth' && !isFirebaseConfigured) {
+		return <AuthPage handlers={{ onPasswordLogin: async () => router.navigate('/app'), onSignUp: async () => router.navigate('/app'), onGoogle: async () => router.navigate('/app') }} />;
 	}
 
 	if (isFirebaseConfigured) {

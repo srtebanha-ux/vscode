@@ -1,0 +1,1176 @@
+// Smoke test: exercises the fail-closed pipeline end-to-end. Run: node smoke.test.mjs
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { CoreServicesContext, FactoryService, PluginRegistry } from '@foundry/engine-core';
+import TaskDashboard from './modules-library/task-dashboard/dist/TaskDashboard.js';
+import { ApprovedModuleRegistry } from '@foundry/modules-library';
+import { SandboxHost, ScopeDeniedError } from '@foundry/sandbox-runtime';
+import { createSecurityMiddleware, GatewayRouter } from '@foundry/api-gateway';
+
+const registry = new ApprovedModuleRegistry();
+const integrity = 'sha256-' + 'A'.repeat(43) + '=';
+registry.register({
+	blockId: 'block.crud-table', version: '1.0.0', integrity,
+	certifiedScopes: ['storage:read', 'storage:write', 'ui:render'],
+	auditedAt: '2026-07-01T00:00:00Z', auditedBy: 'sec-team'
+});
+
+const factory = new FactoryService(registry);
+const policy = { tenantId: 'tnt1', allowedScopes: ['storage:read', 'storage:write', 'ui:render'], maxInstances: 5 };
+const manifest = {
+	name: 'invoice-app', displayName: 'Invoices', version: '1.0.0',
+	scopes: ['storage:read', 'storage:write'],
+	dependencies: [{ blockId: 'block.crud-table', version: '1.0.0', integrity }],
+	outboundAllowlist: [],
+	limits: { maxMemoryMb: 64, maxCpuMs: 1000, maxStorageMb: 10, maxOutboundReqPerMin: 0 },
+	templateVars: { title: 'Faturas' }
+};
+
+// 1. Valid provision
+const r1 = factory.provision(manifest, policy);
+assert.equal(r1.ok, true);
+const instance = { ...r1.instance, status: 'running' };
+
+// 2. Schema rejection (unknown property)
+assert.equal(factory.provision({ ...manifest, evil: 'x' }, policy).ok, false);
+
+// 3. Scope beyond tenant plan
+const r3 = factory.provision({ ...manifest, name: 'net-app', scopes: ['storage:read', 'net:outbound'] }, policy);
+assert.equal(r3.ok, false); assert.equal(r3.error.code, 'scope-not-allowed-for-tenant');
+
+// 4. Unapproved dependency
+const r4 = factory.provision({ ...manifest, name: 'rogue-app', dependencies: [{ blockId: 'block.rogue', version: '1.0.0', integrity }] }, policy);
+assert.equal(r4.ok, false); assert.equal(r4.error.code, 'unapproved-dependency');
+
+// 5. Sandbox: namespace prefixing + scope denial
+const kv = new Map();
+const host = new SandboxHost({
+	kvGet: async k => kv.get(k), kvSet: async (k, v) => void kv.set(k, v),
+	httpFetch: async () => ({ status: 200, body: '' }),
+	busEmit: async () => {}, busSubscribe: () => () => {}
+});
+const ctx = host.mount(instance);
+await ctx.storage.set('doc1', 'hello');
+assert.equal([...kv.keys()][0], `${instance.namespace}:doc1`);
+await assert.rejects(() => ctx.net.fetch(new URL('https://evil.example')), ScopeDeniedError);
+await assert.rejects(() => ctx.storage.set('../otherns', 'x'), /invalid storage key/);
+
+// 6. Gateway: token bound to another namespace is denied
+const verifier = { verify: t => t === 'tokA' ? { tenantId: 'tnt1', namespace: instance.namespace, scopes: [] } : { tenantId: 'tnt2', namespace: 'ns_tnt2_other_deadbeef', scopes: [] } };
+const router = new GatewayRouter(async (ns, _req, path) => ({ status: 200, headers: {}, body: JSON.stringify({ ns, path }) }));
+router.use(createSecurityMiddleware(verifier, 'apps.foundry.example'));
+const mkReq = (token, path) => ({ method: 'GET', path, headers: { authorization: `Bearer ${token}` }, body: null, context: {} });
+
+const ok = await router.handle(mkReq('tokA', `/apps/${instance.namespace}/items`));
+assert.equal(ok.status, 200);
+assert.equal(JSON.parse(ok.body).path, '/items');
+assert.equal(ok.headers['x-frame-options'], 'DENY');
+
+const crossNs = await router.handle(mkReq('tokB', `/apps/${instance.namespace}/items`));
+assert.equal(crossNs.status, 403);
+
+const crossOrigin = await router.handle({ ...mkReq('tokA', `/apps/${instance.namespace}/items`), headers: { authorization: 'Bearer tokA', origin: 'https://ns_tnt2_other_deadbeef.apps.foundry.example' } });
+assert.equal(crossOrigin.status, 403);
+
+const traversal = await router.handle(mkReq('tokA', `/apps/${instance.namespace}/../ns_tnt2_other/items`));
+assert.equal(traversal.status, 400);
+
+// 7. PluginRegistry: scan validation + authorization-gated dynamic loading
+const lib = await mkdtemp(join(tmpdir(), 'foundry-lib-'));
+try {
+	const writePlugin = async (dir, manifest, entrySource) => {
+		await mkdir(join(lib, dir), { recursive: true });
+		await writeFile(join(lib, dir, 'manifest.json'), JSON.stringify(manifest));
+		if (entrySource) {
+			await writeFile(join(lib, dir, 'index.js'), entrySource);
+		}
+	};
+	await writePlugin(
+		'hello',
+		{ id: 'block.hello', version: '1.0.0', permissions: ['storage:read'], entryPoint: 'index.js' },
+		'export function createPlugin(ctx) { return { greet: () => `hello from ${ctx.namespace}` }; }'
+	);
+	await writePlugin('no-entry-field', { id: 'block.broken', version: '1.0.0', permissions: [] }); // missing entryPoint
+	await writePlugin('traversal', { id: 'block.evil', version: '1.0.0', permissions: [], entryPoint: '../../outside.js' });
+	await writePlugin('bad-scope', { id: 'block.rogue', version: '1.0.0', permissions: ['core:cross-namespace'], entryPoint: 'index.js' });
+
+	const pluginRegistry = new PluginRegistry(lib);
+	const report = await pluginRegistry.scan();
+	assert.deepEqual(report.registered, ['block.hello']);
+	assert.equal(report.skipped.length, 3); // schema catches all three invalid manifests
+
+	// Public listing never leaks entryPoint
+	assert.equal(Object.hasOwn(pluginRegistry.list()[0], 'entryPoint'), false);
+
+	const alice = { userId: 'u1', tenantId: 'tnt1', grantedScopes: ['storage:read'] };
+	const mallory = { userId: 'u2', tenantId: 'tnt2', grantedScopes: ['ui:render'] };
+
+	const denied = await pluginRegistry.loadPlugin('block.hello', mallory);
+	assert.equal(denied.ok, false);
+	assert.equal(denied.error.code, 'missing-scope');
+
+	const unknown = await pluginRegistry.loadPlugin('block.ghost', alice);
+	assert.equal(unknown.ok, false);
+	assert.equal(unknown.error.code, 'unknown-plugin');
+
+	const loaded = await pluginRegistry.loadPlugin('block.hello', alice);
+	assert.equal(loaded.ok, true);
+	assert.equal(loaded.plugin.create({ namespace: instance.namespace }).greet(), `hello from ${instance.namespace}`);
+} finally {
+	await rm(lib, { recursive: true, force: true });
+}
+
+// 8. task-dashboard plugin: registered from the real modules-library, scope-gated
+// Telemetria invisível: loads e negações viram eventos sem código no módulo
+const capturedEvents = [];
+const testSink = { capture: (event, props) => capturedEvents.push({ event, props }) };
+const realRegistry = new PluginRegistry(new URL('./modules-library', import.meta.url).pathname, undefined, testSink);
+const realReport = await realRegistry.scan();
+assert.ok(realReport.registered.includes('task-dashboard-v1'));
+
+const noWrite = { userId: 'u3', tenantId: 'tnt1', grantedScopes: ['read:tasks'] };
+const deniedDash = await realRegistry.loadPlugin('task-dashboard-v1', noWrite);
+assert.equal(deniedDash.ok, false);
+assert.equal(deniedDash.error.code, 'missing-scope');
+assert.equal(deniedDash.error.scope, 'write:tasks');
+assert.deepEqual(capturedEvents[0], {
+	event: 'Acesso a Módulo Negado',
+	props: { moduleId: 'task-dashboard-v1', scope: 'write:tasks', tenantId: 'tnt1' }
+});
+
+// 9. Render gate: authorized -> dashboard; missing scope -> Acesso negado; outside host -> throws
+const mount = (services) =>
+	renderToStaticMarkup(
+		createElement(CoreServicesContext.Provider, { value: services }, createElement(TaskDashboard))
+	);
+const fakeApi = { get: async () => [], put: async () => {} };
+
+const authorizedHtml = mount({ namespace: instance.namespace, grantedScopes: ['read:tasks', 'write:tasks'], api: fakeApi });
+assert.match(authorizedHtml, /animate-pulse/); // LoadingSkeleton: effects don't run in static render
+
+const deniedHtml = mount({ namespace: instance.namespace, grantedScopes: ['read:tasks'], api: fakeApi });
+assert.match(deniedHtml, /Acesso negado/);
+assert.doesNotMatch(deniedHtml, /<h1[^>]*>Task Dashboard<\/h1>/);
+
+assert.throws(() => renderToStaticMarkup(createElement(TaskDashboard)), /outside the Core plugin host/);
+
+// 10. UI integration: AppRouter -> PluginRenderer -> registry-gated mount -> MockApiService data
+const { JSDOM } = await import('jsdom');
+const dom = new JSDOM('<div id="root"></div>', { url: 'https://foundry.example/' });
+globalThis.window = dom.window;
+globalThis.document = dom.window.document;
+const { createRoot } = await import('react-dom/client');
+const { AppRouter, createMockTaskApi, ErrorBoundary } = await import('@foundry/engine-core');
+
+// Bundler stand-in: maps the manifest's .tsx entry to its compiled artifact.
+const uiResolver = entryPath =>
+	import(pathToFileURL(entryPath.replace(/TaskDashboard\.tsx$/, 'dist/TaskDashboard.js')).href);
+const uiRegistry = new PluginRegistry(new URL('./modules-library', import.meta.url).pathname, uiResolver);
+await uiRegistry.scan();
+
+const renderApp = async element => {
+	const container = dom.window.document.createElement('div');
+	const root = createRoot(container);
+	root.render(element);
+	await new Promise(resolve => setTimeout(resolve, 100)); // flush effects + mock latency
+	return container.innerHTML;
+};
+
+const admin = { userId: 'u1', tenantId: 'tnt1', grantedScopes: ['read:tasks', 'write:tasks'] };
+const routeProps = { registry: uiRegistry, principal: admin, api: createMockTaskApi() };
+
+const homeHtml = await renderApp(createElement(AppRouter, { path: '/', ...routeProps }));
+assert.match(homeHtml, /Task Dashboard.*v1\.0\.0/);
+
+const dashHtml = await renderApp(createElement(AppRouter, { path: '/plugins/task-dashboard-v1', ...routeProps }));
+assert.match(dashHtml, /<h1[^>]*>Task Dashboard<\/h1>/);
+assert.match(dashHtml, /Auditar bloco crud-table v1\.1/); // mock task rendered end-to-end
+
+const viewerHtml = await renderApp(
+	createElement(AppRouter, {
+		path: '/plugins/task-dashboard-v1',
+		...routeProps,
+		principal: { ...admin, grantedScopes: ['read:tasks'] }
+	})
+);
+assert.match(viewerHtml, /Acesso negado/);
+assert.match(viewerHtml, /write:tasks/);
+
+const ghostHtml = await renderApp(createElement(AppRouter, { path: '/plugins/ghost-plugin', ...routeProps }));
+assert.match(ghostHtml, /unknown-plugin/);
+
+// Empty collection -> friction-zero EmptyState with CTA
+const { MockApiService } = await import('@foundry/engine-core');
+const emptyHtml = await renderApp(
+	createElement(AppRouter, { path: '/plugins/task-dashboard-v1', ...routeProps, api: new MockApiService({ tasks: [] }) })
+);
+assert.match(emptyHtml, /Sua lista está limpa\./);
+assert.match(emptyHtml, /Adicionar tarefa/);
+
+// Crash isolation: a throwing plugin degrades to the fallback, the shell survives
+const Thrower = () => { throw new Error('boom'); };
+const crashHtml = await renderApp(
+	createElement(ErrorBoundary, { pluginId: 'task-dashboard-v1' }, createElement(Thrower))
+);
+assert.match(crashHtml, /Plugin indisponível/);
+
+// Global boundary: fatal app error -> friendly screen, Recarregar triggers onReload
+const { GlobalErrorBoundary } = await import('@foundry/engine-core');
+let reloaded = false;
+const globalContainer = dom.window.document.createElement('div');
+createRoot(globalContainer).render(
+	createElement(GlobalErrorBoundary, { onReload: () => { reloaded = true; } }, createElement(Thrower))
+);
+await new Promise(resolve => setTimeout(resolve, 50));
+assert.match(globalContainer.innerHTML, /Ops, algo deu errado/);
+const reloadButton = [...globalContainer.querySelectorAll('button')].find(b => b.textContent === 'Recarregar');
+reloadButton.click();
+await new Promise(resolve => setTimeout(resolve, 20));
+assert.equal(reloaded, true);
+
+// 11. Golden rule: only the shell's FirebaseApiService may import firebase.
+// Plugins and engine-core must stay firebase-free (data access via useCoreService only).
+const { readFile: readSrc } = await import('node:fs/promises');
+const forbidden = [
+	'./modules-library/task-dashboard/TaskDashboard.tsx',
+	'./modules-library/creative-production-hub/ModuleView.tsx',
+	'./modules-library/concrete-logistics/ConcreteOrderForm.tsx',
+	'./modules-library/lidar-core-hub/CreativeHub.tsx',
+	'./modules-library/lidar-orchestrator/LidarOrchestrator.tsx',
+	'./modules-library/predictive-bi-agent/PredictiveBIAgent.tsx',
+	'./modules-library/virtual-cfo/VirtualCFO_Agent.tsx',
+	'./modules-library/virtual-cmo/VirtualCMO_Agent.tsx',
+	'./modules-library/enterprise-controllership/EnterpriseControllershipDashboard.tsx',
+	'./modules-library/enterprise-controllership/ExecutiveBriefingGenerator.tsx',
+	'./modules-library/enterprise-controllership/ERPSyncBridge.tsx',
+	'./modules-library/enterprise-controllership/TaxScenarioSimulator.tsx',
+	'./modules-library/enterprise-controllership/FiscalDiscoveryHub.tsx',
+	'./modules-library/essentials/construction-calculator/ConstructionCalculator.tsx',
+	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
+	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
+	'./modules-library/essentials/margin-calculator/AIPricingOracle.tsx',
+	'./modules-library/essentials/smart-invoice/SmartInvoiceHelper.tsx',
+	// A tela de acesso é apresentacional e desacoplada: o Firebase mora só no AuthProvider.
+	'./factory-shell/src/auth/AuthPage.tsx',
+	// Camada de segurança RBAC: lógica pura de cargo, sem acoplamento a Firebase.
+	'./factory-shell/src/security/roles.ts',
+	'./factory-shell/src/security/RoleGuard.tsx',
+	'./factory-shell/src/security/RoleContext.tsx',
+	'./factory-shell/src/security/navigation.tsx',
+	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
+	'./api/lib/security/apiGuard.ts',
+	'./api/secure-invoices/route.ts',
+	'./engine-core/src/index.ts',
+	'./engine-core/src/ui.ts',
+	'./engine-core/src/plugin-host/CoreServices.ts',
+	'./engine-core/src/components/PluginRenderer.tsx',
+	'./engine-core/src/services/PluginRegistry.ts',
+	'./engine-core/src/services/MockApiService.ts'
+];
+for (const file of forbidden) {
+	const source = await readSrc(new URL(file, import.meta.url), 'utf8');
+	assert.doesNotMatch(source, /['"]firebase/, `${file} must not import firebase`);
+}
+
+// 12. Financial guard: no Stripe secret key material anywhere in browser code.
+const { readdir: readDir } = await import('node:fs/promises');
+const shellSrc = new URL('./factory-shell/src/', import.meta.url);
+for (const entry of await readDir(shellSrc, { recursive: true, withFileTypes: true })) {
+	if (!entry.isFile()) { continue; }
+	const source = await readSrc(new URL(`${entry.parentPath}/${entry.name}`, 'file://'), 'utf8');
+	assert.doesNotMatch(source, /sk_(live|test)/, `${entry.name} must not contain a Stripe secret key`);
+}
+
+// 13. Contratos rígidos (Zod): nada entra ou sai fora do padrão
+const {
+	ContractViolationError,
+	concreteOrderModule,
+	serviceOrderSchema,
+	sceneGridModule,
+	scenePayloadSchema,
+	publicationSchema
+} = await import('@foundry/engine-core');
+
+// Logística: entrada válida -> total conciliado matematicamente
+const order = await concreteOrderModule.run({ volumeM3: 8, britaMista: true, pumpPrice: 900 });
+assert.equal(order.total, 8 * 620 + 8 * 18 + 900); // 6004
+assert.equal(order.spec, '35mpa');
+
+// negativo, string, NaN, incremento inválido -> abortados com ContractViolationError
+for (const bad of [
+	{ volumeM3: -1, britaMista: false, pumpPrice: 0 },
+	{ volumeM3: '8', britaMista: false, pumpPrice: 0 },
+	{ volumeM3: 8, britaMista: false, pumpPrice: Number.NaN },
+	{ volumeM3: 8.3, britaMista: false, pumpPrice: 0 },
+	{ volumeM3: 8, britaMista: 'sim', pumpPrice: 0 },
+	{ volumeM3: 8, britaMista: false, pumpPrice: 0, extra: 'x' }
+]) {
+	await assert.rejects(() => concreteOrderModule.run(bad), ContractViolationError);
+}
+
+// conciliação de custos: total adulterado é dado corrompido -> rejeitado
+assert.equal(serviceOrderSchema.safeParse({ ...order, total: order.total + 1 }).success, false);
+
+// Criativo: payload só passa COM as tags obrigatórias de estilo
+const scene = await sceneGridModule.run({ character: 'Core Agent & Core Bridge', basePrompt: 'dueto no telhado ao pôr do sol' });
+assert.match(scene.payload, /estilo animação 3D Pixar/);
+assert.match(scene.payload, /textura do cabelo ondulada \(nunca liso\)/);
+assert.equal(scene.lockApplied, true);
+
+await assert.rejects(() => sceneGridModule.run({ character: 'Core Agent', basePrompt: 'retrato com cabelo liso' }), ContractViolationError);
+await assert.rejects(() => sceneGridModule.run({ character: 'Goku', basePrompt: 'cena qualquer válida' }), ContractViolationError);
+assert.equal(scenePayloadSchema.safeParse({ character: 'Core Agent', payload: 'sem trava', lockApplied: true }).success, false);
+assert.equal(publicationSchema.safeParse({ id: 'pb1', title: 'Título ok', channel: 'Reels', status: 'weird' }).success, false);
+
+// 14. Auto-cura: crash transitório remonta do cache; crash persistente oferece restauração
+const healLib = await mkdtemp(join(tmpdir(), 'foundry-heal-'));
+try {
+	await mkdir(join(healLib, 'heal'), { recursive: true });
+	await writeFile(join(healLib, 'heal', 'manifest.json'), JSON.stringify({ id: 'block.heal', version: '1.0.0', permissions: [], entryPoint: 'index.js' }));
+	await writeFile(join(healLib, 'heal', 'index.js'),
+		'let crashes = 0;\nexport function createPlugin() { return function Crashy() { if (crashes < 1) { crashes += 1; throw new Error("transient boom"); } return null; }; }');
+	await mkdir(join(healLib, 'dead'), { recursive: true });
+	await writeFile(join(healLib, 'dead', 'manifest.json'), JSON.stringify({ id: 'block.dead', version: '1.0.0', permissions: [], entryPoint: 'index.js' }));
+	await writeFile(join(healLib, 'dead', 'index.js'),
+		'export function createPlugin() { return function Dead() { throw new Error("always boom"); }; }');
+
+	const { PluginRenderer } = await import('@foundry/engine-core');
+	const healRegistry = new PluginRegistry(healLib);
+	await healRegistry.scan();
+	const anon = { userId: 'u9', tenantId: 'tnt9', grantedScopes: [] };
+
+	const healedHtml = await (async () => {
+		const container = dom.window.document.createElement('div');
+		createRoot(container).render(createElement(PluginRenderer, { pluginId: 'block.heal', registry: healRegistry, principal: anon, api: fakeApi }));
+		await new Promise(resolve => setTimeout(resolve, 1200)); // crash -> auto-cura (350ms) -> remonta são
+		return container.innerHTML;
+	})();
+	assert.doesNotMatch(healedHtml, /Plugin indisponível/, 'crash transitório deve se auto-curar');
+
+	const deadContainer = dom.window.document.createElement('div');
+	createRoot(deadContainer).render(createElement(PluginRenderer, { pluginId: 'block.dead', registry: healRegistry, principal: anon, api: fakeApi }));
+	await new Promise(resolve => setTimeout(resolve, 1800)); // 2 tentativas esgotadas
+	assert.match(deadContainer.innerHTML, /Plugin indisponível/);
+	assert.match(deadContainer.innerHTML, /Restaurar módulo/);
+} finally {
+	await rm(healLib, { recursive: true, force: true });
+}
+
+// 15. Cognitive Engine (/api/cognitive-engine): Bearer fail-closed + contrato zod + personas
+{
+	const esbuild = await import('esbuild');
+	const routeUrl = new URL('./api/cognitive-engine/route.ts', import.meta.url);
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [routeUrl.pathname],
+		bundle: true,
+		format: 'esm',
+		platform: 'node',
+		write: false,
+		logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-cognitive-')), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const {
+			POST,
+			default: methodHandler,
+			SYSTEM_PROMPTS,
+			extractBearerToken,
+			extractTenantId,
+			quotaStore,
+			BASIC_PLAN_MONTHLY_TOKENS,
+			QUOTA_EXCEEDED_MESSAGE
+		} = await import(pathToFileURL(compiled).href);
+
+		// Identidade decidida no servidor: personas rígidas por agente
+		assert.match(SYSTEM_PROMPTS.CFO, /Diretor Financeiro implacável/);
+		assert.match(SYSTEM_PROMPTS.CFO, /cortes de custos operacionais de PMEs/);
+		assert.match(SYSTEM_PROMPTS.CMO, /Growth Hacker/);
+		assert.match(SYSTEM_PROMPTS.CMO, /baixo custo de aquisição/);
+
+		// Bearer estrutural: só JWT com 3 segmentos base64url passa. payload = {"uid":"u1"}
+		const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ1aWQiOiJ1MSJ9.c2ln';
+		assert.equal(extractBearerToken(`Bearer ${jwt}`), jwt);
+		for (const bad of [null, '', 'Basic abc', 'Bearer', `bearer ${jwt}`, 'Bearer not-a-jwt', 'Bearer a.b', `Bearer ${jwt} extra`]) {
+			assert.equal(extractBearerToken(bad), null, `header "${bad}" deveria ser rejeitado`);
+		}
+
+		// Identidade do tenant sai do payload do JWT
+		assert.equal(extractTenantId(jwt), 'u1');
+		const noUidJwt = 'eyJhbGciOiJSUzI1NiJ9.e30.c2ln'; // payload = {}
+		assert.equal(extractTenantId(noUidJwt), null);
+
+		const call = (init) => POST(new Request('https://lidarcore.example/api/cognitive-engine', { method: 'POST', ...init }));
+		const authed = { authorization: `Bearer ${jwt}`, 'content-type': 'application/json' };
+		const validBody = JSON.stringify({ agentType: 'CFO', contextData: '03/07 PIX +4200; 05/07 FOLHA -9800', userPrompt: 'Qual meu runway?' });
+
+		// Sem login não gasta token de LLM
+		assert.equal((await call({ body: validBody })).status, 401);
+		assert.equal((await call({ headers: { authorization: 'Bearer solto' }, body: validBody })).status, 401);
+		// Token válido na estrutura, mas sem tenant -> 401 (nunca chega à quota nem à LLM)
+		assert.equal((await call({ headers: { authorization: `Bearer ${noUidJwt}`, 'content-type': 'application/json' }, body: validBody })).status, 401);
+
+		// Contrato de entrada fail-closed
+		assert.equal((await call({ headers: authed, body: 'não é json' })).status, 400);
+		for (const badPayload of [
+			{ agentType: 'CEO', contextData: 'contexto suficiente aqui' },
+			{ agentType: 'CFO', contextData: 'curto' },
+			{ agentType: 'CFO', contextData: 'contexto suficiente aqui', extra: 'x' },
+			{ agentType: 'CMO' }
+		]) {
+			const denied = await call({ headers: authed, body: JSON.stringify(badPayload) });
+			assert.equal(denied.status, 400, `payload ${JSON.stringify(badPayload)} deveria falhar`);
+			assert.ok((await denied.json()).issues.length > 0);
+		}
+
+		// Sem ANTHROPIC_API_KEY: modo simulado responde com a persona certa
+		delete process.env.ANTHROPIC_API_KEY;
+		const okCfo = await call({ headers: authed, body: validBody });
+		assert.equal(okCfo.status, 200);
+		const cfoBody = await okCfo.json();
+		assert.equal(cfoBody.agentType, 'CFO');
+		assert.equal(cfoBody.engine, 'simulated');
+		assert.match(cfoBody.analysis, /runway/);
+
+		// Guardião de Custos: primeira chamada do tenant deduz do plano cheio
+		assert.ok(cfoBody.usedTokens > 0, 'a resposta deve custar tokens');
+		assert.equal(cfoBody.remainingTokens, BASIC_PLAN_MONTHLY_TOKENS - cfoBody.usedTokens);
+
+		const okCmo = await call({ headers: authed, body: JSON.stringify({ agentType: 'CMO', contextData: 'Nosso sistema tem agenda, relatórios e integrações.' }) });
+		const cmoBody = await okCmo.json();
+		assert.equal(cmoBody.agentType, 'CMO');
+		assert.match(cmoBody.analysis, /características, não benefícios|conversão/);
+		// Saldo é acumulativo por tenant: segunda chamada desconta ainda mais
+		assert.equal(cmoBody.remainingTokens, cfoBody.remainingTokens - cmoBody.usedTokens);
+
+		// Pre-flight 402: tenant sem saldo é abortado ANTES da LLM
+		const brokeJwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ1aWQiOiJ0ZW5hbnQtc2VtLXNhbGRvIn0.c2ln'; // uid: tenant-sem-saldo
+		await quotaStore.setBalance('tenant-sem-saldo', 0);
+		const brokeRes = await call({ headers: { authorization: `Bearer ${brokeJwt}`, 'content-type': 'application/json' }, body: validBody });
+		assert.equal(brokeRes.status, 402);
+		const brokeBody = await brokeRes.json();
+		assert.equal(brokeBody.error, 'quota-exceeded');
+		assert.equal(brokeBody.message, QUOTA_EXCEEDED_MESSAGE);
+		assert.equal(brokeBody.remainingTokens, 0);
+		// A LLM/simulação não rodou: o saldo continua zerado, não ficou negativo
+		assert.equal(await quotaStore.getBalance('tenant-sem-saldo'), 0);
+
+		// Handler default (functions clássico): método errado -> 405
+		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/cognitive-engine', { method: 'GET' }))).status, 405);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 16. Stripe webhook (/api/webhooks/stripe): assinatura fail-closed + renovação de cota
+{
+	const esbuild = await import('esbuild');
+	const routeUrl = new URL('./api/webhooks/stripe/route.ts', import.meta.url);
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [routeUrl.pathname],
+		bundle: true,
+		format: 'esm',
+		platform: 'node',
+		write: false,
+		logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-webhook-')), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { POST, default: methodHandler, verifyStripeSignature, applyBillingEvent, quotaStore } = await import(pathToFileURL(compiled).href);
+
+		const validSig = 't=1720656000,v1=deadbeefcafe';
+		assert.equal(verifyStripeSignature('{"x":1}', validSig, 'whsec_test'), true);
+		for (const [body, sig, secret] of [
+			['', validSig, 'whsec_test'],           // corpo vazio
+			['{"x":1}', null, 'whsec_test'],          // sem header
+			['{"x":1}', 'v1=abc', 'whsec_test'],      // sem timestamp
+			['{"x":1}', 't=1', 'whsec_test'],         // sem v1
+			['{"x":1}', validSig, 'sk_live_x']        // secret errada
+		]) {
+			assert.equal(verifyStripeSignature(body, sig, secret), false, `sig "${sig}" secret "${secret}" deveria falhar`);
+		}
+
+		// Núcleo puro: invoice.payment_succeeded recarrega a cota do plano
+		const paidEvent = {
+			id: 'evt_1', type: 'invoice.payment_succeeded',
+			data: { object: { id: 'in_1', metadata: { tenantId: 'acme', planId: 'lidar-core-scale' } } }
+		};
+		await quotaStore.setBalance('acme', 0); // cota esgotada
+		const outcome = await applyBillingEvent(paidEvent);
+		assert.equal(outcome.handled, true);
+		assert.equal(outcome.tenantId, 'acme');
+		assert.equal(outcome.tokenBalance, 1_000_000); // cota do plano scale
+		assert.equal(await quotaStore.getBalance('acme'), 1_000_000); // a IA volta a funcionar
+
+		// planId ausente -> cai no básico (nunca deixa o cliente sem cota)
+		const basicOutcome = await applyBillingEvent({ id: 'evt_2', type: 'invoice.payment_succeeded', data: { object: { id: 'in_2', metadata: { tenantId: 'acme2' } } } });
+		assert.equal(basicOutcome.tokenBalance, 100_000);
+
+		// Evento sem tenant e evento ignorado não recarregam nada
+		assert.equal((await applyBillingEvent({ id: 'evt_3', type: 'invoice.payment_succeeded', data: { object: { id: 'in_3' } } })).handled, false);
+		assert.equal((await applyBillingEvent({ id: 'evt_4', type: 'customer.subscription.updated', data: { object: { id: 'sub_1' } } })).reason, 'ignored-event');
+
+		// HTTP: sem secret no ambiente -> 500 (misconfig, fail-closed)
+		delete process.env.STRIPE_WEBHOOK_SECRET;
+		const noSecret = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: JSON.stringify(paidEvent), headers: { 'stripe-signature': validSig } }));
+		assert.equal(noSecret.status, 500);
+
+		// Com secret: assinatura inválida -> 400; válida -> 200 e recarga
+		process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
+		const badSig = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: JSON.stringify(paidEvent), headers: { 'stripe-signature': 'garbage' } }));
+		assert.equal(badSig.status, 400);
+
+		await quotaStore.setBalance('acme', 0);
+		const okRes = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: JSON.stringify(paidEvent), headers: { 'stripe-signature': validSig } }));
+		assert.equal(okRes.status, 200);
+		assert.equal((await okRes.json()).tokenBalance, 1_000_000);
+
+		// Método errado -> 405
+		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'GET' }))).status, 405);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 17. BillingDashboard: barra de consumo + alerta >80% + histórico de faturas
+{
+	const { BillingDashboard } = await import('@foundry/engine-core/ui');
+	const invoices = [
+		{ id: 'in_a', date: '01 jul 2026', amount: 'R$ 197,00', status: 'Pago' },
+		{ id: 'in_b', date: '01 jun 2026', amount: 'R$ 197,00', status: 'Pago' }
+	];
+	const renderBilling = async (remainingTokens) => {
+		const container = dom.window.document.createElement('div');
+		createRoot(container).render(createElement(BillingDashboard, {
+			planName: 'Lidar Core Pro', planPriceLabel: 'R$ 197/mês',
+			totalTokens: 100_000, remainingTokens, invoices,
+			onManageSubscription: () => {}, onUpsell: () => {}
+		}));
+		await new Promise(resolve => setTimeout(resolve, 50));
+		return container;
+	};
+
+	// Uso alto (85%): mostra alerta, upsell e a fração exata
+	const high = await renderBilling(15_000);
+	assert.match(high.innerHTML, /85\.000/);   // usados (pt-BR)
+	assert.match(high.innerHTML, /100\.000/);  // total
+	assert.match(high.innerHTML, /Adicionar Pacote de Dados/);
+	assert.match(high.innerHTML, /Lidar Core Pro/);
+	assert.match(high.innerHTML, /R\$ 197\/mês/);
+	assert.match(high.innerHTML, /Gerenciar Assinatura/);
+	assert.match(high.innerHTML, /Histórico de Faturas/);
+	const progressHigh = high.querySelector('[role="progressbar"]');
+	assert.equal(progressHigh.getAttribute('aria-valuenow'), '85000');
+
+	// Uso baixo (30%): sem upsell, sem alerta
+	const low = await renderBilling(70_000);
+	assert.doesNotMatch(low.innerHTML, /Adicionar Pacote de Dados/);
+	assert.equal(low.querySelector('[role="progressbar"]').getAttribute('aria-valuenow'), '30000');
+}
+
+// 18. Arsenal Essencial (Tier 1): scope-gate ui:render + render inicial dos utilitários
+{
+	const { default: ConstructionCalculator } = await import('./modules-library/essentials/construction-calculator/dist/ConstructionCalculator.js');
+	const { default: QuickReceiptMaker } = await import('./modules-library/essentials/quick-receipt/dist/QuickReceiptMaker.js');
+	const { default: AIPricingOracle } = await import('./modules-library/essentials/margin-calculator/dist/AIPricingOracle.js');
+
+	const withServices = (Component, grantedScopes) =>
+		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
+
+	for (const Component of [ConstructionCalculator, QuickReceiptMaker, AIPricingOracle]) {
+		// Sem ui:render -> fecha o acesso (fail-closed, igual aos módulos enterprise)
+		assert.match(withServices(Component, []), /Acesso negado/);
+		// Fora do host -> lança (nunca renderiza sem os serviços do Core)
+		assert.throws(() => renderToStaticMarkup(createElement(Component)), /outside the Core plugin host/);
+	}
+
+	// Autorizados: render inicial mostra os campos-resultado zerados
+	const construction = withServices(ConstructionCalculator, ['ui:render']);
+	assert.match(construction, /Volume de Concreto/);
+	assert.match(construction, /Custo Total Estimado/);
+	assert.match(construction, /Salvar Orçamento/);
+
+	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
+	assert.match(receipt, /Recibo de Prestação de Serviço/);
+	assert.match(receipt, /Baixar PDF/);
+	// Blindagem legal: checkbox de aceite + botão "Baixar PDF" travado (disabled) por padrão
+	assert.match(receipt, /Compreendo que estes são valores de referência\./);
+	assert.match(receipt, /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Baixar PDF/, 'Baixar PDF começa travado até o aceite');
+
+	// O Oráculo abre na descoberta (assistente de contexto antes da calculadora)
+	const oracle = withServices(AIPricingOracle, ['ui:render']);
+	assert.match(oracle, /O que você vai precificar hoje\?/);
+	assert.match(oracle, /Localização\/Região/);
+	assert.match(oracle, /Analisar Mercado/);
+}
+
+// 30. Assistente Fiscal Inteligente: motor ISS/ICMS por localização + Reforma IBS/CBS
+{
+	const mod = await import('./modules-library/essentials/smart-invoice/dist/SmartInvoiceHelper.js');
+	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, CITY_DIRECTORY, REFORM_REFERENCE } = mod;
+
+	const withServices = (Component, grantedScopes) =>
+		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
+
+	// Fail-closed igual aos demais essenciais
+	assert.match(withServices(SmartInvoiceHelper, []), /Acesso negado/);
+	assert.throws(() => renderToStaticMarkup(createElement(SmartInvoiceHelper)), /outside the Core plugin host/);
+
+	// Render inicial: campos de contexto + disclaimer jurídico exato
+	const html = withServices(SmartInvoiceHelper, ['ui:render']);
+	assert.match(html, /Assistente Fiscal Inteligente/);
+	assert.match(html, /Cidade do seu Cliente/);
+	assert.match(html, /O que você está faturando\?/);
+	assert.match(html, /Prestação de Serviço/);
+	assert.match(html, /Venda de Produto/);
+	assert.match(html, /guias de referência automatizados com base na localização informada/);
+	assert.match(html, /Valide o fechamento fiscal com sua contabilidade\./);
+
+	const find = name => {
+		const city = CITY_DIRECTORY.find(c => c.name === name);
+		assert.ok(city, `${name} deve existir no diretório`);
+		return city;
+	};
+
+	// Operação interna (mesmo município da origem, São Paulo)
+	const sp = find('São Paulo');
+	assert.equal(resolveScope(MERCHANT_PROFILE, sp), 'interna');
+	const servInterna = computeInvoiceTax(MERCHANT_PROFILE, sp, 'servico');
+	assert.equal(servInterna.scope, 'interna');
+	assert.equal(servInterna.interestadual, false);
+	assert.equal(servInterna.lines[0].rate, MERCHANT_PROFILE.issProprio); // ISS do próprio município
+	assert.match(servInterna.lines[0].label, /^ISS/);
+
+	// Serviço para outro município: usa o ISS do município do cliente
+	const bh = find('Belo Horizonte');
+	assert.equal(resolveScope(MERCHANT_PROFILE, bh), 'externa');
+	const servExterna = computeInvoiceTax(MERCHANT_PROFILE, bh, 'servico');
+	assert.equal(servExterna.scope, 'externa');
+	assert.equal(servExterna.lines[0].rate, bh.iss);
+
+	// Produto interestadual SP->BA: tabela de 7% (Sudeste -> Nordeste)
+	const ba = find('Salvador');
+	const prodInterestadual = computeInvoiceTax(MERCHANT_PROFILE, ba, 'produto');
+	assert.equal(prodInterestadual.interestadual, true);
+	assert.equal(prodInterestadual.lines[0].rate, 7);
+	assert.equal(interstateIcms('SP', 'BA'), 7);
+	assert.equal(interstateIcms('SP', 'RJ'), 12); // Sudeste -> Sudeste
+
+	// Produto dentro do estado (SP): ICMS interno do perfil
+	const guarulhos = find('Guarulhos');
+	const prodInterno = computeInvoiceTax(MERCHANT_PROFILE, guarulhos, 'produto');
+	assert.equal(prodInterno.interestadual, false);
+	assert.equal(prodInterno.lines[0].rate, MERCHANT_PROFILE.icmsInterno);
+
+	// PIS/COFINS sempre presente e carga = soma das linhas
+	for (const tax of [servInterna, servExterna, prodInterestadual, prodInterno]) {
+		assert.ok(tax.lines.some(l => l.label === 'PIS + COFINS'), 'PIS/COFINS listado');
+		const soma = tax.lines.reduce((s, l) => s + l.rate, 0);
+		assert.equal(tax.cargaAtual, soma);
+	}
+
+	// Referência da Reforma: IBS + CBS positivos (o IVA dual)
+	assert.ok(REFORM_REFERENCE.ibs > 0 && REFORM_REFERENCE.cbs > 0);
+}
+
+// 25. Blindagem legal + Tour: componentes visuais do engine-core
+{
+	const { DisclaimerBanner, DISCLAIMER_TEXT, GuidedTour } = await import('@foundry/engine-core');
+
+	// Texto legal EXATO
+	assert.match(DISCLAIMER_TEXT, /ferramenta de inteligência e estimativa de mercado/);
+	assert.match(DISCLAIMER_TEXT, /validados com seu contador local/);
+	assert.match(DISCLAIMER_TEXT, /Não nos responsabilizamos por margens operacionais executadas/);
+
+	const banner = renderToStaticMarkup(createElement(DisclaimerBanner));
+	assert.match(banner, /⚠️/);
+	assert.ok(banner.includes(DISCLAIMER_TEXT), 'banner mostra o texto legal literal');
+
+	// GuidedTour não intromete no render inicial (efeito de LocalStorage só roda no cliente)
+	const tour = renderToStaticMarkup(createElement(GuidedTour, { storageKey: 'lidar:tour:test', steps: [{ targetId: 'x', title: 't', description: 'd' }] }));
+	assert.equal(tour, '', 'tour é invisível no SSR/primeiro paint');
+}
+
+// 19. Isca digital (public-tools): a matemática da precificação é a mesma do Tier 1
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./factory-shell/src/public-tools/pricing.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-pricing-')), 'pricing.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { computePrice, toNumber } = await import(pathToFileURL(compiled).href);
+
+		// custo 100, imposto 12%, margem 30% -> 100 / 0.58 = 172,41...
+		const healthy = computePrice(100, 12, 30);
+		assert.ok(Math.abs(healthy.price - 172.4137931) < 1e-6);
+		assert.equal(healthy.viable, true);
+		assert.equal(healthy.healthy, true);
+		assert.ok(Math.abs(healthy.netProfit - healthy.price * 0.3) < 1e-9);
+
+		// margem < 10% -> ainda viável, mas não saudável
+		assert.equal(computePrice(100, 5, 5).healthy, false);
+		// impostos + margem >= 100% -> pagaria para trabalhar (inviável)
+		assert.equal(computePrice(100, 60, 50).viable, false);
+		assert.equal(computePrice(0, 10, 30).viable, false);
+
+		// toNumber: vírgula BR, negativos e lixo viram 0
+		assert.equal(toNumber('1.234,5'.replace('.', '')), 1234.5);
+		assert.equal(toNumber('-5'), 0);
+		assert.equal(toNumber('abc'), 0);
+		assert.equal(toNumber(''), 0);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 20. Máscara monetária BRL (programação defensiva): dígitos como centavos, nunca negativo
+{
+	const { maskBRL, brlToNumber, centsToBRL, numberToBRL, onlyDigits } = await import('@foundry/engine-core');
+	const nbsp = ' '; // Intl BRL usa espaço não-quebrável entre "R$" e o número
+
+	assert.equal(maskBRL('12345'), `R$${nbsp}123,45`);
+	assert.equal(maskBRL('1'), `R$${nbsp}0,01`);
+	assert.equal(maskBRL(''), `R$${nbsp}0,00`);
+	assert.equal(maskBRL('R$ 1.234,56'), `R$${nbsp}1.234,56`); // reaplicar é idempotente
+	assert.equal(maskBRL('abc-99'), `R$${nbsp}0,99`);          // lixo/sinal viram dígitos positivos
+
+	assert.equal(brlToNumber('R$ 123,45'), 123.45);
+	assert.equal(brlToNumber('-50'), 0.5);   // negativo é impossível: só dígitos contam
+	assert.equal(brlToNumber('abc'), 0);
+	assert.equal(centsToBRL(-100), `R$${nbsp}0,00`); // clamp em zero
+	assert.equal(numberToBRL(197), `R$${nbsp}197,00`);
+	assert.equal(onlyDigits('R$ 1.234,56'), '123456');
+}
+
+// 21. Motor de Precificação Defensiva: markup reverso adaptado ao nicho + trava anti-prejuízo
+{
+	const { computePricing } = await import('./modules-library/essentials/margin-calculator/dist/SmartPricingEngine.js');
+	const base = { segment: 'produtos', materialCost: '', packagingCost: '', shippingCost: '', hourlyRate: '', hours: '', gatewayPct: '', taxPct: '', commissionPct: '', marginPct: '' };
+
+	// PRODUTOS: material 100 + embalagem 30 + frete 20 = 150; carga 3,5+6+0+20 = 29,5%
+	const prod = computePricing({ ...base, segment: 'produtos', materialCost: 'R$ 100,00', packagingCost: 'R$ 30,00', shippingCost: 'R$ 20,00', gatewayPct: '3.5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	assert.equal(prod.viable, true);
+	assert.equal(prod.healthy, true);
+	assert.ok(Math.abs(prod.price - 150 / 0.705) < 1e-6, 'markup reverso sobre custos de produto');
+	assert.ok(Math.abs(prod.netProfit - prod.price * 0.2) < 1e-9, 'lucro real sobre a venda');
+	assert.ok(Math.abs(prod.segments.reduce((s, p) => s + p.amount, 0) - prod.price) < 1e-6, 'raio-x fecha a conta');
+	// no nicho produtos não existe segmento de mão de obra
+	assert.equal(prod.segments.some(p => p.label === 'Mão de Obra'), false);
+
+	// SERVIÇOS: hora 80 x 5h = 400 direto; campos de produto são ignorados mesmo se preenchidos
+	const serv = computePricing({ ...base, segment: 'servicos', materialCost: 'R$ 999,00', hourlyRate: 'R$ 80,00', hours: '5', gatewayPct: '3.5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	assert.ok(Math.abs(serv.price - 400 / 0.705) < 1e-6, 'serviço = hora x horas, produto ignorado');
+	assert.equal(serv.segments.some(p => p.label === 'Insumos & Envio'), false);
+	assert.equal(serv.segments.some(p => p.label === 'Mão de Obra'), true);
+
+	// HÍBRIDO: soma produto (150) + serviço (400) = 550 direto
+	const both = computePricing({ ...base, segment: 'ambos', materialCost: 'R$ 150,00', hourlyRate: 'R$ 100,00', hours: '4', gatewayPct: '3.5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	assert.ok(Math.abs(both.price - 550 / 0.705) < 1e-6, 'híbrido soma as duas frentes');
+	assert.equal(both.segments.filter(p => p.label === 'Insumos & Envio' || p.label === 'Mão de Obra').length, 2);
+
+	// carga > 99% -> inviável + trava de prejuízo
+	const overloaded = computePricing({ ...base, segment: 'produtos', materialCost: 'R$ 100,00', gatewayPct: '40', taxPct: '40', commissionPct: '10', marginPct: '15' });
+	assert.equal(overloaded.viable, false);
+	assert.equal(overloaded.danger, true);
+
+	// margem 0 -> lucro zero -> perigo
+	assert.equal(computePricing({ ...base, segment: 'produtos', materialCost: 'R$ 80,00', gatewayPct: '5', taxPct: '6', commissionPct: '0', marginPct: '0' }).danger, true);
+
+	// sem custo direto -> neutro, sem alarme falso
+	const empty = computePricing({ ...base, segment: 'produtos', gatewayPct: '5', taxPct: '6', commissionPct: '0', marginPct: '20' });
+	assert.equal(empty.hasCost, false);
+	assert.equal(empty.danger, false);
+	assert.equal(empty.viable, false);
+}
+
+// 22. Oráculo Universal: análise determinística, custos ocultos e faixa por região
+{
+	const { analyzePricing, ORACLE_SYSTEM_PROMPT } = await import('@foundry/engine-core/pricing');
+
+	// System prompt universal e proibido de cravar valor exato
+	assert.match(ORACLE_SYSTEM_PROMPT, /Especialista Universal em Precificação/);
+	assert.match(ORACLE_SYSTEM_PROMPT, /ESTRITAMENTE PROIBIDO/);
+	assert.match(ORACLE_SYSTEM_PROMPT, /faixa/i);
+
+	// nicho detectado + custos ocultos comuns do nicho
+	const tattoo = analyzePricing('tatuagem realista de 15cm na máquina Cheyenne', 'Curitiba - PR');
+	assert.equal(tattoo.niche, 'Tatuagem');
+	assert.equal(tattoo.segment, 'ambos');
+	assert.equal(tattoo.materialCost, 45);
+	assert.ok(tattoo.marketLow < tattoo.marketHigh, 'sempre faixa, nunca exato');
+	assert.ok(tattoo.hiddenCosts.some(c => /biossegurança/i.test(c)), 'lembra da biossegurança');
+
+	const cake = analyzePricing('bolo de casamento 3 andares', 'Curitiba - PR');
+	assert.ok(cake.hiddenCosts.some(c => /gás|embalagem/i.test(c)), 'bolo -> gás e embalagem');
+
+	const consult = analyzePricing('consultoria de gestão para pequenas empresas', 'Recife - PE');
+	assert.equal(consult.segment, 'servicos');
+	assert.ok(consult.hiddenCosts.some(c => /hora técnica/i.test(c)), 'consultoria -> hora técnica');
+
+	// região cara puxa a faixa para cima (SP = 1.2x); material não muda
+	const spTattoo = analyzePricing('tatuagem grande', 'São Paulo - SP');
+	assert.ok(spTattoo.marketHigh > tattoo.marketHigh, 'SP encarece o mercado');
+	assert.equal(spTattoo.materialCost, tattoo.materialCost);
+
+	// nicho desconhecido -> fallback genérico com faixa, nunca quebra
+	const unknown = analyzePricing('trabalho aleatorio sem categoria conhecida', 'Belém - PA');
+	assert.equal(unknown.niche, 'Serviço Geral');
+	assert.ok(unknown.marketHigh > unknown.marketLow);
+	assert.ok(unknown.hiddenCosts.length > 0);
+}
+
+// 23. Rota /api/pricing-oracle: injeta o system prompt e SEMPRE devolve faixa
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./api/pricing-oracle/route.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-oracle-')), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { POST, default: methodHandler, ORACLE_SYSTEM_PROMPT } = await import(pathToFileURL(compiled).href);
+		const call = (body) => POST(new Request('https://lidarcore.example/api/pricing-oracle', { method: 'POST', headers: { 'content-type': 'application/json' }, body }));
+
+		assert.match(ORACLE_SYSTEM_PROMPT, /Especialista Universal em Precificação/);
+
+		// contrato de entrada fail-closed
+		assert.equal((await call('não é json')).status, 400);
+		assert.equal((await call(JSON.stringify({ description: 'curto', region: 'SP' }))).status, 400);
+		assert.equal((await call(JSON.stringify({ description: 'pintura de 50m² parede interna', region: '' }))).status, 400);
+
+		// sem ANTHROPIC_API_KEY -> simulado, mas SEMPRE em faixa (nunca preço exato)
+		delete process.env.ANTHROPIC_API_KEY;
+		const res = await call(JSON.stringify({ description: 'pintura de 50m² de parede interna com Suvinil', region: 'São Paulo - SP' }));
+		assert.equal(res.status, 200);
+		const body = await res.json();
+		assert.equal(body.engine, 'simulated');
+		assert.equal(body.niche, 'Pintura Residencial');
+		assert.ok(body.marketHigh > body.marketLow, 'resposta é uma faixa, não um valor exato');
+		assert.ok(Array.isArray(body.hiddenCosts) && body.hiddenCosts.length > 0);
+
+		// método errado -> 405
+		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/pricing-oracle', { method: 'GET' }))).status, 405);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 24. Gatilho de Boas-Vindas: template React Email + Magic Link + falha silenciosa
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./services/email/WelcomeEmailService.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent',
+		jsx: 'automatic', // igual ao tsconfig (react-jsx): usa react/jsx-runtime
+		// libs de node com require dinâmico ficam externas (resolvidas em runtime)
+		external: ['resend', 'nodemailer', 'jsonwebtoken', '@react-email/render', '@react-email/components', 'react', 'react/jsx-runtime']
+	});
+	// Temp DENTRO do projeto: os externals resolvem pelo node_modules do saas-foundry.
+	const dir = await mkdtemp(join(new URL('.', import.meta.url).pathname, '.email-smoke-'));
+	const compiled = join(dir, 'service.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		// Seções anteriores deixaram `document` global (jsdom) sem `Element`; o prismjs
+		// (transitivo do @react-email) toma o caminho DOM e quebra. Em serverless real
+		// não há `document`, então isto é só um remendo do harness de teste.
+		globalThis.Element = globalThis.Element ?? globalThis.window?.Element ?? class {};
+		const { renderWelcomeEmail, createMagicLink, sendWelcomeLeadEmail } = await import(pathToFileURL(compiled).href);
+
+		// Magic Link: JWT de 3 segmentos apontando para o endpoint de login sem senha
+		const link = createMagicLink('ana@barbearia.com');
+		assert.match(link, /\/auth\/magic\?token=/);
+		const token = decodeURIComponent(link.split('token=')[1]);
+		assert.equal(token.split('.').length, 3, 'magic link carrega um JWT');
+
+		// Template: variáveis dinâmicas + copy exata + CTA com o magic link.
+		// React SSR insere marcadores <!-- --> entre nós de texto; removidos p/ asserção.
+		const clean = s => s.replace(/<!-- -->/g, '');
+		const { subject, html } = await renderWelcomeEmail({ email: 'ana@barbearia.com', nome: 'Ana Souza', ferramenta_usada: 'Calculadora' });
+		assert.match(subject, /Seu acesso ao Lidar Core está liberado/);
+		assert.match(clean(html), /Bem-vindo\(a\), Ana!/); // primeiro nome derivado
+		assert.match(html, /Seu acesso ao Lidar Core está liberado/);
+		assert.match(html, /relatório da sua <strong>Calculadora<\/strong> está[\s\S]*salvo na sua conta/);
+		assert.match(html, /Assistente de Cobranças/);
+		assert.match(html, /href="[^"]*\/auth\/magic\?token=/); // botão = magic link
+
+		// nome ausente -> fallback "empreendedor" (nunca quebra)
+		const anon = await renderWelcomeEmail({ email: 'x@y.com', ferramenta_usada: 'Recibo' });
+		assert.match(clean(anon.html), /Bem-vindo\(a\), empreendedor!/);
+		assert.match(anon.html, /<strong>Recibo<\/strong>/);
+
+		// Sem provedor configurado -> "skipped", e NUNCA lança (falha silenciosa)
+		delete process.env.RESEND_API_KEY;
+		delete process.env.SMTP_HOST;
+		const result = await sendWelcomeLeadEmail({ email: 'ana@barbearia.com', nome: 'Ana', ferramenta_usada: 'Oráculo' });
+		assert.equal(result.sent, false);
+		assert.equal(result.provider, 'skipped');
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+// 26. Controladoria Enterprise: scope-gate read/write:insights (fail-closed)
+{
+	const { default: EnterpriseControllership } = await import('./modules-library/enterprise-controllership/dist/EnterpriseControllershipDashboard.js');
+	const gated = (grantedScopes) =>
+		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ent', grantedScopes, api: fakeApi } }, createElement(EnterpriseControllership)));
+
+	// Sem os escopos de insights -> acesso negado (dado financeiro nunca vaza)
+	assert.match(gated(['ui:render']), /Acesso negado/);
+	assert.match(gated(['read:insights']), /Acesso negado/); // precisa dos DOIS
+	// Fora do host do Core -> lança
+	assert.throws(() => renderToStaticMarkup(createElement(EnterpriseControllership)), /outside the Core plugin host/);
+}
+
+// 27. Gerador de Dossiê Executivo: munição de argumentação pronta para o consultor humano
+{
+	const { ExecutiveBriefingGenerator } = await import('./modules-library/enterprise-controllership/dist/ExecutiveBriefingGenerator.js');
+	const html = renderToStaticMarkup(createElement(ExecutiveBriefingGenerator, { clientName: 'Metalúrgica Prisma S.A.' }));
+
+	assert.match(html, /DOSSIÊ EXECUTIVO/);
+	assert.match(html, /CONFIDENCIAL/);
+	assert.match(html, /Metalúrgica Prisma S\.A\./);
+	// Cada ralo traz risco + argumento mastigado para a diretoria
+	assert.match(html, /🚨 Risco Encontrado:/);
+	assert.match(html, /Pagamento duplicado de PIS\/COFINS/);
+	assert.match(html, /💡 Sugestão de Argumento para a Diretoria:/);
+	assert.match(html, /Correção imediata gera R\$ 45\.000 de caixa positivo no trimestre/);
+	// Botão de exportação do dossiê
+	assert.match(html, /Gerar Apresentação de Resultados \(PDF\/PPTX\)/);
+}
+
+// 28. Ponte ERP + Simulador Tributário: painel de ingestão + projeção da Reforma
+{
+	const { ERPSyncBridge } = await import('./modules-library/enterprise-controllership/dist/ERPSyncBridge.js');
+	const { projectScenario } = await import('./modules-library/enterprise-controllership/dist/TaxScenarioSimulator.js');
+
+	// Ponte de ingestão: conectores + selo de segurança + ação
+	const erp = renderToStaticMarkup(createElement(ERPSyncBridge));
+	assert.match(erp, /Ponte de Ingestão de Dados/);
+	assert.match(erp, /SAP ERP/);
+	assert.match(erp, /TOTVS Protheus/);
+	assert.match(erp, /Receita Federal \/ XML/);
+	assert.match(erp, /Criptografia End-to-End · Compliance LGPD/);
+	assert.match(erp, /Notas Fiscais Processadas/);
+	assert.match(erp, /Forçar Sincronização de Lote/);
+
+	// Projeção: custo acumulado atual vs. Lidar Core, ROI = economia mensal × meses
+	const proj = projectScenario({ aliquotaAtual: 34, novaAliquota: 26.5, volumeMensal: 1_200_000, meses: 36 });
+	assert.equal(proj.series.length, 36);
+	assert.equal(proj.economiaMensal, 90000); // 1.2M*(34-26,5)% = 90k/mês
+	assert.equal(proj.roiAcumulado, 3_240_000); // 90k × 36
+	assert.equal(proj.series[35].atual, 408000 * 36); // custo mantendo a estrutura
+	assert.equal(proj.series[35].lidar, 318000 * 36); // custo com a estrutura Lidar Core
+	assert.ok(proj.series[35].atual > proj.series[35].lidar, 'a estrutura atual custa mais');
+
+	// Alíquota nova >= atual -> sem economia (nunca ROI negativo fantasioso)
+	const flat = projectScenario({ aliquotaAtual: 20, novaAliquota: 20, volumeMensal: 500000, meses: 36 });
+	assert.equal(flat.roiAcumulado, 0);
+}
+
+// 29. Central de Descoberta Fiscal: feed proativo (Push) + mineração ativa (Pull)
+{
+	const { FiscalDiscoveryHub, filterRecords, sortRecords, FISCAL_RECORDS } = await import(
+		'./modules-library/enterprise-controllership/dist/FiscalDiscoveryHub.js'
+	);
+
+	// Render: aba padrão (Alertas da IA) traz a anomalia crítica da Filial Sul
+	const hub = renderToStaticMarkup(createElement(FiscalDiscoveryHub));
+	assert.match(hub, /Central de Descoberta Fiscal/);
+	assert.match(hub, /Alertas da IA/);
+	assert.match(hub, /Mineração Avançada/);
+	assert.match(hub, /excedeu o limite do teto sindical em 12%/);
+	assert.match(hub, /Risco de passivo trabalhista estimado: R\$ 32\.000/);
+	assert.match(hub, /Adicionar ao Dossiê Trimestral/);
+	assert.match(hub, /Arquivar/);
+
+	// filterRecords: período fiscal (trimestre) restringe corretamente
+	const t1 = filterRecords(FISCAL_RECORDS, { quarter: '2025-T1', filial: 'todas', min: 0, max: Infinity, code: '' });
+	assert.ok(t1.length > 0, 'T1 deve ter registros');
+	assert.ok(t1.every(r => r.data >= '2025-01' && r.data < '2025-04'), 'apenas jan–mar no T1');
+
+	// filterRecords: filial + faixa de valor + classificação fiscal combinam (AND)
+	const sul = filterRecords(FISCAL_RECORDS, { quarter: 'todos', filial: 'Filial Sul', min: 0, max: Infinity, code: '' });
+	assert.ok(sul.every(r => r.filial === 'Filial Sul'), 'somente Filial Sul');
+	const faixa = filterRecords(FISCAL_RECORDS, { quarter: 'todos', filial: 'todas', min: 100000, max: 200000, code: '' });
+	assert.ok(faixa.every(r => r.valor >= 100000 && r.valor <= 200000), 'respeita a faixa de valor');
+	const ncm = filterRecords(FISCAL_RECORDS, { quarter: 'todos', filial: 'todas', min: 0, max: Infinity, code: '2523.29.10' });
+	assert.ok(ncm.length > 0 && ncm.every(r => r.ncm === '2523.29.10'), 'filtra por NCM');
+	const cst = filterRecords(FISCAL_RECORDS, { quarter: 'todos', filial: 'todas', min: 0, max: Infinity, code: '090' });
+	assert.ok(cst.length > 0 && cst.every(r => r.cst === '090'), 'filtra por CST');
+
+	// sortRecords: pura, estável e não muta a entrada
+	const original = [...FISCAL_RECORDS];
+	const desc = sortRecords(FISCAL_RECORDS, 'valor', 'desc');
+	for (let i = 1; i < desc.length; i += 1) assert.ok(desc[i - 1].valor >= desc[i].valor, 'ordenado desc por valor');
+	const asc = sortRecords(FISCAL_RECORDS, 'valor', 'asc');
+	assert.equal(asc[0].valor, Math.min(...FISCAL_RECORDS.map(r => r.valor)));
+	assert.deepEqual([...FISCAL_RECORDS], original, 'sortRecords não muta a fonte');
+}
+
+// 31. RBAC (RoleGuard): lógica de cargo pura, fail-closed e redirecionamento
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./factory-shell/src/security/roles.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-rbac-')), 'roles.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { AppRole, ROLE_HOME, UNAUTHENTICATED_HOME, isRoleAllowed, redirectFor, normalizeRole, decodeRoleFromJwt } = await import(pathToFileURL(compiled).href);
+
+		// Cargos exatos exigidos pelo contrato
+		assert.equal(AppRole.PME, 'ROLE_PME');
+		assert.equal(AppRole.ENTERPRISE_CLIENT, 'ROLE_ENTERPRISE_CLIENT');
+		assert.equal(AppRole.ADMIN_CONTROLLER, 'ROLE_ADMIN_CONTROLLER');
+
+		// Autorização fail-closed
+		assert.equal(isRoleAllowed(AppRole.ADMIN_CONTROLLER, [AppRole.ADMIN_CONTROLLER]), true);
+		assert.equal(isRoleAllowed(AppRole.PME, [AppRole.ADMIN_CONTROLLER]), false); // PME não entra no enterprise
+		assert.equal(isRoleAllowed(AppRole.ADMIN_CONTROLLER, [AppRole.PME, AppRole.ADMIN_CONTROLLER]), true); // admin vê tudo
+		assert.equal(isRoleAllowed(null, [AppRole.PME]), false); // sem cargo -> barrado
+		assert.equal(isRoleAllowed(AppRole.PME, []), false); // rota sem cargos permitidos -> barrado
+
+		// Redirecionamento: cada cargo cai na própria rota-casa; sem cargo -> login
+		assert.equal(redirectFor(AppRole.PME), '/pme-dashboard');
+		assert.equal(redirectFor(AppRole.ENTERPRISE_CLIENT), '/enterprise');
+		assert.equal(redirectFor(AppRole.ADMIN_CONTROLLER), '/controladoria');
+		assert.equal(redirectFor(null), UNAUTHENTICATED_HOME);
+		assert.equal(ROLE_HOME[AppRole.PME], '/pme-dashboard');
+
+		// normalizeRole: só aceita cargos conhecidos
+		assert.equal(normalizeRole('ROLE_PME'), AppRole.PME);
+		assert.equal(normalizeRole('ROLE_HACKER'), null);
+		assert.equal(normalizeRole(undefined), null);
+		assert.equal(normalizeRole(42), null);
+
+		// decodeRoleFromJwt: lê a claim role do payload base64url (sem validar assinatura)
+		const b64url = obj => Buffer.from(JSON.stringify(obj)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+		const jwt = claims => `h.${b64url(claims)}.sig`;
+		assert.equal(decodeRoleFromJwt(jwt({ role: 'ROLE_ADMIN_CONTROLLER', sub: 'u1' })), AppRole.ADMIN_CONTROLLER);
+		assert.equal(decodeRoleFromJwt(jwt({ role: 'ROLE_PME' })), AppRole.PME);
+		assert.equal(decodeRoleFromJwt(jwt({ sub: 'u1' })), null); // sem claim role
+		assert.equal(decodeRoleFromJwt('not-a-jwt'), null); // lixo -> null (nunca lança)
+		assert.equal(decodeRoleFromJwt(''), null);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 32. Zero-Trust API (apiGuard + /api/secure-invoices): auth + RBAC + isolamento
+{
+	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+	process.env.JWT_SECRET = SECRET;
+	const { default: jsonwebtoken } = await import('jsonwebtoken');
+	const sign = (claims, opts = {}) => jsonwebtoken.sign(claims, SECRET, { algorithm: 'HS256', ...opts });
+
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./api/secure-invoices/route.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken']
+	});
+	// Temp dir sob a raiz do repo: 'jsonwebtoken' (external) resolve pelo node_modules do projeto.
+	const compiled = join(await mkdtemp(new URL('./.smoke-apiguard-', import.meta.url).pathname), 'route.mjs');
+	let guardDir = null;
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { GET, POST, default: methodHandler } = await import(pathToFileURL(compiled).href);
+
+		// Também compila o guard isolado para checar as primitivas puras + o contrato de cargos.
+		const guardBuild = await esbuild.build({
+			entryPoints: [new URL('./api/lib/security/apiGuard.ts', import.meta.url).pathname],
+			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken']
+		});
+		guardDir = await mkdtemp(new URL('./.smoke-guardlib-', import.meta.url).pathname);
+		const guardFile = join(guardDir, 'guard.mjs');
+		await writeFile(guardFile, guardBuild.outputFiles[0].text);
+		const { SERVER_ROLES, extractBearer, extractCookieToken, hasRequiredRole, scopeWhere, scopeCreate, assertOwnership, TenantIsolationError } = await import(pathToFileURL(guardFile).href);
+
+		// Contrato de cargos idêntico ao RBAC do front-end (evita drift servidor/cliente)
+		assert.deepEqual([...SERVER_ROLES], ['ROLE_PME', 'ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER']);
+
+		// Extração de token: Bearer e cookie de sessão; lixo -> null
+		const goodJwt = sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
+		assert.equal(extractBearer(`Bearer ${goodJwt}`), goodJwt);
+		for (const bad of [null, '', 'Basic x', 'Bearer', 'Bearer a.b', `Bearer ${goodJwt} extra`]) assert.equal(extractBearer(bad), null);
+		assert.equal(extractCookieToken(`foo=1; __lidar_session=${goodJwt}; bar=2`), goodJwt);
+		assert.equal(extractCookieToken('foo=1; bar=2'), null);
+
+		// Primitivas de isolamento: tenantId injetado por último vence o do cliente
+		const principal = { userId: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' };
+		assert.deepEqual(scopeWhere(principal, { id: 'x', tenantId: 'tnt_beta' }), { id: 'x', tenantId: 'tnt_alpha' });
+		assert.deepEqual(scopeCreate(principal, { valor: 10, tenantId: 'tnt_beta' }), { valor: 10, tenantId: 'tnt_alpha' });
+		assert.equal(hasRequiredRole('ROLE_PME', ['ROLE_ADMIN_CONTROLLER']), false);
+		assert.throws(() => assertOwnership(principal, { tenantId: 'tnt_beta' }), TenantIsolationError);
+		assert.equal(assertOwnership(principal, { tenantId: 'tnt_alpha' }).tenantId, 'tnt_alpha');
+
+		const url = 'https://lidarcore.example/api/secure-invoices';
+		const get = (headers) => GET(new Request(url, { method: 'GET', headers }));
+		const bearer = t => ({ authorization: `Bearer ${t}` });
+
+		// 1) AUTENTICAÇÃO: sem token / token inválido / assinado com outro segredo -> 401
+		assert.equal((await get({})).status, 401);
+		assert.equal((await get(bearer('a.b.c'))).status, 401);
+		// Token bem-formado, porém assinado com outro segredo -> assinatura inválida -> 401
+		const forgedSig = jsonwebtoken.sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' }, 'OUTRO-SEGREDO-COMPLETAMENTE-DIFERENTE', { algorithm: 'HS256' });
+		assert.equal((await get(bearer(forgedSig))).status, 401);
+		// Token expirado -> 401 (verify valida exp)
+		const expired = sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' }, { expiresIn: -30 });
+		assert.equal((await get(bearer(expired))).status, 401);
+		// Claims fora do contrato (sem tenantId / role desconhecido) -> 401
+		assert.equal((await get(bearer(sign({ uid: 'u1', role: 'ROLE_ADMIN_CONTROLLER' })))).status, 401);
+		assert.equal((await get(bearer(sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_HACKER' })))).status, 401);
+
+		// 2) RBAC no servidor: PME autenticado numa rota Enterprise -> 403 (não 401)
+		const pmeToken = sign({ uid: 'u9', tenantId: 'tnt_alpha', role: 'ROLE_PME' });
+		assert.equal((await get(bearer(pmeToken))).status, 403);
+
+		// 3) ISOLAMENTO: admin de alpha só enxerga notas de alpha
+		const alpha = sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
+		const listRes = await get(bearer(alpha));
+		assert.equal(listRes.status, 200);
+		const list = await listRes.json();
+		assert.equal(list.tenantId, 'tnt_alpha');
+		assert.ok(list.count >= 2 && list.invoices.every(inv => inv.tenantId === 'tnt_alpha'), 'só notas do próprio tenant');
+
+		// IDOR: forçar o id de uma nota de OUTRO tenant (inv_b1 é de tnt_beta) -> 404, nunca vaza
+		const idorRes = await get({ ...bearer(alpha) });
+		assert.equal(idorRes.status, 200); // sanity
+		const forced = await GET(new Request(`${url}?id=inv_b1`, { method: 'GET', headers: bearer(alpha) }));
+		assert.equal(forced.status, 404, 'nota de outro tenant é invisível (IDOR bloqueado)');
+		// A própria nota, por id, é acessível
+		const own = await GET(new Request(`${url}?id=inv_a1`, { method: 'GET', headers: bearer(alpha) }));
+		assert.equal(own.status, 200);
+
+		// POST válido: a nota nasce carimbada com o tenant do TOKEN (não do corpo)
+		const created = await POST(new Request(url, { method: 'POST', headers: { ...bearer(alpha), 'content-type': 'application/json' }, body: JSON.stringify({ cliente: 'Nova Alpha', valor: 5000 }) }));
+		assert.equal(created.status, 201);
+		assert.equal((await created.json()).invoice.tenantId, 'tnt_alpha', 'nota criada pertence ao tenant do token');
+		// Injeção de tenantId no corpo: strictObject barra o campo extra -> 422 (fail-closed)
+		const injected = await POST(new Request(url, { method: 'POST', headers: { ...bearer(alpha), 'content-type': 'application/json' }, body: JSON.stringify({ cliente: 'Forjada', valor: 5000, tenantId: 'tnt_beta' }) }));
+		assert.equal(injected.status, 422, 'campo tenantId forjado no corpo é rejeitado');
+		// Corpo inválido (valor negativo) -> 422
+		const badBody = await POST(new Request(url, { method: 'POST', headers: { ...bearer(alpha), 'content-type': 'application/json' }, body: JSON.stringify({ cliente: 'x', valor: -1 }) }));
+		assert.equal(badBody.status, 422);
+
+		// Método não suportado -> 405
+		assert.equal((await methodHandler(new Request(url, { method: 'DELETE', headers: bearer(alpha) }))).status, 405);
+	} finally {
+		delete process.env.JWT_SECRET;
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+		if (guardDir) await rm(guardDir, { recursive: true, force: true });
+	}
+}
+
+console.log('ALL SMOKE TESTS PASSED');

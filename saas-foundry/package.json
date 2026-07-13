@@ -1,0 +1,43 @@
+{
+  "name": "saas-foundry",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Meta-SaaS engine: generates, manages and runs isolated micro-SaaS instances",
+  "workspaces": [
+    "shared",
+    "engine-core",
+    "sandbox-runtime",
+    "modules-library",
+    "api-gateway",
+    "factory-shell"
+  ],
+  "scripts": {
+    "dev": "tsc -b && npm run dev --workspace=@foundry/factory-shell",
+    "build": "tsc -b",
+    "typecheck": "tsc -b --noEmit",
+    "test": "node smoke.test.mjs",
+    "build:prod": "tsc -b && npm run build --workspace=@foundry/factory-shell"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^20.14.0",
+    "@types/nodemailer": "^8.0.1",
+    "@types/react-dom": "^18.3.7",
+    "jsdom": "^29.1.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.5.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
+    "@hookform/resolvers": "^5.4.0",
+    "@react-email/components": "^1.0.12",
+    "@react-email/render": "^2.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "jspdf": "^4.2.1",
+    "nodemailer": "^9.0.3",
+    "react-hook-form": "^7.81.0",
+    "recharts": "^3.9.2",
+    "resend": "^6.17.2",
+    "zod": "^4.4.3"
+  }
+}

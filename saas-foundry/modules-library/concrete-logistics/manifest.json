@@ -1,0 +1,7 @@
+{
+  "id": "concrete-logistics-v1",
+  "displayName": "Logística de Concreto",
+  "version": "1.0.0",
+  "permissions": ["read:logistics", "write:logistics"],
+  "entryPoint": "ConcreteOrderForm.tsx"
+}

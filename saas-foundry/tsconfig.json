@@ -1,0 +1,23 @@
+{
+  "files": [],
+  "references": [
+    { "path": "shared" },
+    { "path": "modules-library" },
+    { "path": "modules-library/task-dashboard" },
+    { "path": "modules-library/creative-production-hub" },
+    { "path": "modules-library/concrete-logistics" },
+    { "path": "modules-library/lidar-core-hub" },
+    { "path": "modules-library/lidar-orchestrator" },
+    { "path": "modules-library/predictive-bi-agent" },
+    { "path": "modules-library/virtual-cfo" },
+    { "path": "modules-library/virtual-cmo" },
+    { "path": "modules-library/enterprise-controllership" },
+    { "path": "modules-library/essentials/construction-calculator" },
+    { "path": "modules-library/essentials/quick-receipt" },
+    { "path": "modules-library/essentials/margin-calculator" },
+    { "path": "modules-library/essentials/smart-invoice" },
+    { "path": "engine-core" },
+    { "path": "sandbox-runtime" },
+    { "path": "api-gateway" }
+  ]
+}

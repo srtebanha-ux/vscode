@@ -1,0 +1,7 @@
+{
+  "id": "virtual-cmo-v1",
+  "displayName": "Virtual CMO",
+  "version": "1.0.0",
+  "permissions": ["read:insights", "write:insights"],
+  "entryPoint": "VirtualCMO_Agent.tsx"
+}

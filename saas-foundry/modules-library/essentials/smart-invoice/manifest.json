@@ -1,0 +1,7 @@
+{
+  "id": "smart-invoice-helper-v1",
+  "displayName": "Assistente Fiscal Inteligente",
+  "version": "1.0.0",
+  "permissions": ["ui:render"],
+  "entryPoint": "SmartInvoiceHelper.tsx"
+}

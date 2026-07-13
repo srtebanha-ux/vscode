@@ -1,0 +1,7 @@
+{
+  "id": "predictive-bi-v1",
+  "displayName": "Predictive BI Agent",
+  "version": "1.0.0",
+  "permissions": ["read:insights", "write:insights"],
+  "entryPoint": "PredictiveBIAgent.tsx"
+}

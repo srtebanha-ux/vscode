@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// Golden rule, enforced server-side: a tenant only ever touches its own silo.
+// The client (FirebaseApiService) builds the same 'tenants/<tenantId>/...'
+// prefix, but THIS is what makes cross-tenant access impossible.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /tenants/{tenantId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == tenantId;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

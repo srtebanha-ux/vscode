@@ -1,0 +1,7 @@
+{
+  "id": "lidar-orchestrator-v1",
+  "displayName": "Lidar Orchestrator",
+  "version": "1.0.0",
+  "permissions": ["read:integrations", "write:integrations"],
+  "entryPoint": "LidarOrchestrator.tsx"
+}

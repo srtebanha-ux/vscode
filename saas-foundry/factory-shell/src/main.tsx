@@ -13,6 +13,7 @@ import { capturePageview, identifyTenant, posthogClient, telemetrySink } from '.
 import { AuthProvider, RequireAuth, useAuth, type UserRole } from './auth/AuthProvider';
 import { createPluginRegistry } from './pluginCatalog';
 import { LandingPage } from './public/LandingPage';
+import { EnterpriseContact, type EnterpriseLead } from './public/EnterpriseContact';
 import { LeadMagnetTool } from './public-tools/LeadMagnetTool';
 import { PublicReceiptMaker } from './public-tools/PublicReceiptMaker';
 import type { Lead } from './public-tools/leadStore';
@@ -100,12 +101,28 @@ function Root(): ReactElement {
 	useEffect(() => capturePageview(router.path), [router.path]);
 
 	if (router.path === '/' || router.path === '') {
-		return <LandingPage onStart={() => router.navigate('/storefront')} onEnter={() => router.navigate('/app')} />;
+		return (
+			<LandingPage
+				onStartFree={() => router.navigate('/tools/pricing')}
+				onEnterprise={() => router.navigate('/enterprise')}
+				onEnter={() => router.navigate('/app')}
+			/>
+		);
 	}
 
 	// Iscas digitais públicas (PLG): ferramenta pronta, captura de lead, sem auth nem shell.
 	const captureLead = (lead: Lead, tool: string): void =>
 		telemetrySink.capture('Lead Capturado', { tool, email: lead.email, name: lead.name });
+
+	// Enterprise (Sales-led): formulário de contato de alto nível.
+	if (router.path === '/enterprise') {
+		return (
+			<EnterpriseContact
+				onSubmitLead={(lead: EnterpriseLead) => telemetrySink.capture('Enterprise Lead', { empresa: lead.empresa, email: lead.email, porte: lead.porte })}
+				onBack={() => router.navigate('/')}
+			/>
+		);
+	}
 	if (router.path === '/tools/pricing') {
 		return <LeadMagnetTool onLeadCapture={captureLead} onEnter={() => router.navigate('/app')} />;
 	}

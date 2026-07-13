@@ -105,8 +105,10 @@ function Root(): ReactElement {
 	if (router.path === '/' || router.path === '') {
 		return (
 			<LandingPage
-				onStartFree={() => router.navigate('/tools/pricing')}
-				onEnterprise={() => router.navigate('/enterprise')}
+				onSelectTier={tier => {
+					window.localStorage.setItem('userTier', tier);
+					router.navigate('/marketplace');
+				}}
 				onEnter={() => router.navigate('/app')}
 			/>
 		);

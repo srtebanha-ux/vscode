@@ -135,7 +135,7 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 		content = role === 'SUPER_ADMIN'
 			? <Welcome navigate={navigate} isAdmin />
 			: <DashboardHome email={session?.email} navigate={navigate} />;
-	} else if (path === '/storefront') {
+	} else if (path === '/marketplace' || path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
 	} else if (path === '/billing') {
 		content = <BillingPage tenantId={principal.tenantId} />;

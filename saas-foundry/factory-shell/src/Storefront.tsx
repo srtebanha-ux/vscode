@@ -1,9 +1,9 @@
-import { useRef, useState, type ReactElement } from 'react';
+import { useMemo, useRef, useState, type ReactElement } from 'react';
 import { motion } from 'framer-motion';
-import { Check, Loader2, Lock, Receipt } from 'lucide-react';
+import { Building2, Check, Loader2, Lock, Receipt, Rocket } from 'lucide-react';
 import { Tooltip, useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import type { AiArchitectResponse } from '../../api/ai-orchestrator';
-import { AVAILABLE_MODULES, CORE_BASE_PRICE, type AvailableModule } from './catalog';
+import { AVAILABLE_MODULES, CORE_BASE_PRICE, modulesForTier, readUserTier, type AvailableModule, type UserTier } from './catalog';
 import { MagicPrompt } from './components/MagicPrompt';
 import { computeMonthlyTotal, createCheckoutSession } from './services/stripeService';
 import { subscriptionStore, useSubscription } from './store/subscriptionStore';
@@ -178,11 +178,58 @@ function SubscriptionSummary({ tenantId }: { readonly tenantId: string }): React
 	);
 }
 
-/** Internal marketplace: the tenant assembles its own SaaS out of modules. */
+/** Cabeçalho e copy do Marketplace adaptados ao universo do usuário. */
+const TIER_COPY: Readonly<Record<UserTier, { readonly title: string; readonly highlight: string; readonly subtitle: string }>> = {
+	pme: {
+		title: 'Ferramentas para o seu Dia a Dia.',
+		highlight: 'Simples e sem enrolação.',
+		subtitle: 'Precificação, recibos e gestão descomplicada — feito para quem toca o negócio na mão.'
+	},
+	enterprise: {
+		title: 'Infraestrutura de Elite.',
+		highlight: 'Escale sua Operação.',
+		subtitle: 'Motores de dados e automação para gargalos que planilha nenhuma resolve.'
+	}
+};
+
+/** Alternador de universo — o usuário troca de trilha sem voltar à Landing. */
+function TierSwitch({ tier, onChange }: { readonly tier: UserTier; readonly onChange: (tier: UserTier) => void }): ReactElement {
+	return (
+		<div role="tablist" aria-label="Perfil" className="inline-flex gap-1 rounded-xl bg-gray-100 p-1">
+			{([['pme', 'Micro/Pequena', Rocket], ['enterprise', 'Grande Empresa', Building2]] as const).map(([id, label, Icon]) => (
+				<button
+					key={id}
+					type="button"
+					role="tab"
+					aria-selected={tier === id}
+					data-testid={`switch-${id}`}
+					onClick={() => onChange(id)}
+					className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${tier === id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+				>
+					<Icon className="h-3.5 w-3.5" aria-hidden /> {label}
+				</button>
+			))}
+		</div>
+	);
+}
+
+/** Internal marketplace: the tenant assembles its own SaaS out of modules — filtrado por tier. */
 export function Storefront({ tenantId }: { readonly tenantId: string }): ReactElement {
 	const toast = useToast();
+	const track = useTrackEvent();
 	const gridRef = useRef<HTMLDivElement>(null);
 	const [highlightedIds, setHighlightedIds] = useState<readonly string[]>([]);
+	// Universo escolhido na Landing; sem escolha, começa na trilha PME.
+	const [tier, setTier] = useState<UserTier>(() => readUserTier() ?? 'pme');
+
+	const modules = useMemo(() => modulesForTier(tier), [tier]);
+	const copy = TIER_COPY[tier];
+
+	const changeTier = (next: UserTier): void => {
+		setTier(next);
+		window.localStorage.setItem('userTier', next);
+		track('Marketplace Filtrado', { tier: next });
+	};
 
 	const applyRecommendation = (response: AiArchitectResponse): void => {
 		toast.success(response.rationale);
@@ -201,16 +248,17 @@ export function Storefront({ tenantId }: { readonly tenantId: string }): ReactEl
 
 			<div className="flex flex-col gap-6 lg:flex-row lg:items-start">
 				<section className="min-w-0 flex-1">
-					<header className="mb-6">
-						<h1 className="text-3xl font-semibold tracking-tight text-gray-900">
-							Infraestrutura de Elite. <span className="text-gray-400">Escale sua Operação.</span>
-						</h1>
-						<p className="mt-2 text-sm text-gray-500">
-							Motores de dados e automação para gargalos que planilha nenhuma resolve.
-						</p>
+					<header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+						<div>
+							<h1 className="text-3xl font-semibold tracking-tight text-gray-900">
+								{copy.title} <span className="text-gray-400">{copy.highlight}</span>
+							</h1>
+							<p className="mt-2 text-sm text-gray-500">{copy.subtitle}</p>
+						</div>
+						<TierSwitch tier={tier} onChange={changeTier} />
 					</header>
-					<div ref={gridRef} className="grid scroll-mt-6 grid-cols-1 gap-5 xl:grid-cols-2">
-						{AVAILABLE_MODULES.map(module => (
+					<div ref={gridRef} data-testid="marketplace-grid" className="grid scroll-mt-6 grid-cols-1 gap-5 xl:grid-cols-2">
+						{modules.map(module => (
 							<ModuleCard key={module.id} module={module} highlighted={highlightedIds.includes(module.id)} />
 						))}
 					</div>

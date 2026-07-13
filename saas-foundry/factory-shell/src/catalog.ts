@@ -1,7 +1,12 @@
 import { BrainCircuit, Calculator, CircleDollarSign, FileText, Landmark, Megaphone, ReceiptText, TrendingUp, Workflow, type LucideIcon } from 'lucide-react';
 
+/** Universo de público do módulo — segmenta a jornada PME vs. Enterprise. */
+export type UserTier = 'pme' | 'enterprise';
+
 export interface AvailableModule {
 	readonly id: string;
+	/** Público-alvo: a microempresa nunca vê motor Enterprise e vice-versa. */
+	readonly tier: UserTier;
 	readonly name: string;
 	readonly description: string;
 	readonly icon: LucideIcon;
@@ -20,11 +25,24 @@ export interface AvailableModule {
 /** Plataforma base; os motores enterprise carregam o ticket. */
 export const CORE_BASE_PRICE = 29.9;
 
+/** Lê o tier escolhido na Landing (localStorage). Inválido/ausente -> null. */
+export function readUserTier(): UserTier | null {
+	if (typeof window === 'undefined') return null;
+	const stored = window.localStorage.getItem('userTier');
+	return stored === 'pme' || stored === 'enterprise' ? stored : null;
+}
+
+/** Marketplace filtrado: só o universo do usuário. Sem tier definido -> tudo. */
+export function modulesForTier(tier: UserTier | null): readonly AvailableModule[] {
+	return tier === null ? AVAILABLE_MODULES : AVAILABLE_MODULES.filter(module => module.tier === tier);
+}
+
 export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	{
 		id: 'lidar-orchestrator-v1',
-		name: 'Lidar Orchestrator',
-		description: 'O motor que unifica SAP, DocuSign e bancos num único fluxo auditável em tempo real.',
+		tier: 'enterprise',
+		name: 'Conector de Sistemas (ERP Sync)',
+		description: 'O fim das planilhas manuais. O sistema puxa os dados do seu SAP/TOTVS e cruza com seus bancos automaticamente para achar furos no caixa da empresa.',
 		icon: Workflow,
 		price: 1497,
 		tag: '🏦 Grau bancário',
@@ -40,6 +58,7 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'enterprise-controllership-v1',
+		tier: 'enterprise',
 		name: 'Controladoria Enterprise',
 		description: 'Centro de comando de auditoria contínua: eficiência de folha e inteligência tributária (IBS/CBS).',
 		icon: Landmark,
@@ -57,8 +76,9 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'predictive-bi-v1',
-		name: 'Predictive BI Agent',
-		description: 'O analista que nunca dorme: uma LLM vigiando sua margem e seu caixa 24/7.',
+		tier: 'enterprise',
+		name: 'Radar de Prejuízo (IA)',
+		description: 'Nossa IA analisa sua operação 24h por dia e envia alertas no painel antes que um erro de processo vire um prejuízo financeiro irreparável.',
 		icon: BrainCircuit,
 		price: 997,
 		tag: '🧠 LLM nativa',
@@ -74,8 +94,9 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'virtual-cfo-v1',
-		name: 'Virtual CFO',
-		description: 'O diretor financeiro de elite que cabe no caixa de uma PME.',
+		tier: 'pme',
+		name: 'Diretor Financeiro de Bolso',
+		description: 'Cole seu extrato ou custos mensais aqui e descubra em segundos se sua empresa dá lucro real ou se você está pagando para trabalhar.',
 		icon: CircleDollarSign,
 		price: 297,
 		tag: '💼 C-Level as a Service',
@@ -91,6 +112,7 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'virtual-cmo-v1',
+		tier: 'pme',
 		name: 'Virtual CMO',
 		description: 'Campanhas de agência cara, geradas na hora para o seu produto.',
 		icon: Megaphone,
@@ -108,6 +130,7 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'construction-calculator-v1',
+		tier: 'pme',
 		name: 'Calculadora de Insumos',
 		description: 'Volume de concreto e custo da obra calculados enquanto você digita.',
 		icon: Calculator,
@@ -125,6 +148,7 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'quick-receipt-maker-v1',
+		tier: 'pme',
 		name: 'Recibo Rápido',
 		description: 'Recibo de serviço em PDF na hora — sem Word, sem retrabalho.',
 		icon: FileText,
@@ -142,6 +166,7 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'margin-calculator-v1',
+		tier: 'pme',
 		name: 'Oráculo de Preços IA',
 		description: 'A IA estima seu custo e a média de mercado da região, e já monta o preço.',
 		icon: TrendingUp,
@@ -159,6 +184,7 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	},
 	{
 		id: 'smart-invoice-helper-v1',
+		tier: 'pme',
 		name: 'Assistente Fiscal Inteligente',
 		description: 'Impostos da nota calculados pela localização e já prontos para a Reforma (IBS/CBS).',
 		icon: ReceiptText,

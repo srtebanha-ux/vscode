@@ -392,11 +392,13 @@ try {
 			QUOTA_EXCEEDED_MESSAGE
 		} = await import(pathToFileURL(compiled).href);
 
-		// Identidade decidida no servidor: personas rígidas por agente
-		assert.match(SYSTEM_PROMPTS.CFO, /Diretor Financeiro implacável/);
-		assert.match(SYSTEM_PROMPTS.CFO, /cortes de custos operacionais de PMEs/);
-		assert.match(SYSTEM_PROMPTS.CMO, /Growth Hacker/);
-		assert.match(SYSTEM_PROMPTS.CMO, /baixo custo de aquisição/);
+		// Identidade decidida no servidor: persona canônica + diretriz de cada agente
+		assert.match(SYSTEM_PROMPTS.CFO, /Fricção Zero/); // persona compartilhada
+		assert.match(SYSTEM_PROMPTS.CFO, /VIRTUAL CFO/);
+		assert.match(SYSTEM_PROMPTS.CFO, /3 MAIORES ralos de dinheiro/);
+		assert.match(SYSTEM_PROMPTS.CMO, /VIRTUAL CMO/);
+		assert.match(SYSTEM_PROMPTS.CMO, /copiar e colar/);
+		assert.match(SYSTEM_PROMPTS.CMO, /stories/);
 
 		// Bearer estrutural: só JWT com 3 segmentos base64url passa. payload = {"uid":"u1"}
 		const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ1aWQiOiJ1MSJ9.c2ln';
@@ -835,8 +837,10 @@ try {
 {
 	const { analyzePricing, ORACLE_SYSTEM_PROMPT } = await import('@foundry/engine-core/pricing');
 
-	// System prompt universal e proibido de cravar valor exato
-	assert.match(ORACLE_SYSTEM_PROMPT, /Especialista Universal em Precificação/);
+	// System prompt: persona canônica + regras de preço + proibido cravar valor exato
+	assert.match(ORACLE_SYSTEM_PROMPT, /motor de inteligência do "Lidar Core"/);
+	assert.match(ORACLE_SYSTEM_PROMPT, /ORÁCULO DE PREÇOS/);
+	assert.match(ORACLE_SYSTEM_PROMPT, /Rateio de insumos/); // regra de fração
 	assert.match(ORACLE_SYSTEM_PROMPT, /ESTRITAMENTE PROIBIDO/);
 	assert.match(ORACLE_SYSTEM_PROMPT, /faixa/i);
 
@@ -880,7 +884,7 @@ try {
 		const { POST, default: methodHandler, ORACLE_SYSTEM_PROMPT } = await import(pathToFileURL(compiled).href);
 		const call = (body) => POST(new Request('https://lidarcore.example/api/pricing-oracle', { method: 'POST', headers: { 'content-type': 'application/json' }, body }));
 
-		assert.match(ORACLE_SYSTEM_PROMPT, /Especialista Universal em Precificação/);
+		assert.match(ORACLE_SYSTEM_PROMPT, /ORÁCULO DE PREÇOS/);
 
 		// contrato de entrada fail-closed
 		assert.equal((await call('não é json')).status, 400);
@@ -1262,6 +1266,37 @@ try {
 
 	// Sem passos: nunca ativa
 	assert.equal(renderToStaticMarkup(createElement(ToolOnboardingTour, { storageKey: 'lidar:tour:empty', steps: [] })), '');
+}
+
+// 35. Persona canônica do Lidar Core (@foundry/engine-core/ai): fonte única
+{
+	const { buildSystemPrompt, LIDAR_CORE_PERSONA, MODULE_DIRECTIVES, PRICING_RULES } = await import('@foundry/engine-core/ai');
+
+	// Diretrizes de comunicação (fricção zero / respeito ao tempo / empatia) em toda persona
+	assert.match(LIDAR_CORE_PERSONA, /Fricção Zero/);
+	assert.match(LIDAR_CORE_PERSONA, /NUNCA use jargão/);
+	assert.match(LIDAR_CORE_PERSONA, /PRIMEIRAS linhas/);
+	assert.match(LIDAR_CORE_PERSONA, /Micro e Pequenos Empreendedores/);
+
+	// Todo módulo herda a persona + sua diretriz + formato de saída
+	for (const mod of ['ORACULO', 'CFO', 'CMO', 'FISCAL']) {
+		const prompt = buildSystemPrompt(mod);
+		assert.match(prompt, /Fricção Zero/, `${mod} herda a persona`);
+		assert.match(prompt, /FORMATO DE SAÍDA/, `${mod} tem regra de formato`);
+		assert.ok(prompt.includes(MODULE_DIRECTIVES[mod]), `${mod} inclui a própria diretriz`);
+	}
+
+	// Regras absolutas de preço só entram no Oráculo (unidade, fração, dados faltantes, realidade BR)
+	assert.match(buildSystemPrompt('ORACULO'), /Rateio de insumos/);
+	assert.match(PRICING_RULES, /Realidade econômica brasileira/);
+	assert.match(PRICING_RULES, /Sebrae, GetNinjas, SINAPI/);
+	assert.doesNotMatch(buildSystemPrompt('CFO'), /Rateio de insumos/); // CFO não recebe regras de preço
+
+	// Diretrizes específicas por módulo
+	assert.match(MODULE_DIRECTIVES.ORACULO, /faixa de preço SEGURA/);
+	assert.match(MODULE_DIRECTIVES.CFO, /3 MAIORES ralos/);
+	assert.match(MODULE_DIRECTIVES.CMO, /copiar e colar/);
+	assert.match(MODULE_DIRECTIVES.FISCAL, /ISS, IBS\/CBS/);
 }
 
 console.log('ALL SMOKE TESTS PASSED');

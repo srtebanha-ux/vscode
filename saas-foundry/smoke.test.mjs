@@ -618,7 +618,7 @@ try {
 // 30. Assistente Fiscal Inteligente: motor ISS/ICMS por localização + Reforma IBS/CBS
 {
 	const mod = await import('./modules-library/essentials/smart-invoice/dist/SmartInvoiceHelper.js');
-	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, CITY_DIRECTORY, REFORM_REFERENCE, maskCpfCnpj, isValidCpfCnpj, computeSettlement, buildRpsXml } = mod;
+	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, ISS_REFERENCE, IBGE_BASE, REFORM_REFERENCE, maskCpfCnpj, isValidCpfCnpj, computeSettlement, buildRpsXml } = mod;
 
 	const withServices = (Component, grantedScopes) =>
 		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
@@ -636,19 +636,15 @@ try {
 	assert.match(html, /Venda de Produto/);
 	assert.match(html, /guias de referência automatizados com base na localização informada/);
 	assert.match(html, /Valide o fechamento fiscal com sua contabilidade\./);
-	// Emissor real: novos campos de faturamento presentes já no render inicial
+	// Emissor real: novos campos de faturamento + selects do IBGE já no render inicial
 	assert.match(html, /CPF\/CNPJ do Cliente/);
 	assert.match(html, /Valor Total da Nota/);
 	assert.match(html, /Descrição do Serviço\/Produto/);
+	assert.match(html, /Estado/); // select dependente (Estado -> Cidade)
+	assert.equal(IBGE_BASE, 'https://servicodados.ibge.gov.br/api/v1/localidades'); // endpoint oficial
 
-	const find = name => {
-		const city = CITY_DIRECTORY.find(c => c.name === name);
-		assert.ok(city, `${name} deve existir no diretório`);
-		return city;
-	};
-
-	// Operação interna (mesmo município da origem, São Paulo)
-	const sp = find('São Paulo');
+	// Cidades agora são {name, uf} (vêm do IBGE) — sem array estático de alíquotas.
+	const sp = { name: 'São Paulo', uf: 'SP' };
 	assert.equal(resolveScope(MERCHANT_PROFILE, sp), 'interna');
 	const servInterna = computeInvoiceTax(MERCHANT_PROFILE, sp, 'servico');
 	assert.equal(servInterna.scope, 'interna');
@@ -656,15 +652,15 @@ try {
 	assert.equal(servInterna.lines[0].rate, MERCHANT_PROFILE.issProprio); // ISS do próprio município
 	assert.match(servInterna.lines[0].label, /^ISS/);
 
-	// Serviço para outro município: usa o ISS do município do cliente
-	const bh = find('Belo Horizonte');
+	// Serviço para outro município: usa o ISS de referência (IBGE não fornece alíquota)
+	const bh = { name: 'Belo Horizonte', uf: 'MG' };
 	assert.equal(resolveScope(MERCHANT_PROFILE, bh), 'externa');
 	const servExterna = computeInvoiceTax(MERCHANT_PROFILE, bh, 'servico');
 	assert.equal(servExterna.scope, 'externa');
-	assert.equal(servExterna.lines[0].rate, bh.iss);
+	assert.equal(servExterna.lines[0].rate, ISS_REFERENCE);
 
 	// Produto interestadual SP->BA: tabela de 7% (Sudeste -> Nordeste)
-	const ba = find('Salvador');
+	const ba = { name: 'Salvador', uf: 'BA' };
 	const prodInterestadual = computeInvoiceTax(MERCHANT_PROFILE, ba, 'produto');
 	assert.equal(prodInterestadual.interestadual, true);
 	assert.equal(prodInterestadual.lines[0].rate, 7);
@@ -672,7 +668,7 @@ try {
 	assert.equal(interstateIcms('SP', 'RJ'), 12); // Sudeste -> Sudeste
 
 	// Produto dentro do estado (SP): ICMS interno do perfil
-	const guarulhos = find('Guarulhos');
+	const guarulhos = { name: 'Guarulhos', uf: 'SP' };
 	const prodInterno = computeInvoiceTax(MERCHANT_PROFILE, guarulhos, 'produto');
 	assert.equal(prodInterno.interestadual, false);
 	assert.equal(prodInterno.lines[0].rate, MERCHANT_PROFILE.icmsInterno);

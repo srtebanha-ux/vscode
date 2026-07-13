@@ -10,6 +10,7 @@
 @source '../../modules-library/virtual-cfo';
 @source '../../modules-library/virtual-cmo';
 @source '../../modules-library/essentials';
+@source '../../modules-library/enterprise-controllership';
 @source '../../engine-core/src';
 
 @theme {

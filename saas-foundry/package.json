@@ -36,6 +36,7 @@
     "jspdf": "^4.2.1",
     "nodemailer": "^9.0.3",
     "react-hook-form": "^7.81.0",
+    "recharts": "^3.9.2",
     "resend": "^6.17.2",
     "zod": "^4.4.3"
   }

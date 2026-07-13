@@ -4,6 +4,7 @@ import lidarOrchestratorManifest from '../../modules-library/lidar-orchestrator/
 import predictiveBiManifest from '../../modules-library/predictive-bi-agent/manifest.json';
 import virtualCfoManifest from '../../modules-library/virtual-cfo/manifest.json';
 import virtualCmoManifest from '../../modules-library/virtual-cmo/manifest.json';
+import enterpriseControllershipManifest from '../../modules-library/enterprise-controllership/manifest.json';
 import constructionCalcManifest from '../../modules-library/essentials/construction-calculator/manifest.json';
 import quickReceiptManifest from '../../modules-library/essentials/quick-receipt/manifest.json';
 import marginCalcManifest from '../../modules-library/essentials/margin-calculator/manifest.json';
@@ -22,6 +23,7 @@ const bundledEntries: Readonly<Record<string, () => Promise<Record<string, unkno
 	'predictive-bi-v1': () => import('../../modules-library/predictive-bi-agent/PredictiveBIAgent.tsx'),
 	'virtual-cfo-v1': () => import('../../modules-library/virtual-cfo/VirtualCFO_Agent.tsx'),
 	'virtual-cmo-v1': () => import('../../modules-library/virtual-cmo/VirtualCMO_Agent.tsx'),
+	'enterprise-controllership-v1': () => import('../../modules-library/enterprise-controllership/EnterpriseControllershipDashboard.tsx'),
 	'construction-calculator-v1': () => import('../../modules-library/essentials/construction-calculator/ConstructionCalculator.tsx'),
 	'quick-receipt-maker-v1': () => import('../../modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx'),
 	'margin-calculator-v1': () => import('../../modules-library/essentials/margin-calculator/AIPricingOracle.tsx')
@@ -45,6 +47,7 @@ export function createPluginRegistry(): PluginRegistry {
 		['predictive-bi-v1', predictiveBiManifest],
 		['virtual-cfo-v1', virtualCfoManifest],
 		['virtual-cmo-v1', virtualCmoManifest],
+		['enterprise-controllership-v1', enterpriseControllershipManifest],
 		['construction-calculator-v1', constructionCalcManifest],
 		['quick-receipt-maker-v1', quickReceiptManifest],
 		['margin-calculator-v1', marginCalcManifest]

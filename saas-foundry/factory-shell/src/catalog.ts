@@ -1,4 +1,4 @@
-import { BrainCircuit, Calculator, CircleDollarSign, FileText, Megaphone, TrendingUp, Workflow, type LucideIcon } from 'lucide-react';
+import { BrainCircuit, Calculator, CircleDollarSign, FileText, Landmark, Megaphone, TrendingUp, Workflow, type LucideIcon } from 'lucide-react';
 
 export interface AvailableModule {
 	readonly id: string;
@@ -36,6 +36,23 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 			'Substitua 3 analistas de dados por automação em tempo real',
 			'Concilie ERP, contratos e extratos sem planilha de ponte',
 			'Cada pacote roteado com trilha de auditoria completa'
+		]
+	},
+	{
+		id: 'enterprise-controllership-v1',
+		name: 'Controladoria Enterprise',
+		description: 'Centro de comando de auditoria contínua: eficiência de folha e inteligência tributária (IBS/CBS).',
+		icon: Landmark,
+		price: 4997,
+		tag: '🏛️ Enterprise',
+		tagClasses: 'bg-amber-400/10 text-amber-300 ring-1 ring-inset ring-amber-400/30',
+		headerGradient: 'from-amber-400/20 via-zinc-900 to-zinc-900',
+		iconColor: 'text-amber-300',
+		glowClass: 'hover:shadow-amber-400/40 hover:ring-amber-400/60',
+		benefits: [
+			'Mapa de calor de ociosidade cruzando folha vs. produção',
+			'Preparação para a Reforma Tributária com NCMs críticos',
+			'Recuperação tributária estimada com respaldo jurídico'
 		]
 	},
 	{

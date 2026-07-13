@@ -43,6 +43,7 @@ const MODULE_SCOPE_GRANTS: Readonly<Record<string, readonly string[]>> = {
 	'predictive-bi-v1': ['read:insights', 'write:insights'],
 	'virtual-cfo-v1': ['read:insights', 'write:insights'],
 	'virtual-cmo-v1': ['read:insights', 'write:insights'],
+	'enterprise-controllership-v1': ['read:insights', 'write:insights'],
 	'construction-calculator-v1': ['ui:render'],
 	'quick-receipt-maker-v1': ['ui:render'],
 	'margin-calculator-v1': ['ui:render']

@@ -245,6 +245,7 @@ const forbidden = [
 	'./modules-library/predictive-bi-agent/PredictiveBIAgent.tsx',
 	'./modules-library/virtual-cfo/VirtualCFO_Agent.tsx',
 	'./modules-library/virtual-cmo/VirtualCMO_Agent.tsx',
+	'./modules-library/enterprise-controllership/EnterpriseControllershipDashboard.tsx',
 	'./modules-library/essentials/construction-calculator/ConstructionCalculator.tsx',
 	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
 	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
@@ -832,6 +833,19 @@ try {
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+}
+
+// 26. Controladoria Enterprise: scope-gate read/write:insights (fail-closed)
+{
+	const { default: EnterpriseControllership } = await import('./modules-library/enterprise-controllership/dist/EnterpriseControllershipDashboard.js');
+	const gated = (grantedScopes) =>
+		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ent', grantedScopes, api: fakeApi } }, createElement(EnterpriseControllership)));
+
+	// Sem os escopos de insights -> acesso negado (dado financeiro nunca vaza)
+	assert.match(gated(['ui:render']), /Acesso negado/);
+	assert.match(gated(['read:insights']), /Acesso negado/); // precisa dos DOIS
+	// Fora do host do Core -> lança
+	assert.throws(() => renderToStaticMarkup(createElement(EnterpriseControllership)), /outside the Core plugin host/);
 }
 
 console.log('ALL SMOKE TESTS PASSED');

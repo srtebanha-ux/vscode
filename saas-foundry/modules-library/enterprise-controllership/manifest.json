@@ -1,0 +1,7 @@
+{
+  "id": "enterprise-controllership-v1",
+  "displayName": "Controladoria Enterprise",
+  "version": "1.0.0",
+  "permissions": ["read:insights", "write:insights"],
+  "entryPoint": "EnterpriseControllershipDashboard.tsx"
+}

@@ -583,12 +583,33 @@ try {
 	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
 	assert.match(receipt, /Recibo de Prestação de Serviço/);
 	assert.match(receipt, /Baixar PDF/);
+	// Blindagem legal: checkbox de aceite + botão "Baixar PDF" travado (disabled) por padrão
+	assert.match(receipt, /Compreendo que estes são valores de referência\./);
+	assert.match(receipt, /<button[^>]*disabled=""[^>]*>(?:(?!<\/button>)[\s\S])*Baixar PDF/, 'Baixar PDF começa travado até o aceite');
 
 	// O Oráculo abre na descoberta (assistente de contexto antes da calculadora)
 	const oracle = withServices(AIPricingOracle, ['ui:render']);
 	assert.match(oracle, /O que você vai precificar hoje\?/);
 	assert.match(oracle, /Localização\/Região/);
 	assert.match(oracle, /Analisar Mercado/);
+}
+
+// 25. Blindagem legal + Tour: componentes visuais do engine-core
+{
+	const { DisclaimerBanner, DISCLAIMER_TEXT, GuidedTour } = await import('@foundry/engine-core');
+
+	// Texto legal EXATO
+	assert.match(DISCLAIMER_TEXT, /ferramenta de inteligência e estimativa de mercado/);
+	assert.match(DISCLAIMER_TEXT, /validados com seu contador local/);
+	assert.match(DISCLAIMER_TEXT, /Não nos responsabilizamos por margens operacionais executadas/);
+
+	const banner = renderToStaticMarkup(createElement(DisclaimerBanner));
+	assert.match(banner, /⚠️/);
+	assert.ok(banner.includes(DISCLAIMER_TEXT), 'banner mostra o texto legal literal');
+
+	// GuidedTour não intromete no render inicial (efeito de LocalStorage só roda no cliente)
+	const tour = renderToStaticMarkup(createElement(GuidedTour, { storageKey: 'lidar:tour:test', steps: [{ targetId: 'x', title: 't', description: 'd' }] }));
+	assert.equal(tour, '', 'tour é invisível no SSR/primeiro paint');
 }
 
 // 19. Isca digital (public-tools): a matemática da precificação é a mesma do Tier 1

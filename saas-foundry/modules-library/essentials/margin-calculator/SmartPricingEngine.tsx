@@ -2,11 +2,18 @@ import { useEffect, useMemo, type ReactNode } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { brlToNumber, maskBRL, useLocalStorageDraft } from '@foundry/engine-core/ui';
+import { brlToNumber, DisclaimerBanner, GuidedTour, maskBRL, useLocalStorageDraft, type TourStep } from '@foundry/engine-core/ui';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Boxes, Clock, Coins, Eraser, HandCoins, Landmark, Package, Percent, ReceiptText, ScanLine, ShieldAlert, ShieldCheck, Timer, Truck, TrendingUp } from 'lucide-react';
 
 const DRAFT_KEY = 'lidar:draft:smart-pricing';
+
+/** Onboarding: 3 passos fundamentais da calculadora. */
+const PRICING_TOUR: readonly TourStep[] = [
+	{ targetId: 'tour-pricing-segment', title: '1. Escolha o seu negócio', description: 'Produto, serviço ou os dois. Só aparecem os campos que fazem sentido para você.' },
+	{ targetId: 'tour-pricing-inputs', title: '2. Lance seus custos', description: 'Materiais, taxas ocultas e a margem que você quer no bolso. Nenhum centavo escapa.' },
+	{ targetId: 'tour-pricing-result', title: '3. Veja o preço blindado', description: 'O preço ideal, o Raio-X de para onde vai cada centavo e o alerta anti-prejuízo.' }
+];
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const pct = new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 });
@@ -310,10 +317,12 @@ export function SmartPricingEngine({ prefill }: SmartPricingEngineProps = {}): R
 				</button>
 			</header>
 
+			<GuidedTour storageKey="lidar:tour:pricing" steps={PRICING_TOUR} />
+
 			<div className="grid gap-8 p-6 lg:grid-cols-2">
-				<div className="flex flex-col gap-5">
+				<div id="tour-pricing-inputs" className="flex flex-col gap-5">
 					{/* Passo 0: o nicho decide o que aparece */}
-					<div>
+					<div id="tour-pricing-segment">
 						<span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-400">Qual é o seu negócio?</span>
 						<SegmentedControl value={segment} onChange={next => setValue('segment', next, { shouldValidate: true, shouldDirty: true })} />
 					</div>
@@ -364,7 +373,7 @@ export function SmartPricingEngine({ prefill }: SmartPricingEngineProps = {}): R
 				</div>
 
 				{/* Saída: preço + raio-x + trava anti-prejuízo */}
-				<div className="flex flex-col gap-4">
+				<div id="tour-pricing-result" className="flex flex-col gap-4">
 					<div className={`rounded-2xl bg-gradient-to-br ${tone.bg} p-6 text-center ring-1 ring-inset ${tone.ring}`}>
 						<span className="text-xs font-medium uppercase tracking-wide text-gray-500">Preço de Venda Sugerido</span>
 						<motion.p key={result.price} initial={{ opacity: 0.3, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.25, ease: 'easeOut' }} className={`mt-1 text-5xl font-extrabold tracking-tight ${tone.text}`} data-testid="suggested-price">
@@ -432,6 +441,9 @@ export function SmartPricingEngine({ prefill }: SmartPricingEngineProps = {}): R
 							</p>
 						)}
 					</div>
+
+					{/* Blindagem legal no rodapé dos resultados */}
+					<DisclaimerBanner />
 				</div>
 			</div>
 		</section>

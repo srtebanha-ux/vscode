@@ -1,11 +1,18 @@
 import { useMemo, useState } from 'react';
-import { hasScopes, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
+import { GuidedTour, hasScopes, useCoreService, useToast, useTrackEvent, type TourStep } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { motion } from 'framer-motion';
 import { CalendarDays, Download, FileText, ShieldAlert, User, Wrench } from 'lucide-react';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 const MODULE_ID = 'quick-receipt-maker-v1';
+
+/** Onboarding: 3 passos fundamentais do recibo. */
+const RECEIPT_TOUR: readonly TourStep[] = [
+	{ targetId: 'tour-receipt-form', title: '1. Preencha o recibo', description: 'Cliente, serviço, valor e data. Simples assim.' },
+	{ targetId: 'tour-receipt-preview', title: '2. Veja o preview ao vivo', description: 'O recibo em papel se monta enquanto você digita.' },
+	{ targetId: 'tour-receipt-download', title: '3. Baixe o PDF', description: 'Confirme que são valores de referência e baixe o PDF pronto para enviar.' }
+];
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -66,10 +73,14 @@ function ReceiptMaker(): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [data, setData] = useState<ReceiptData>({ client: '', service: '', amount: '', date: new Date().toISOString().slice(0, 10) });
+	const [acknowledged, setAcknowledged] = useState(false);
 	const set = (patch: Partial<ReceiptData>): void => setData(prev => ({ ...prev, ...patch }));
 	const value = useMemo(() => amountValue(data.amount), [data.amount]);
 
 	const download = (): void => {
+		if (!acknowledged) {
+			return; // blindagem legal: botão fica travado até o aceite
+		}
 		if (!data.client.trim() || value <= 0) {
 			toast.error('Informe o nome do cliente e um valor válido antes de baixar.');
 			return;
@@ -81,8 +92,9 @@ function ReceiptMaker(): React.JSX.Element {
 
 	return (
 		<section className="mx-auto grid max-w-4xl gap-6 md:grid-cols-2">
+			<GuidedTour storageKey="lidar:tour:receipt" steps={RECEIPT_TOUR} />
 			{/* Formulário coluna única */}
-			<div className="overflow-hidden rounded-2xl bg-white shadow-sm">
+			<div id="tour-receipt-form" className="overflow-hidden rounded-2xl bg-white shadow-sm">
 				<header className="border-b border-gray-100 px-6 py-4">
 					<h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
 						<FileText className="h-5 w-5 text-indigo-500" aria-hidden />
@@ -113,15 +125,33 @@ function ReceiptMaker(): React.JSX.Element {
 							<input type="date" value={data.date} onChange={e => set({ date: e.target.value })} className="w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm shadow-sm outline-none transition-all focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100" />
 						</label>
 					</div>
-					<button type="button" onClick={download} className="mt-1 inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md">
-						<Download className="h-4 w-4" aria-hidden />
-						Baixar PDF
-					</button>
+					<div id="tour-receipt-download" className="mt-1 flex flex-col gap-3">
+						{/* Blindagem legal: aceite obrigatório antes de liberar o download */}
+						<label className="flex cursor-pointer select-none items-start gap-2 text-xs leading-relaxed text-gray-500">
+							<input
+								type="checkbox"
+								checked={acknowledged}
+								onChange={e => setAcknowledged(e.target.checked)}
+								aria-label="Compreendo que estes são valores de referência"
+								className="mt-0.5 h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-2 focus:ring-gray-300"
+							/>
+							<span>Compreendo que estes são valores de referência.</span>
+						</label>
+						<button
+							type="button"
+							onClick={download}
+							disabled={!acknowledged}
+							className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+						>
+							<Download className="h-4 w-4" aria-hidden />
+							Baixar PDF
+						</button>
+					</div>
 				</div>
 			</div>
 
 			{/* Preview em papel, preenchido em tempo real */}
-			<div className="flex items-start justify-center">
+			<div id="tour-receipt-preview" className="flex items-start justify-center">
 				<motion.div layout className="w-full rounded-2xl border border-gray-100 bg-white p-8 shadow-lg" data-testid="receipt-preview">
 					<div className="flex items-center gap-2 text-base font-bold tracking-tight text-gray-900">
 						<span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-900 text-sm text-white">◈</span>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { hasScopes, numberToBRL, useCoreService } from '@foundry/engine-core/ui';
+import { DisclaimerBanner, hasScopes, numberToBRL, useCoreService } from '@foundry/engine-core/ui';
 import { analyzePricing, type OracleAnalysis } from '@foundry/engine-core/pricing';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -270,6 +270,11 @@ function Oracle(): React.JSX.Element {
 							<span data-testid="range-microcopy">
 								Esta é uma margem segura de mercado. Posicione seu preço mais próximo do mínimo se quiser ganhar no volume, ou do máximo se o seu serviço for premium.
 							</span>
+						</div>
+
+						{/* Blindagem legal */}
+						<div className="mx-6">
+							<DisclaimerBanner />
 						</div>
 
 						<div className="mt-2 flex flex-col gap-3 border-t border-gray-100 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">

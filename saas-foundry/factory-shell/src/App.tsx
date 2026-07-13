@@ -131,7 +131,7 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 	} else if (path === '/app') {
 		content = <Welcome navigate={navigate} isAdmin={role === 'SUPER_ADMIN'} />;
 	} else if (path === '/storefront') {
-		content = <Storefront tenantId={principal.tenantId} />;
+		content = <Storefront tenantId={principal.tenantId} onNavigate={navigate} />;
 	} else if (path === '/billing') {
 		content = <BillingPage tenantId={principal.tenantId} />;
 	} else if (path === '/admin') {

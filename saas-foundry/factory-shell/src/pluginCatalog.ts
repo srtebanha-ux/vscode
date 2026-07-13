@@ -8,6 +8,7 @@ import enterpriseControllershipManifest from '../../modules-library/enterprise-c
 import constructionCalcManifest from '../../modules-library/essentials/construction-calculator/manifest.json';
 import quickReceiptManifest from '../../modules-library/essentials/quick-receipt/manifest.json';
 import marginCalcManifest from '../../modules-library/essentials/margin-calculator/manifest.json';
+import smartInvoiceManifest from '../../modules-library/essentials/smart-invoice/manifest.json';
 
 /**
  * Catálogo comercial ativo: os motores Enterprise (Tier Elite) mais o
@@ -26,7 +27,8 @@ const bundledEntries: Readonly<Record<string, () => Promise<Record<string, unkno
 	'enterprise-controllership-v1': () => import('../../modules-library/enterprise-controllership/EnterpriseControllershipDashboard.tsx'),
 	'construction-calculator-v1': () => import('../../modules-library/essentials/construction-calculator/ConstructionCalculator.tsx'),
 	'quick-receipt-maker-v1': () => import('../../modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx'),
-	'margin-calculator-v1': () => import('../../modules-library/essentials/margin-calculator/AIPricingOracle.tsx')
+	'margin-calculator-v1': () => import('../../modules-library/essentials/margin-calculator/AIPricingOracle.tsx'),
+	'smart-invoice-helper-v1': () => import('../../modules-library/essentials/smart-invoice/SmartInvoiceHelper.tsx')
 };
 
 export function createPluginRegistry(): PluginRegistry {
@@ -50,7 +52,8 @@ export function createPluginRegistry(): PluginRegistry {
 		['enterprise-controllership-v1', enterpriseControllershipManifest],
 		['construction-calculator-v1', constructionCalcManifest],
 		['quick-receipt-maker-v1', quickReceiptManifest],
-		['margin-calculator-v1', marginCalcManifest]
+		['margin-calculator-v1', marginCalcManifest],
+		['smart-invoice-helper-v1', smartInvoiceManifest]
 	] as const) {
 		const result = registry.registerManifest(manifest, entryRef);
 		if (!result.ok) {

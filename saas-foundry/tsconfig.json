@@ -15,6 +15,7 @@
     { "path": "modules-library/essentials/construction-calculator" },
     { "path": "modules-library/essentials/quick-receipt" },
     { "path": "modules-library/essentials/margin-calculator" },
+    { "path": "modules-library/essentials/smart-invoice" },
     { "path": "engine-core" },
     { "path": "sandbox-runtime" },
     { "path": "api-gateway" }

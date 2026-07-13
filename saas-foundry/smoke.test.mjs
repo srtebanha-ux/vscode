@@ -254,6 +254,7 @@ const forbidden = [
 	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
 	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
 	'./modules-library/essentials/margin-calculator/AIPricingOracle.tsx',
+	'./modules-library/essentials/smart-invoice/SmartInvoiceHelper.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',
@@ -597,6 +598,75 @@ try {
 	assert.match(oracle, /O que você vai precificar hoje\?/);
 	assert.match(oracle, /Localização\/Região/);
 	assert.match(oracle, /Analisar Mercado/);
+}
+
+// 30. Assistente Fiscal Inteligente: motor ISS/ICMS por localização + Reforma IBS/CBS
+{
+	const mod = await import('./modules-library/essentials/smart-invoice/dist/SmartInvoiceHelper.js');
+	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, CITY_DIRECTORY, REFORM_REFERENCE } = mod;
+
+	const withServices = (Component, grantedScopes) =>
+		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
+
+	// Fail-closed igual aos demais essenciais
+	assert.match(withServices(SmartInvoiceHelper, []), /Acesso negado/);
+	assert.throws(() => renderToStaticMarkup(createElement(SmartInvoiceHelper)), /outside the Core plugin host/);
+
+	// Render inicial: campos de contexto + disclaimer jurídico exato
+	const html = withServices(SmartInvoiceHelper, ['ui:render']);
+	assert.match(html, /Assistente Fiscal Inteligente/);
+	assert.match(html, /Cidade do seu Cliente/);
+	assert.match(html, /O que você está faturando\?/);
+	assert.match(html, /Prestação de Serviço/);
+	assert.match(html, /Venda de Produto/);
+	assert.match(html, /guias de referência automatizados com base na localização informada/);
+	assert.match(html, /Valide o fechamento fiscal com sua contabilidade\./);
+
+	const find = name => {
+		const city = CITY_DIRECTORY.find(c => c.name === name);
+		assert.ok(city, `${name} deve existir no diretório`);
+		return city;
+	};
+
+	// Operação interna (mesmo município da origem, São Paulo)
+	const sp = find('São Paulo');
+	assert.equal(resolveScope(MERCHANT_PROFILE, sp), 'interna');
+	const servInterna = computeInvoiceTax(MERCHANT_PROFILE, sp, 'servico');
+	assert.equal(servInterna.scope, 'interna');
+	assert.equal(servInterna.interestadual, false);
+	assert.equal(servInterna.lines[0].rate, MERCHANT_PROFILE.issProprio); // ISS do próprio município
+	assert.match(servInterna.lines[0].label, /^ISS/);
+
+	// Serviço para outro município: usa o ISS do município do cliente
+	const bh = find('Belo Horizonte');
+	assert.equal(resolveScope(MERCHANT_PROFILE, bh), 'externa');
+	const servExterna = computeInvoiceTax(MERCHANT_PROFILE, bh, 'servico');
+	assert.equal(servExterna.scope, 'externa');
+	assert.equal(servExterna.lines[0].rate, bh.iss);
+
+	// Produto interestadual SP->BA: tabela de 7% (Sudeste -> Nordeste)
+	const ba = find('Salvador');
+	const prodInterestadual = computeInvoiceTax(MERCHANT_PROFILE, ba, 'produto');
+	assert.equal(prodInterestadual.interestadual, true);
+	assert.equal(prodInterestadual.lines[0].rate, 7);
+	assert.equal(interstateIcms('SP', 'BA'), 7);
+	assert.equal(interstateIcms('SP', 'RJ'), 12); // Sudeste -> Sudeste
+
+	// Produto dentro do estado (SP): ICMS interno do perfil
+	const guarulhos = find('Guarulhos');
+	const prodInterno = computeInvoiceTax(MERCHANT_PROFILE, guarulhos, 'produto');
+	assert.equal(prodInterno.interestadual, false);
+	assert.equal(prodInterno.lines[0].rate, MERCHANT_PROFILE.icmsInterno);
+
+	// PIS/COFINS sempre presente e carga = soma das linhas
+	for (const tax of [servInterna, servExterna, prodInterestadual, prodInterno]) {
+		assert.ok(tax.lines.some(l => l.label === 'PIS + COFINS'), 'PIS/COFINS listado');
+		const soma = tax.lines.reduce((s, l) => s + l.rate, 0);
+		assert.equal(tax.cargaAtual, soma);
+	}
+
+	// Referência da Reforma: IBS + CBS positivos (o IVA dual)
+	assert.ok(REFORM_REFERENCE.ibs > 0 && REFORM_REFERENCE.cbs > 0);
 }
 
 // 25. Blindagem legal + Tour: componentes visuais do engine-core

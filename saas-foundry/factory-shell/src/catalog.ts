@@ -1,4 +1,4 @@
-import { BrainCircuit, Calculator, CircleDollarSign, FileText, Landmark, Megaphone, TrendingUp, Workflow, type LucideIcon } from 'lucide-react';
+import { BrainCircuit, Calculator, CircleDollarSign, FileText, Landmark, Megaphone, ReceiptText, TrendingUp, Workflow, type LucideIcon } from 'lucide-react';
 
 export interface AvailableModule {
 	readonly id: string;
@@ -155,6 +155,23 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 			'Não sabe seu custo? A IA estima material e desgaste por você',
 			'Média de mercado da sua região, não um chute nacional',
 			'Markup reverso com Raio-X e trava anti-prejuízo embutidos'
+		]
+	},
+	{
+		id: 'smart-invoice-helper-v1',
+		name: 'Assistente Fiscal Inteligente',
+		description: 'Impostos da nota calculados pela localização e já prontos para a Reforma (IBS/CBS).',
+		icon: ReceiptText,
+		price: 39,
+		tag: '🧾 Fiscal Reforma-ready',
+		tagClasses: 'bg-violet-500/10 text-violet-300 ring-1 ring-inset ring-violet-500/30',
+		headerGradient: 'from-violet-500/25 via-zinc-900 to-zinc-900',
+		iconColor: 'text-violet-400',
+		glowClass: 'hover:shadow-violet-500/40 hover:ring-violet-500/60',
+		benefits: [
+			'Operação interna ou externa detectada automaticamente',
+			'ISS ou ICMS interestadual resolvidos pela cidade do cliente',
+			'Visualizador da transição ISS/ICMS → IBS/CBS já embutido'
 		]
 	}
 ];

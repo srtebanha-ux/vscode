@@ -613,7 +613,7 @@ try {
 // 30. Assistente Fiscal Inteligente: motor ISS/ICMS por localização + Reforma IBS/CBS
 {
 	const mod = await import('./modules-library/essentials/smart-invoice/dist/SmartInvoiceHelper.js');
-	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, CITY_DIRECTORY, REFORM_REFERENCE } = mod;
+	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, CITY_DIRECTORY, REFORM_REFERENCE, maskCpfCnpj, isValidCpfCnpj, computeSettlement, buildRpsXml } = mod;
 
 	const withServices = (Component, grantedScopes) =>
 		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
@@ -631,6 +631,10 @@ try {
 	assert.match(html, /Venda de Produto/);
 	assert.match(html, /guias de referência automatizados com base na localização informada/);
 	assert.match(html, /Valide o fechamento fiscal com sua contabilidade\./);
+	// Emissor real: novos campos de faturamento presentes já no render inicial
+	assert.match(html, /CPF\/CNPJ do Cliente/);
+	assert.match(html, /Valor Total da Nota/);
+	assert.match(html, /Descrição do Serviço\/Produto/);
 
 	const find = name => {
 		const city = CITY_DIRECTORY.find(c => c.name === name);
@@ -677,6 +681,40 @@ try {
 
 	// Referência da Reforma: IBS + CBS positivos (o IVA dual)
 	assert.ok(REFORM_REFERENCE.ibs > 0 && REFORM_REFERENCE.cbs > 0);
+
+	// ── Emissor real: máscara + validação de documento ──
+	assert.equal(maskCpfCnpj('11144477735'), '111.444.777-35'); // CPF
+	assert.equal(maskCpfCnpj('111444'), '111.444');            // parcial
+	assert.equal(maskCpfCnpj('11222333000181'), '11.222.333/0001-81'); // CNPJ
+	assert.equal(maskCpfCnpj('abc123!!456'), '123.456');       // só dígitos entram
+	assert.equal(maskCpfCnpj('1234567890123456789'), '12.345.678/9012-34'); // trava em 14 dígitos
+
+	// Dígitos verificadores: CPF/CNPJ válidos passam; adulterados falham
+	assert.equal(isValidCpfCnpj('111.444.777-35'), true);
+	assert.equal(isValidCpfCnpj('111.444.777-00'), false); // DV errado
+	assert.equal(isValidCpfCnpj('111.111.111-11'), false); // todos iguais
+	assert.equal(isValidCpfCnpj('11.222.333/0001-81'), true);
+	assert.equal(isValidCpfCnpj('11.222.333/0001-99'), false); // DV errado
+	assert.equal(isValidCpfCnpj('123'), false); // tamanho inválido
+
+	// ── Liquidação: deduz os tributos do valor bruto ──
+	const set = computeSettlement(1000, servInterna); // ISS 5% + PIS/COFINS 3,65% = 8,65%
+	assert.ok(Math.abs(set.impostoTotal - 86.5) < 1e-6);
+	assert.ok(Math.abs(set.valorLiquido - 913.5) < 1e-6);
+	assert.equal(set.valorBruto, 1000);
+	assert.equal(set.linhas.length, servInterna.lines.length);
+	// Valor inválido/negativo -> zera (nunca líquido fantasioso)
+	assert.equal(computeSettlement(0, servInterna).valorLiquido, 0);
+	assert.equal(computeSettlement(-500, servInterna).impostoTotal, 0);
+
+	// ── RPS/XML para a prefeitura: bem-formado e com escape ──
+	const xml = buildRpsXml({ prestadorCnpj: MERCHANT_PROFILE.cnpj, tomadorDoc: '111.444.777-35', tomadorCidade: 'São Paulo - SP', discriminacao: 'Consultoria <fiscal> & cia', valorServico: 1000, aliquota: 5, valorIss: 50 });
+	assert.match(xml, /<\?xml version="1\.0" encoding="UTF-8"\?>/);
+	assert.match(xml, /<ValorServicos>1000\.00<\/ValorServicos>/);
+	assert.match(xml, /<Aliquota>0\.0500<\/Aliquota>/);
+	assert.match(xml, /<Cpf>11144477735<\/Cpf>/); // CPF do tomador
+	assert.match(xml, /Consultoria &lt;fiscal&gt; &amp; cia/); // XML escapado (anti-corrupção)
+	assert.doesNotMatch(xml, /<fiscal>/); // nada de tag injetada crua
 }
 
 // 25. Blindagem legal + Tour: componentes visuais do engine-core

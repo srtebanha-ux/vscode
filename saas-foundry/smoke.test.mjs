@@ -1245,4 +1245,25 @@ try {
 	}
 }
 
+// 34. Guided Tour "Zero Suporte": gate de LocalStorage + render fail-safe
+{
+	const { ToolOnboardingTour, hasSeenTour, markTourSeen } = await import('@foundry/engine-core');
+	assert.equal(typeof ToolOnboardingTour, 'function');
+
+	// Primeiro acesso: nunca visto -> tour deve rodar; após marcar -> nunca mais
+	const key = 'lidar:tour:smoke-xyz';
+	window.localStorage.removeItem(key);
+	assert.equal(hasSeenTour(key), false);
+	markTourSeen(key);
+	assert.equal(hasSeenTour(key), true);
+	assert.equal(window.localStorage.getItem(key), 'true');
+
+	// SSR/primeiro paint: sem efeitos, o tour não injeta overlay (não bloqueia nada)
+	const html = renderToStaticMarkup(createElement(ToolOnboardingTour, { storageKey: 'lidar:tour:ssr', steps: [{ targetSelector: '#x', body: 'passo' }] }));
+	assert.equal(html, '', 'tour não renderiza no server (só ativa via efeito no cliente)');
+
+	// Sem passos: nunca ativa
+	assert.equal(renderToStaticMarkup(createElement(ToolOnboardingTour, { storageKey: 'lidar:tour:empty', steps: [] })), '');
+}
+
 console.log('ALL SMOKE TESTS PASSED');

@@ -1,11 +1,18 @@
 import { useMemo, useState } from 'react';
-import { brlToNumber, hasScopes, maskBRL, numberToBRL, onlyDigits, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
+import { ToolOnboardingTour, brlToNumber, hasScopes, maskBRL, numberToBRL, onlyDigits, useCoreService, useToast, useTrackEvent, type OnboardingStep } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { motion } from 'framer-motion';
 import { ArrowRight, Building2, CheckCircle2, FileDown, FileText, Info, Landmark, Loader2, MapPin, Plane, ReceiptText, Scale, Search, ShieldAlert, Store, User, Wallet, Wrench, Zap } from 'lucide-react';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 const MODULE_ID = 'smart-invoice-helper-v1';
+
+// Onboarding "Zero Suporte" — 3 pontos-chave, destacados no primeiro acesso.
+const ONBOARDING_STEPS: readonly OnboardingStep[] = [
+	{ targetSelector: '[aria-label="Valor Total da Nota (R$)"]', body: 'Comece por aqui. Digite o valor do seu serviço sem se preocupar com impostos ainda.' },
+	{ targetSelector: '[aria-label="Cidade do seu Cliente"]', body: 'Diga a cidade do cliente. O ISS, o ICMS e a Reforma entram calculados no automático.' },
+	{ targetSelector: '[aria-label="Descrição do Serviço/Produto"]', body: 'Descreva o serviço e pronto: baixe o arquivo da prefeitura ou emita a nota oficial num clique.' }
+];
 
 // ── Modelo de dados fiscal (mockado — em produção vem do cadastro + tabelas oficiais) ──
 
@@ -457,6 +464,8 @@ function Helper(): React.JSX.Element {
 	};
 
 	return (
+		<>
+		<ToolOnboardingTour storageKey="lidar:tour:smart-invoice" steps={ONBOARDING_STEPS} />
 		<section className="mx-auto max-w-5xl overflow-hidden rounded-2xl bg-white shadow-sm">
 			<header className="border-b border-gray-100 px-6 py-4">
 				<h1 className="flex flex-wrap items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
@@ -643,6 +652,7 @@ function Helper(): React.JSX.Element {
 				<span>Os valores e alíquotas exibidos são guias de referência automatizados com base na localização informada. Valide o fechamento fiscal com sua contabilidade.</span>
 			</footer>
 		</section>
+		</>
 	);
 }
 

@@ -262,6 +262,11 @@ const forbidden = [
 	'./factory-shell/src/security/RoleGuard.tsx',
 	'./factory-shell/src/security/RoleContext.tsx',
 	'./factory-shell/src/security/navigation.tsx',
+	// Configurações fiscais: UI de cofre + validação pura do certificado, sem Firebase.
+	'./factory-shell/src/settings/TaxSettings.tsx',
+	'./factory-shell/src/settings/certFile.ts',
+	// Apresentação pública de segmento: pitch deck presentacional, sem Firebase.
+	'./factory-shell/src/public/SegmentPresentation.tsx',
 	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
 	'./api/lib/security/apiGuard.ts',
 	'./api/secure-invoices/route.ts',
@@ -387,11 +392,13 @@ try {
 			QUOTA_EXCEEDED_MESSAGE
 		} = await import(pathToFileURL(compiled).href);
 
-		// Identidade decidida no servidor: personas rígidas por agente
-		assert.match(SYSTEM_PROMPTS.CFO, /Diretor Financeiro implacável/);
-		assert.match(SYSTEM_PROMPTS.CFO, /cortes de custos operacionais de PMEs/);
-		assert.match(SYSTEM_PROMPTS.CMO, /Growth Hacker/);
-		assert.match(SYSTEM_PROMPTS.CMO, /baixo custo de aquisição/);
+		// Identidade decidida no servidor: persona canônica + diretriz de cada agente
+		assert.match(SYSTEM_PROMPTS.CFO, /Fricção Zero/); // persona compartilhada
+		assert.match(SYSTEM_PROMPTS.CFO, /VIRTUAL CFO/);
+		assert.match(SYSTEM_PROMPTS.CFO, /3 MAIORES ralos de dinheiro/);
+		assert.match(SYSTEM_PROMPTS.CMO, /VIRTUAL CMO/);
+		assert.match(SYSTEM_PROMPTS.CMO, /copiar e colar/);
+		assert.match(SYSTEM_PROMPTS.CMO, /stories/);
 
 		// Bearer estrutural: só JWT com 3 segmentos base64url passa. payload = {"uid":"u1"}
 		const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ1aWQiOiJ1MSJ9.c2ln';
@@ -613,7 +620,7 @@ try {
 // 30. Assistente Fiscal Inteligente: motor ISS/ICMS por localização + Reforma IBS/CBS
 {
 	const mod = await import('./modules-library/essentials/smart-invoice/dist/SmartInvoiceHelper.js');
-	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, CITY_DIRECTORY, REFORM_REFERENCE } = mod;
+	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, ISS_REFERENCE, IBGE_BASE, REFORM_REFERENCE, maskCpfCnpj, isValidCpfCnpj, computeSettlement, buildRpsXml } = mod;
 
 	const withServices = (Component, grantedScopes) =>
 		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
@@ -631,15 +638,15 @@ try {
 	assert.match(html, /Venda de Produto/);
 	assert.match(html, /guias de referência automatizados com base na localização informada/);
 	assert.match(html, /Valide o fechamento fiscal com sua contabilidade\./);
+	// Emissor real: novos campos de faturamento + selects do IBGE já no render inicial
+	assert.match(html, /CPF\/CNPJ do Cliente/);
+	assert.match(html, /Valor Total da Nota/);
+	assert.match(html, /Descrição do Serviço\/Produto/);
+	assert.match(html, /Estado/); // select dependente (Estado -> Cidade)
+	assert.equal(IBGE_BASE, 'https://servicodados.ibge.gov.br/api/v1/localidades'); // endpoint oficial
 
-	const find = name => {
-		const city = CITY_DIRECTORY.find(c => c.name === name);
-		assert.ok(city, `${name} deve existir no diretório`);
-		return city;
-	};
-
-	// Operação interna (mesmo município da origem, São Paulo)
-	const sp = find('São Paulo');
+	// Cidades agora são {name, uf} (vêm do IBGE) — sem array estático de alíquotas.
+	const sp = { name: 'São Paulo', uf: 'SP' };
 	assert.equal(resolveScope(MERCHANT_PROFILE, sp), 'interna');
 	const servInterna = computeInvoiceTax(MERCHANT_PROFILE, sp, 'servico');
 	assert.equal(servInterna.scope, 'interna');
@@ -647,15 +654,15 @@ try {
 	assert.equal(servInterna.lines[0].rate, MERCHANT_PROFILE.issProprio); // ISS do próprio município
 	assert.match(servInterna.lines[0].label, /^ISS/);
 
-	// Serviço para outro município: usa o ISS do município do cliente
-	const bh = find('Belo Horizonte');
+	// Serviço para outro município: usa o ISS de referência (IBGE não fornece alíquota)
+	const bh = { name: 'Belo Horizonte', uf: 'MG' };
 	assert.equal(resolveScope(MERCHANT_PROFILE, bh), 'externa');
 	const servExterna = computeInvoiceTax(MERCHANT_PROFILE, bh, 'servico');
 	assert.equal(servExterna.scope, 'externa');
-	assert.equal(servExterna.lines[0].rate, bh.iss);
+	assert.equal(servExterna.lines[0].rate, ISS_REFERENCE);
 
 	// Produto interestadual SP->BA: tabela de 7% (Sudeste -> Nordeste)
-	const ba = find('Salvador');
+	const ba = { name: 'Salvador', uf: 'BA' };
 	const prodInterestadual = computeInvoiceTax(MERCHANT_PROFILE, ba, 'produto');
 	assert.equal(prodInterestadual.interestadual, true);
 	assert.equal(prodInterestadual.lines[0].rate, 7);
@@ -663,7 +670,7 @@ try {
 	assert.equal(interstateIcms('SP', 'RJ'), 12); // Sudeste -> Sudeste
 
 	// Produto dentro do estado (SP): ICMS interno do perfil
-	const guarulhos = find('Guarulhos');
+	const guarulhos = { name: 'Guarulhos', uf: 'SP' };
 	const prodInterno = computeInvoiceTax(MERCHANT_PROFILE, guarulhos, 'produto');
 	assert.equal(prodInterno.interestadual, false);
 	assert.equal(prodInterno.lines[0].rate, MERCHANT_PROFILE.icmsInterno);
@@ -677,6 +684,40 @@ try {
 
 	// Referência da Reforma: IBS + CBS positivos (o IVA dual)
 	assert.ok(REFORM_REFERENCE.ibs > 0 && REFORM_REFERENCE.cbs > 0);
+
+	// ── Emissor real: máscara + validação de documento ──
+	assert.equal(maskCpfCnpj('11144477735'), '111.444.777-35'); // CPF
+	assert.equal(maskCpfCnpj('111444'), '111.444');            // parcial
+	assert.equal(maskCpfCnpj('11222333000181'), '11.222.333/0001-81'); // CNPJ
+	assert.equal(maskCpfCnpj('abc123!!456'), '123.456');       // só dígitos entram
+	assert.equal(maskCpfCnpj('1234567890123456789'), '12.345.678/9012-34'); // trava em 14 dígitos
+
+	// Dígitos verificadores: CPF/CNPJ válidos passam; adulterados falham
+	assert.equal(isValidCpfCnpj('111.444.777-35'), true);
+	assert.equal(isValidCpfCnpj('111.444.777-00'), false); // DV errado
+	assert.equal(isValidCpfCnpj('111.111.111-11'), false); // todos iguais
+	assert.equal(isValidCpfCnpj('11.222.333/0001-81'), true);
+	assert.equal(isValidCpfCnpj('11.222.333/0001-99'), false); // DV errado
+	assert.equal(isValidCpfCnpj('123'), false); // tamanho inválido
+
+	// ── Liquidação: deduz os tributos do valor bruto ──
+	const set = computeSettlement(1000, servInterna); // ISS 5% + PIS/COFINS 3,65% = 8,65%
+	assert.ok(Math.abs(set.impostoTotal - 86.5) < 1e-6);
+	assert.ok(Math.abs(set.valorLiquido - 913.5) < 1e-6);
+	assert.equal(set.valorBruto, 1000);
+	assert.equal(set.linhas.length, servInterna.lines.length);
+	// Valor inválido/negativo -> zera (nunca líquido fantasioso)
+	assert.equal(computeSettlement(0, servInterna).valorLiquido, 0);
+	assert.equal(computeSettlement(-500, servInterna).impostoTotal, 0);
+
+	// ── RPS/XML para a prefeitura: bem-formado e com escape ──
+	const xml = buildRpsXml({ prestadorCnpj: MERCHANT_PROFILE.cnpj, tomadorDoc: '111.444.777-35', tomadorCidade: 'São Paulo - SP', discriminacao: 'Consultoria <fiscal> & cia', valorServico: 1000, aliquota: 5, valorIss: 50 });
+	assert.match(xml, /<\?xml version="1\.0" encoding="UTF-8"\?>/);
+	assert.match(xml, /<ValorServicos>1000\.00<\/ValorServicos>/);
+	assert.match(xml, /<Aliquota>0\.0500<\/Aliquota>/);
+	assert.match(xml, /<Cpf>11144477735<\/Cpf>/); // CPF do tomador
+	assert.match(xml, /Consultoria &lt;fiscal&gt; &amp; cia/); // XML escapado (anti-corrupção)
+	assert.doesNotMatch(xml, /<fiscal>/); // nada de tag injetada crua
 }
 
 // 25. Blindagem legal + Tour: componentes visuais do engine-core
@@ -796,8 +837,10 @@ try {
 {
 	const { analyzePricing, ORACLE_SYSTEM_PROMPT } = await import('@foundry/engine-core/pricing');
 
-	// System prompt universal e proibido de cravar valor exato
-	assert.match(ORACLE_SYSTEM_PROMPT, /Especialista Universal em Precificação/);
+	// System prompt: persona canônica + regras de preço + proibido cravar valor exato
+	assert.match(ORACLE_SYSTEM_PROMPT, /motor de inteligência do "Lidar Core"/);
+	assert.match(ORACLE_SYSTEM_PROMPT, /ORÁCULO DE PREÇOS/);
+	assert.match(ORACLE_SYSTEM_PROMPT, /Rateio de insumos/); // regra de fração
 	assert.match(ORACLE_SYSTEM_PROMPT, /ESTRITAMENTE PROIBIDO/);
 	assert.match(ORACLE_SYSTEM_PROMPT, /faixa/i);
 
@@ -841,7 +884,7 @@ try {
 		const { POST, default: methodHandler, ORACLE_SYSTEM_PROMPT } = await import(pathToFileURL(compiled).href);
 		const call = (body) => POST(new Request('https://lidarcore.example/api/pricing-oracle', { method: 'POST', headers: { 'content-type': 'application/json' }, body }));
 
-		assert.match(ORACLE_SYSTEM_PROMPT, /Especialista Universal em Precificação/);
+		assert.match(ORACLE_SYSTEM_PROMPT, /ORÁCULO DE PREÇOS/);
 
 		// contrato de entrada fail-closed
 		assert.equal((await call('não é json')).status, 400);
@@ -1171,6 +1214,89 @@ try {
 		await rm(join(compiled, '..'), { recursive: true, force: true });
 		if (guardDir) await rm(guardDir, { recursive: true, force: true });
 	}
+}
+
+// 33. Configurações Fiscais: validação do Certificado A1 (.pfx/.p12) fail-closed
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./factory-shell/src/settings/certFile.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-cert-')), 'certFile.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { CERT_EXTENSIONS, MAX_CERT_BYTES, isAllowedCertFile, validateCertFile } = await import(pathToFileURL(compiled).href);
+
+		// Só PKCS#12 (.pfx / .p12) — case-insensitive; qualquer outra coisa é barrada
+		assert.deepEqual([...CERT_EXTENSIONS], ['.pfx', '.p12']);
+		assert.equal(isAllowedCertFile('empresa.pfx'), true);
+		assert.equal(isAllowedCertFile('EMPRESA.P12'), true);
+		assert.equal(isAllowedCertFile('certificado.pem'), false); // formato errado
+		assert.equal(isAllowedCertFile('virus.pfx.exe'), false);   // dupla extensão
+		assert.equal(isAllowedCertFile(''), false);
+
+		// validateCertFile: extensão + tamanho (fail-closed)
+		assert.equal(validateCertFile({ name: 'a1.pfx', size: 4096 }).ok, true);
+		assert.equal(validateCertFile({ name: 'a1.txt', size: 4096 }).ok, false); // formato
+		assert.equal(validateCertFile({ name: 'a1.pfx', size: 0 }).ok, false);    // vazio
+		assert.equal(validateCertFile({ name: 'a1.pfx', size: MAX_CERT_BYTES + 1 }).ok, false); // grande demais
+		assert.match(validateCertFile({ name: 'a1.txt', size: 10 }).error, /\.pfx ou \.p12/);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 34. Guided Tour "Zero Suporte": gate de LocalStorage + render fail-safe
+{
+	const { ToolOnboardingTour, hasSeenTour, markTourSeen } = await import('@foundry/engine-core');
+	assert.equal(typeof ToolOnboardingTour, 'function');
+
+	// Primeiro acesso: nunca visto -> tour deve rodar; após marcar -> nunca mais
+	const key = 'lidar:tour:smoke-xyz';
+	window.localStorage.removeItem(key);
+	assert.equal(hasSeenTour(key), false);
+	markTourSeen(key);
+	assert.equal(hasSeenTour(key), true);
+	assert.equal(window.localStorage.getItem(key), 'true');
+
+	// SSR/primeiro paint: sem efeitos, o tour não injeta overlay (não bloqueia nada)
+	const html = renderToStaticMarkup(createElement(ToolOnboardingTour, { storageKey: 'lidar:tour:ssr', steps: [{ targetSelector: '#x', body: 'passo' }] }));
+	assert.equal(html, '', 'tour não renderiza no server (só ativa via efeito no cliente)');
+
+	// Sem passos: nunca ativa
+	assert.equal(renderToStaticMarkup(createElement(ToolOnboardingTour, { storageKey: 'lidar:tour:empty', steps: [] })), '');
+}
+
+// 35. Persona canônica do Lidar Core (@foundry/engine-core/ai): fonte única
+{
+	const { buildSystemPrompt, LIDAR_CORE_PERSONA, MODULE_DIRECTIVES, PRICING_RULES } = await import('@foundry/engine-core/ai');
+
+	// Diretrizes de comunicação (fricção zero / respeito ao tempo / empatia) em toda persona
+	assert.match(LIDAR_CORE_PERSONA, /Fricção Zero/);
+	assert.match(LIDAR_CORE_PERSONA, /NUNCA use jargão/);
+	assert.match(LIDAR_CORE_PERSONA, /PRIMEIRAS linhas/);
+	assert.match(LIDAR_CORE_PERSONA, /Micro e Pequenos Empreendedores/);
+
+	// Todo módulo herda a persona + sua diretriz + formato de saída
+	for (const mod of ['ORACULO', 'CFO', 'CMO', 'FISCAL']) {
+		const prompt = buildSystemPrompt(mod);
+		assert.match(prompt, /Fricção Zero/, `${mod} herda a persona`);
+		assert.match(prompt, /FORMATO DE SAÍDA/, `${mod} tem regra de formato`);
+		assert.ok(prompt.includes(MODULE_DIRECTIVES[mod]), `${mod} inclui a própria diretriz`);
+	}
+
+	// Regras absolutas de preço só entram no Oráculo (unidade, fração, dados faltantes, realidade BR)
+	assert.match(buildSystemPrompt('ORACULO'), /Rateio de insumos/);
+	assert.match(PRICING_RULES, /Realidade econômica brasileira/);
+	assert.match(PRICING_RULES, /Sebrae, GetNinjas, SINAPI/);
+	assert.doesNotMatch(buildSystemPrompt('CFO'), /Rateio de insumos/); // CFO não recebe regras de preço
+
+	// Diretrizes específicas por módulo
+	assert.match(MODULE_DIRECTIVES.ORACULO, /faixa de preço SEGURA/);
+	assert.match(MODULE_DIRECTIVES.CFO, /3 MAIORES ralos/);
+	assert.match(MODULE_DIRECTIVES.CMO, /copiar e colar/);
+	assert.match(MODULE_DIRECTIVES.FISCAL, /ISS, IBS\/CBS/);
 }
 
 console.log('ALL SMOKE TESTS PASSED');

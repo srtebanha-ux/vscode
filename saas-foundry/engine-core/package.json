@@ -17,6 +17,10 @@
     "./pricing": {
       "types": "./dist/pricing/oracle.d.ts",
       "default": "./dist/pricing/oracle.js"
+    },
+    "./ai": {
+      "types": "./dist/ai/persona.d.ts",
+      "default": "./dist/ai/persona.js"
     }
   },
   "scripts": {

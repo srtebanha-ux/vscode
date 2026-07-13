@@ -12,6 +12,7 @@ export * from './components/LoadingSkeleton.js';
 export * from './components/ToastProvider.js';
 export * from './components/Tooltip.js';
 export * from './components/GuidedTour.js';
+export * from './components/ToolOnboardingTour.js';
 export * from './components/DisclaimerBanner.js';
 export * from './billing/BillingDashboard.js';
 export * from './hooks/useTrackEvent.js';

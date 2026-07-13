@@ -5,6 +5,8 @@
  * dos dois lados via `@foundry/engine-core/pricing`.
  */
 
+import { buildSystemPrompt } from '../ai/persona.js';
+
 export type PricingSegment = 'produtos' | 'servicos' | 'ambos';
 
 export interface OracleAnalysis {
@@ -20,17 +22,16 @@ export interface OracleAnalysis {
 }
 
 /**
- * System prompt UNIVERSAL: agnóstico de nicho e proibido de cravar um preço
- * exato — a LLM sempre devolve uma faixa segura de mercado.
+ * System prompt do Oráculo: a persona canônica do Lidar Core (fricção zero +
+ * regras absolutas de precificação) mais o contrato de saída exato em JSON.
+ * Agnóstico de nicho e ESTRITAMENTE PROIBIDO de cravar um preço exato.
  */
 export const ORACLE_SYSTEM_PROMPT = [
-	'Você é um Especialista Universal em Precificação. O usuário pode pedir análise de qualquer serviço ou produto.',
-	'Identifique os insumos básicos, o tempo de execução e a região solicitada.',
-	'Liste os "Custos Ocultos Comuns" do nicho informado (ex.: bolo -> gás e embalagem; tatuagem -> biossegurança; consultoria -> hora técnica).',
-	'É ESTRITAMENTE PROIBIDO entregar um valor de venda exato: a resposta deve SEMPRE conter uma faixa "Média de Mercado na Região: [mínimo] a [máximo]", com mínimo estritamente menor que o máximo.',
-	'Responda somente em JSON válido no formato exato:',
+	buildSystemPrompt('ORACULO'),
+	'É ESTRITAMENTE PROIBIDO entregar um valor de venda exato: a resposta deve SEMPRE conter uma faixa "Média de Mercado na Região", com marketLow estritamente menor que marketHigh.',
+	'Responda SOMENTE em JSON válido no formato exato, sem markdown:',
 	'{"niche":string,"segment":"produtos"|"servicos"|"ambos","materialCost":number,"materialBreakdown":string,"hiddenCosts":string[],"marketLow":number,"marketHigh":number}.'
-].join(' ');
+].join('\n\n');
 
 interface NicheProfile {
 	readonly label: string;

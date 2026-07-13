@@ -15,6 +15,8 @@ import { AuthPage } from './auth/AuthPage';
 import { RoleGuardDemo } from './security/RoleGuardDemo';
 import { createPluginRegistry } from './pluginCatalog';
 import { LandingPage } from './public/LandingPage';
+import { SegmentPresentation } from './public/SegmentPresentation';
+import { readUserTier } from './catalog';
 import { EnterpriseContact, type EnterpriseLead } from './public/EnterpriseContact';
 import { LeadMagnetTool } from './public-tools/LeadMagnetTool';
 import { PublicReceiptMaker } from './public-tools/PublicReceiptMaker';
@@ -105,8 +107,10 @@ function Root(): ReactElement {
 	if (router.path === '/' || router.path === '') {
 		return (
 			<LandingPage
-				onStartFree={() => router.navigate('/tools/pricing')}
-				onEnterprise={() => router.navigate('/enterprise')}
+				onSelectTier={tier => {
+					window.localStorage.setItem('userTier', tier);
+					router.navigate('/apresentacao');
+				}}
 				onEnter={() => router.navigate('/app')}
 			/>
 		);
@@ -115,6 +119,11 @@ function Root(): ReactElement {
 	// Iscas digitais públicas (PLG): ferramenta pronta, captura de lead, sem auth nem shell.
 	const captureLead = (lead: Lead, tool: string): void =>
 		telemetrySink.capture('Lead Capturado', { tool, email: lead.email, name: lead.name });
+
+	// Apresentação (Pitch Deck) pós-escolha de tier — antes do painel.
+	if (router.path === '/apresentacao') {
+		return <SegmentPresentation tier={readUserTier() ?? 'pme'} onEnter={() => router.navigate('/marketplace')} />;
+	}
 
 	// Enterprise (Sales-led): formulário de contato de alto nível.
 	if (router.path === '/enterprise') {

@@ -18,6 +18,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
+import { buildSystemPrompt } from '@foundry/engine-core/ai';
 import { quotaStore, BASIC_PLAN_MONTHLY_TOKENS, QUOTA_EXCEEDED_MESSAGE } from '../lib/tokenQuota';
 
 // Re-export para consumidores existentes (testes / composição da API).
@@ -52,19 +53,14 @@ export interface CognitiveResponse {
 }
 
 /** Personas rígidas — a identidade do agente é decidida no servidor, nunca pelo cliente. */
+/**
+ * Personas dos agentes C-Level — derivadas da persona CANÔNICA do Lidar Core
+ * (`@foundry/engine-core/ai`): fricção zero, respeito ao tempo e empatia, mais a
+ * diretriz específica de cada agente. Fonte única compartilhada com o Oráculo.
+ */
 export const SYSTEM_PROMPTS: Readonly<Record<AgentType, string>> = {
-	CFO: [
-		'Você é um Diretor Financeiro implacável, focado em fluxo de caixa, margem de lucro',
-		'e cortes de custos operacionais de PMEs. Analise o contexto financeiro recebido e',
-		'responda com diagnóstico direto, números concretos (runway, margem, cortes em R$)',
-		'e um plano de ação priorizado. Sem rodeios, sem jargão vazio: decisões executáveis.'
-	].join(' '),
-	CMO: [
-		'Você é um Growth Hacker, focado em conversão, copywriting persuasivo e estratégias',
-		'de baixo custo de aquisição. Audite o material recebido, aponte onde a copy fala de',
-		'características em vez de benefícios e entregue peças prontas: ganchos, roteiros de',
-		'anúncio e texto de landing page orientados a conversão para PMEs.'
-	].join(' ')
+	CFO: buildSystemPrompt('CFO'),
+	CMO: buildSystemPrompt('CMO')
 };
 
 const ANTHROPIC_MODEL = 'claude-opus-4-8';

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { BrainCircuit, Calculator, CircleDollarSign, FileText, Hexagon, Home, Landmark, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Puzzle, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
+import { BrainCircuit, Calculator, CircleDollarSign, FileText, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Puzzle, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
 
 export interface SessionInfo {
@@ -44,8 +44,9 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 	const commands = useMemo<readonly Command[]>(() => {
 		const items: Command[] = [
 			{ id: 'nav-home', label: 'Início', hint: 'Painel principal', icon: Home, keywords: 'home dashboard painel', run: () => onNavigate('/app') },
-			{ id: 'nav-store', label: 'Marketplace', hint: 'Ativar módulos e assinatura', icon: Store, keywords: 'loja store módulos assinatura', run: () => onNavigate('/storefront') },
+			{ id: 'nav-store', label: 'Marketplace', hint: 'Ativar módulos e assinatura', icon: Store, keywords: 'loja store módulos assinatura', run: () => onNavigate('/marketplace') },
 			{ id: 'nav-billing', label: 'Faturamento', hint: 'Consumo de IA, plano e faturas', icon: Receipt, keywords: 'faturamento billing assinatura fatura tokens cota plano stripe', run: () => onNavigate('/billing') },
+			{ id: 'nav-tax-settings', label: 'Configurações Fiscais', hint: 'Certificado A1 e emissão automática', icon: Lock, keywords: 'certificado a1 fiscal emissão nota configurações segurança pfx p12', run: () => onNavigate('/settings/fiscal') },
 			...plugins.map(plugin => ({
 				id: `mod-${plugin.id}`,
 				label: plugin.displayName ?? plugin.id,
@@ -109,12 +110,12 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 
 				<nav aria-label="Módulos" className="flex-1 space-y-1 px-3 py-2">
 					<a
-						href="/storefront"
+						href="/marketplace"
 						title="Marketplace"
-						aria-current={currentPath === '/storefront' ? 'page' : undefined}
-						onClick={event => navigate(event, '/storefront')}
+						aria-current={currentPath === '/marketplace' ? 'page' : undefined}
+						onClick={event => navigate(event, '/marketplace')}
 						className={`group mb-3 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
-							currentPath === '/storefront'
+							currentPath === '/marketplace'
 								? 'bg-gray-900 text-white shadow-sm'
 								: 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
 						}`}

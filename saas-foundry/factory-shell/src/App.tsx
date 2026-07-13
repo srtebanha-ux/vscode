@@ -11,6 +11,7 @@ import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } fro
 import { MasterDashboard } from './admin/MasterDashboard';
 import { BillingPage } from './billing/BillingPage';
 import { DashboardHome } from './DashboardHome';
+import { TaxSettings } from './settings/TaxSettings';
 import type { UserRole } from './auth/AuthProvider';
 import { MainLayout, type SessionInfo } from './MainLayout';
 import { OnboardingProvider } from './providers/OnboardingProvider';
@@ -63,9 +64,9 @@ function Welcome({ navigate, isAdmin }: { readonly navigate: (to: string) => voi
 		},
 		{
 			icon: Settings,
-			title: 'Configurações da conta',
-			description: 'Perfil, equipe e preferências do seu espaço.',
-			run: () => toast.success('Configurações da conta chegam na próxima versão.')
+			title: 'Configurações Fiscais',
+			description: 'Envie seu Certificado A1 e habilite a emissão automática de notas.',
+			run: () => navigate('/settings/fiscal')
 		}
 	];
 
@@ -135,8 +136,10 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 		content = role === 'SUPER_ADMIN'
 			? <Welcome navigate={navigate} isAdmin />
 			: <DashboardHome email={session?.email} navigate={navigate} />;
-	} else if (path === '/storefront') {
+	} else if (path === '/marketplace' || path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
+	} else if (path === '/settings/fiscal') {
+		content = <TaxSettings />;
 	} else if (path === '/billing') {
 		content = <BillingPage tenantId={principal.tenantId} />;
 	} else if (path === '/admin') {

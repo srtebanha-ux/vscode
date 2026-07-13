@@ -249,6 +249,7 @@ const forbidden = [
 	'./modules-library/enterprise-controllership/ExecutiveBriefingGenerator.tsx',
 	'./modules-library/enterprise-controllership/ERPSyncBridge.tsx',
 	'./modules-library/enterprise-controllership/TaxScenarioSimulator.tsx',
+	'./modules-library/enterprise-controllership/FiscalDiscoveryHub.tsx',
 	'./modules-library/essentials/construction-calculator/ConstructionCalculator.tsx',
 	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
 	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
@@ -895,6 +896,46 @@ try {
 	// Alíquota nova >= atual -> sem economia (nunca ROI negativo fantasioso)
 	const flat = projectScenario({ aliquotaAtual: 20, novaAliquota: 20, volumeMensal: 500000, meses: 36 });
 	assert.equal(flat.roiAcumulado, 0);
+}
+
+// 29. Central de Descoberta Fiscal: feed proativo (Push) + mineração ativa (Pull)
+{
+	const { FiscalDiscoveryHub, filterRecords, sortRecords, FISCAL_RECORDS } = await import(
+		'./modules-library/enterprise-controllership/dist/FiscalDiscoveryHub.js'
+	);
+
+	// Render: aba padrão (Alertas da IA) traz a anomalia crítica da Filial Sul
+	const hub = renderToStaticMarkup(createElement(FiscalDiscoveryHub));
+	assert.match(hub, /Central de Descoberta Fiscal/);
+	assert.match(hub, /Alertas da IA/);
+	assert.match(hub, /Mineração Avançada/);
+	assert.match(hub, /excedeu o limite do teto sindical em 12%/);
+	assert.match(hub, /Risco de passivo trabalhista estimado: R\$ 32\.000/);
+	assert.match(hub, /Adicionar ao Dossiê Trimestral/);
+	assert.match(hub, /Arquivar/);
+
+	// filterRecords: período fiscal (trimestre) restringe corretamente
+	const t1 = filterRecords(FISCAL_RECORDS, { quarter: '2025-T1', filial: 'todas', min: 0, max: Infinity, code: '' });
+	assert.ok(t1.length > 0, 'T1 deve ter registros');
+	assert.ok(t1.every(r => r.data >= '2025-01' && r.data < '2025-04'), 'apenas jan–mar no T1');
+
+	// filterRecords: filial + faixa de valor + classificação fiscal combinam (AND)
+	const sul = filterRecords(FISCAL_RECORDS, { quarter: 'todos', filial: 'Filial Sul', min: 0, max: Infinity, code: '' });
+	assert.ok(sul.every(r => r.filial === 'Filial Sul'), 'somente Filial Sul');
+	const faixa = filterRecords(FISCAL_RECORDS, { quarter: 'todos', filial: 'todas', min: 100000, max: 200000, code: '' });
+	assert.ok(faixa.every(r => r.valor >= 100000 && r.valor <= 200000), 'respeita a faixa de valor');
+	const ncm = filterRecords(FISCAL_RECORDS, { quarter: 'todos', filial: 'todas', min: 0, max: Infinity, code: '2523.29.10' });
+	assert.ok(ncm.length > 0 && ncm.every(r => r.ncm === '2523.29.10'), 'filtra por NCM');
+	const cst = filterRecords(FISCAL_RECORDS, { quarter: 'todos', filial: 'todas', min: 0, max: Infinity, code: '090' });
+	assert.ok(cst.length > 0 && cst.every(r => r.cst === '090'), 'filtra por CST');
+
+	// sortRecords: pura, estável e não muta a entrada
+	const original = [...FISCAL_RECORDS];
+	const desc = sortRecords(FISCAL_RECORDS, 'valor', 'desc');
+	for (let i = 1; i < desc.length; i += 1) assert.ok(desc[i - 1].valor >= desc[i].valor, 'ordenado desc por valor');
+	const asc = sortRecords(FISCAL_RECORDS, 'valor', 'asc');
+	assert.equal(asc[0].valor, Math.min(...FISCAL_RECORDS.map(r => r.valor)));
+	assert.deepEqual([...FISCAL_RECORDS], original, 'sortRecords não muta a fonte');
 }
 
 console.log('ALL SMOKE TESTS PASSED');

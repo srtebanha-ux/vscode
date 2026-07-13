@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react';
 import { hasScopes, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, FlaskConical, LayoutDashboard, Landmark, Radar, Server, ShieldAlert, Sparkles, Terminal, Users } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, FlaskConical, LayoutDashboard, Landmark, Radar, ScanSearch, Server, ShieldAlert, Sparkles, Terminal, Users } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ExecutiveBriefingGenerator } from './ExecutiveBriefingGenerator.js';
 import { ERPSyncBridge } from './ERPSyncBridge.js';
+import { FiscalDiscoveryHub } from './FiscalDiscoveryHub.js';
 import { TaxScenarioSimulator } from './TaxScenarioSimulator.js';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['read:insights', 'write:insights'];
@@ -88,7 +89,7 @@ function Dashboard(): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [exporting, setExporting] = useState(false);
-	const [view, setView] = useState<'painel' | 'dossie' | 'erp' | 'simulador'>('painel');
+	const [view, setView] = useState<'painel' | 'dossie' | 'erp' | 'simulador' | 'descoberta'>('painel');
 
 	const totals = useMemo(() => {
 		const folha = SECTORS.reduce((s, r) => s + r.custoFolha, 0);
@@ -140,6 +141,7 @@ function Dashboard(): React.JSX.Element {
 			<div role="tablist" aria-label="Visão" className="flex w-fit flex-wrap gap-1 rounded-xl bg-zinc-900/80 p-1 ring-1 ring-zinc-800">
 				{([
 					['painel', 'Painel', LayoutDashboard],
+						['descoberta', 'Descoberta Fiscal', ScanSearch],
 					['erp', 'Ingestão ERP', Server],
 					['simulador', 'Simulador Tributário', FlaskConical],
 					['dossie', 'Dossiê Executivo', Terminal]
@@ -162,6 +164,8 @@ function Dashboard(): React.JSX.Element {
 
 			{view === 'dossie' ? (
 				<ExecutiveBriefingGenerator />
+			) : view === 'descoberta' ? (
+				<FiscalDiscoveryHub />
 			) : view === 'erp' ? (
 				<ERPSyncBridge />
 			) : view === 'simulador' ? (

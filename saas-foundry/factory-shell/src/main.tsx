@@ -12,6 +12,7 @@ import { App } from './App';
 import { capturePageview, identifyTenant, posthogClient, telemetrySink } from './services/analytics';
 import { AuthProvider, RequireAuth, useAuth, type UserRole } from './auth/AuthProvider';
 import { AuthPage } from './auth/AuthPage';
+import { RoleGuardDemo } from './security/RoleGuardDemo';
 import { createPluginRegistry } from './pluginCatalog';
 import { LandingPage } from './public/LandingPage';
 import { EnterpriseContact, type EnterpriseLead } from './public/EnterpriseContact';
@@ -134,6 +135,11 @@ function Root(): ReactElement {
 	// Tela unificada de acesso, navegável direto (modo demonstração quando não há Firebase).
 	if (router.path === '/auth' && !isFirebaseConfigured) {
 		return <AuthPage handlers={{ onPasswordLogin: async () => router.navigate('/app'), onSignUp: async () => router.navigate('/app'), onGoogle: async () => router.navigate('/app') }} />;
+	}
+
+	// Bancada de verificação do RBAC (RoleGuard) — apenas fora do Firebase.
+	if (router.path === '/security-demo' && !isFirebaseConfigured) {
+		return <RoleGuardDemo />;
 	}
 
 	if (isFirebaseConfigured) {

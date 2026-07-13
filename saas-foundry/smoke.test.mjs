@@ -257,6 +257,11 @@ const forbidden = [
 	'./modules-library/essentials/smart-invoice/SmartInvoiceHelper.tsx',
 	// A tela de acesso é apresentacional e desacoplada: o Firebase mora só no AuthProvider.
 	'./factory-shell/src/auth/AuthPage.tsx',
+	// Camada de segurança RBAC: lógica pura de cargo, sem acoplamento a Firebase.
+	'./factory-shell/src/security/roles.ts',
+	'./factory-shell/src/security/RoleGuard.tsx',
+	'./factory-shell/src/security/RoleContext.tsx',
+	'./factory-shell/src/security/navigation.tsx',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
 	'./engine-core/src/plugin-host/CoreServices.ts',
@@ -1008,6 +1013,56 @@ try {
 	const asc = sortRecords(FISCAL_RECORDS, 'valor', 'asc');
 	assert.equal(asc[0].valor, Math.min(...FISCAL_RECORDS.map(r => r.valor)));
 	assert.deepEqual([...FISCAL_RECORDS], original, 'sortRecords não muta a fonte');
+}
+
+// 31. RBAC (RoleGuard): lógica de cargo pura, fail-closed e redirecionamento
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./factory-shell/src/security/roles.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-rbac-')), 'roles.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { AppRole, ROLE_HOME, UNAUTHENTICATED_HOME, isRoleAllowed, redirectFor, normalizeRole, decodeRoleFromJwt } = await import(pathToFileURL(compiled).href);
+
+		// Cargos exatos exigidos pelo contrato
+		assert.equal(AppRole.PME, 'ROLE_PME');
+		assert.equal(AppRole.ENTERPRISE_CLIENT, 'ROLE_ENTERPRISE_CLIENT');
+		assert.equal(AppRole.ADMIN_CONTROLLER, 'ROLE_ADMIN_CONTROLLER');
+
+		// Autorização fail-closed
+		assert.equal(isRoleAllowed(AppRole.ADMIN_CONTROLLER, [AppRole.ADMIN_CONTROLLER]), true);
+		assert.equal(isRoleAllowed(AppRole.PME, [AppRole.ADMIN_CONTROLLER]), false); // PME não entra no enterprise
+		assert.equal(isRoleAllowed(AppRole.ADMIN_CONTROLLER, [AppRole.PME, AppRole.ADMIN_CONTROLLER]), true); // admin vê tudo
+		assert.equal(isRoleAllowed(null, [AppRole.PME]), false); // sem cargo -> barrado
+		assert.equal(isRoleAllowed(AppRole.PME, []), false); // rota sem cargos permitidos -> barrado
+
+		// Redirecionamento: cada cargo cai na própria rota-casa; sem cargo -> login
+		assert.equal(redirectFor(AppRole.PME), '/pme-dashboard');
+		assert.equal(redirectFor(AppRole.ENTERPRISE_CLIENT), '/enterprise');
+		assert.equal(redirectFor(AppRole.ADMIN_CONTROLLER), '/controladoria');
+		assert.equal(redirectFor(null), UNAUTHENTICATED_HOME);
+		assert.equal(ROLE_HOME[AppRole.PME], '/pme-dashboard');
+
+		// normalizeRole: só aceita cargos conhecidos
+		assert.equal(normalizeRole('ROLE_PME'), AppRole.PME);
+		assert.equal(normalizeRole('ROLE_HACKER'), null);
+		assert.equal(normalizeRole(undefined), null);
+		assert.equal(normalizeRole(42), null);
+
+		// decodeRoleFromJwt: lê a claim role do payload base64url (sem validar assinatura)
+		const b64url = obj => Buffer.from(JSON.stringify(obj)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+		const jwt = claims => `h.${b64url(claims)}.sig`;
+		assert.equal(decodeRoleFromJwt(jwt({ role: 'ROLE_ADMIN_CONTROLLER', sub: 'u1' })), AppRole.ADMIN_CONTROLLER);
+		assert.equal(decodeRoleFromJwt(jwt({ role: 'ROLE_PME' })), AppRole.PME);
+		assert.equal(decodeRoleFromJwt(jwt({ sub: 'u1' })), null); // sem claim role
+		assert.equal(decodeRoleFromJwt('not-a-jwt'), null); // lixo -> null (nunca lança)
+		assert.equal(decodeRoleFromJwt(''), null);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
 }
 
 console.log('ALL SMOKE TESTS PASSED');

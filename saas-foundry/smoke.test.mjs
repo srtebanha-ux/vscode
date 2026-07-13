@@ -265,6 +265,8 @@ const forbidden = [
 	// Configurações fiscais: UI de cofre + validação pura do certificado, sem Firebase.
 	'./factory-shell/src/settings/TaxSettings.tsx',
 	'./factory-shell/src/settings/certFile.ts',
+	// Apresentação pública de segmento: pitch deck presentacional, sem Firebase.
+	'./factory-shell/src/public/SegmentPresentation.tsx',
 	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
 	'./api/lib/security/apiGuard.ts',
 	'./api/secure-invoices/route.ts',

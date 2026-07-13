@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { DisclaimerBanner, hasScopes, numberToBRL, useCoreService } from '@foundry/engine-core/ui';
-import { analyzePricing, type OracleAnalysis } from '@foundry/engine-core/pricing';
+import { DisclaimerBanner, hasScopes, numberToBRL, useCoreService, useToast } from '@foundry/engine-core/ui';
+import type { OracleAnalysis } from '@foundry/engine-core/pricing';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowLeft, ArrowRight, Boxes, EyeOff, Info, MapPin, Radar, ShieldAlert, Sparkles, TrendingUp, Wand2 } from 'lucide-react';
@@ -10,27 +10,30 @@ const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
-type OracleReport = OracleAnalysis;
+const ORACLE_ENDPOINT = '/api/pricing-oracle';
+
+/** Contrato tipado da resposta real do backend do Oráculo. */
+export interface OracleApiResponse extends OracleAnalysis {
+	readonly engine?: 'anthropic' | 'simulated';
+}
+
+type OracleReport = OracleApiResponse;
 
 /**
- * Chama a Serverless Function que injeta o system prompt na LLM. Sem backend no
- * dev, cai no mesmo oráculo determinístico com latência simulada — a UI é idêntica.
+ * Integração real: POST na Serverless Function do Oráculo. Sem mock, sem
+ * fallback determinístico — se a API falhar, o erro sobe para o chamador
+ * tratar (toast). É isso que destrava os testes contra o backend de verdade.
  */
 async function askOracle(description: string, region: string): Promise<OracleReport> {
-	try {
-		const response = await fetch('/api/pricing-oracle', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ description, region })
-		});
-		if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
-			return (await response.json()) as OracleReport;
-		}
-	} catch {
-		// dev: sem função serverless rodando
+	const response = await fetch(ORACLE_ENDPOINT, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ description, region })
+	});
+	if (!response.ok) {
+		throw new Error(`Oráculo respondeu ${response.status}`);
 	}
-	await new Promise(resolve => setTimeout(resolve, 400));
-	return analyzePricing(description, region);
+	return (await response.json()) as OracleReport;
 }
 
 /** Relatório -> sementes da calculadora. O "Custo" recebe o material estimado; a margem fica pro usuário. */
@@ -62,6 +65,7 @@ const LOADING_STEPS: readonly string[] = [
 type Phase = 'discovery' | 'analyzing' | 'result' | 'calculator';
 
 function Oracle(): React.JSX.Element {
+	const toast = useToast();
 	const [phase, setPhase] = useState<Phase>('discovery');
 	const [description, setDescription] = useState('');
 	const [region, setRegion] = useState('');
@@ -83,7 +87,8 @@ function Oracle(): React.JSX.Element {
 
 	useEffect(() => () => timers.current.forEach(window.clearTimeout), []);
 
-	const analyze = (): void => {
+	/** Função de chamada: dispara o fetch real, controla o loading e trata o erro. */
+	const handleSubmit = (): void => {
 		setTouched(true);
 		if (!descriptionOk || !regionOk) return;
 		setPhase('analyzing');
@@ -93,15 +98,23 @@ function Oracle(): React.JSX.Element {
 			if (index === 0) return;
 			timers.current.push(window.setTimeout(() => setStepIndex(index), index * stepMs));
 		});
-		// A LLM (ou o fallback) roda em paralelo às mensagens; o resultado só entra
-		// quando ambos terminam, para o loading não piscar rápido demais.
+		// A IA roda em paralelo às mensagens de progresso; no sucesso, o resultado só
+		// entra quando ambos terminam, para o loading não piscar rápido demais.
 		const minDelay = new Promise<void>(resolve => {
 			timers.current.push(window.setTimeout(resolve, LOADING_STEPS.length * stepMs + 200));
 		});
-		void Promise.all([askOracle(description, region), minDelay]).then(([oracleReport]) => {
-			setReport(oracleReport);
-			setPhase('result');
-		});
+		Promise.all([askOracle(description, region), minDelay])
+			.then(([oracleReport]) => {
+				setReport(oracleReport);
+				setPhase('result');
+			})
+			.catch(() => {
+				// API indisponível: para o loading, avisa com elegância e volta ao formulário.
+				timers.current.forEach(window.clearTimeout);
+				timers.current = [];
+				toast.error('O Oráculo está indisponível no momento. Tente novamente.');
+				setPhase('discovery');
+			});
 	};
 
 	const restart = (): void => {
@@ -165,7 +178,7 @@ function Oracle(): React.JSX.Element {
 
 						<button
 							type="button"
-							onClick={analyze}
+							onClick={handleSubmit}
 							className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.01]"
 						>
 							<Sparkles className="h-4 w-4" aria-hidden /> Analisar Mercado

@@ -247,6 +247,8 @@ const forbidden = [
 	'./modules-library/virtual-cmo/VirtualCMO_Agent.tsx',
 	'./modules-library/enterprise-controllership/EnterpriseControllershipDashboard.tsx',
 	'./modules-library/enterprise-controllership/ExecutiveBriefingGenerator.tsx',
+	'./modules-library/enterprise-controllership/ERPSyncBridge.tsx',
+	'./modules-library/enterprise-controllership/TaxScenarioSimulator.tsx',
 	'./modules-library/essentials/construction-calculator/ConstructionCalculator.tsx',
 	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
 	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
@@ -864,6 +866,35 @@ try {
 	assert.match(html, /Correção imediata gera R\$ 45\.000 de caixa positivo no trimestre/);
 	// Botão de exportação do dossiê
 	assert.match(html, /Gerar Apresentação de Resultados \(PDF\/PPTX\)/);
+}
+
+// 28. Ponte ERP + Simulador Tributário: painel de ingestão + projeção da Reforma
+{
+	const { ERPSyncBridge } = await import('./modules-library/enterprise-controllership/dist/ERPSyncBridge.js');
+	const { projectScenario } = await import('./modules-library/enterprise-controllership/dist/TaxScenarioSimulator.js');
+
+	// Ponte de ingestão: conectores + selo de segurança + ação
+	const erp = renderToStaticMarkup(createElement(ERPSyncBridge));
+	assert.match(erp, /Ponte de Ingestão de Dados/);
+	assert.match(erp, /SAP ERP/);
+	assert.match(erp, /TOTVS Protheus/);
+	assert.match(erp, /Receita Federal \/ XML/);
+	assert.match(erp, /Criptografia End-to-End · Compliance LGPD/);
+	assert.match(erp, /Notas Fiscais Processadas/);
+	assert.match(erp, /Forçar Sincronização de Lote/);
+
+	// Projeção: custo acumulado atual vs. Lidar Core, ROI = economia mensal × meses
+	const proj = projectScenario({ aliquotaAtual: 34, novaAliquota: 26.5, volumeMensal: 1_200_000, meses: 36 });
+	assert.equal(proj.series.length, 36);
+	assert.equal(proj.economiaMensal, 90000); // 1.2M*(34-26,5)% = 90k/mês
+	assert.equal(proj.roiAcumulado, 3_240_000); // 90k × 36
+	assert.equal(proj.series[35].atual, 408000 * 36); // custo mantendo a estrutura
+	assert.equal(proj.series[35].lidar, 318000 * 36); // custo com a estrutura Lidar Core
+	assert.ok(proj.series[35].atual > proj.series[35].lidar, 'a estrutura atual custa mais');
+
+	// Alíquota nova >= atual -> sem economia (nunca ROI negativo fantasioso)
+	const flat = projectScenario({ aliquotaAtual: 20, novaAliquota: 20, volumeMensal: 500000, meses: 36 });
+	assert.equal(flat.roiAcumulado, 0);
 }
 
 console.log('ALL SMOKE TESTS PASSED');

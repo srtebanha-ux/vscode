@@ -2,9 +2,11 @@ import { useMemo, useState } from 'react';
 import { hasScopes, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, LayoutDashboard, Landmark, Radar, ShieldAlert, Sparkles, Terminal, Users } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, FlaskConical, LayoutDashboard, Landmark, Radar, Server, ShieldAlert, Sparkles, Terminal, Users } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ExecutiveBriefingGenerator } from './ExecutiveBriefingGenerator.js';
+import { ERPSyncBridge } from './ERPSyncBridge.js';
+import { TaxScenarioSimulator } from './TaxScenarioSimulator.js';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['read:insights', 'write:insights'];
 const MODULE_ID = 'enterprise-controllership-v1';
@@ -86,7 +88,7 @@ function Dashboard(): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [exporting, setExporting] = useState(false);
-	const [view, setView] = useState<'painel' | 'dossie'>('painel');
+	const [view, setView] = useState<'painel' | 'dossie' | 'erp' | 'simulador'>('painel');
 
 	const totals = useMemo(() => {
 		const folha = SECTORS.reduce((s, r) => s + r.custoFolha, 0);
@@ -134,9 +136,14 @@ function Dashboard(): React.JSX.Element {
 				</button>
 			</header>
 
-			{/* Alternância: painel de auditoria vs. dossiê da controladora humana */}
-			<div role="tablist" aria-label="Visão" className="flex w-fit gap-1 rounded-xl bg-zinc-900/80 p-1 ring-1 ring-zinc-800">
-				{([['painel', 'Painel', LayoutDashboard], ['dossie', 'Dossiê Executivo', Terminal]] as const).map(([id, label, Icon]) => {
+			{/* Alternância entre os módulos do centro de comando */}
+			<div role="tablist" aria-label="Visão" className="flex w-fit flex-wrap gap-1 rounded-xl bg-zinc-900/80 p-1 ring-1 ring-zinc-800">
+				{([
+					['painel', 'Painel', LayoutDashboard],
+					['erp', 'Ingestão ERP', Server],
+					['simulador', 'Simulador Tributário', FlaskConical],
+					['dossie', 'Dossiê Executivo', Terminal]
+				] as const).map(([id, label, Icon]) => {
 					const activeTab = view === id;
 					return (
 						<button
@@ -155,6 +162,10 @@ function Dashboard(): React.JSX.Element {
 
 			{view === 'dossie' ? (
 				<ExecutiveBriefingGenerator />
+			) : view === 'erp' ? (
+				<ERPSyncBridge />
+			) : view === 'simulador' ? (
+				<TaxScenarioSimulator />
 			) : (
 			<>
 			{/* KPIs — o tamanho do dinheiro em jogo */}

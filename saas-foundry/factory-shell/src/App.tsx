@@ -10,6 +10,7 @@ import { motion } from 'framer-motion';
 import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } from 'lucide-react';
 import { MasterDashboard } from './admin/MasterDashboard';
 import { BillingPage } from './billing/BillingPage';
+import { DashboardHome } from './DashboardHome';
 import type { UserRole } from './auth/AuthProvider';
 import { MainLayout, type SessionInfo } from './MainLayout';
 import { OnboardingProvider } from './providers/OnboardingProvider';
@@ -129,7 +130,11 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 	if (match?.[1] !== undefined) {
 		content = <PluginRenderer pluginId={match[1]} registry={registry} principal={principal} api={api} />;
 	} else if (path === '/app') {
-		content = <Welcome navigate={navigate} isAdmin={role === 'SUPER_ADMIN'} />;
+		// Home do microempreendedor (PME): Arsenal Essencial + gatilho Pro.
+		// SUPER_ADMIN mantém o quick-start operacional da plataforma.
+		content = role === 'SUPER_ADMIN'
+			? <Welcome navigate={navigate} isAdmin />
+			: <DashboardHome email={session?.email} navigate={navigate} />;
 	} else if (path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
 	} else if (path === '/billing') {

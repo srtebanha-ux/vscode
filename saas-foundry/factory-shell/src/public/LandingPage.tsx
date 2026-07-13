@@ -1,176 +1,215 @@
 import type { ReactElement } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowRight, Building2, Hexagon, Rocket, ShieldCheck, Sparkles, type LucideIcon } from 'lucide-react';
+import { ArrowRight, Building2, Calculator, HandCoins, Hexagon, LineChart, Rocket, ShieldCheck, Smartphone, Sparkles, type LucideIcon } from 'lucide-react';
 
 export interface LandingPageProps {
-	/** CTA PLG: "Começar de Graça" -> isca digital / calculadoras públicas. */
+	/** CTA PLG: "Usar Ferramentas Grátis Agora" -> isca digital / calculadoras públicas. */
 	readonly onStartFree: () => void;
-	/** CTA Enterprise: "Agendar Auditoria Executiva" -> formulário de contato de alto nível. */
+	/** CTA Enterprise: "Request Executive Audit" -> formulário de contato de alto nível. */
 	readonly onEnterprise: () => void;
 	/** Acesso de quem já é cliente: sistema logado em /app. */
 	readonly onEnter: () => void;
 }
 
-interface PathCard {
-	readonly audience: string;
+interface Feature {
 	readonly icon: LucideIcon;
-	readonly title: string;
-	readonly copy: string;
-	readonly cta: string;
-	readonly note: string;
-	/** Paleta de acento por público (PLG energético vs. Enterprise sóbrio). */
-	readonly accent: {
-		readonly iconWrap: string;
-		readonly glow: string;
-		readonly ring: string;
-		readonly button: string;
-		readonly badge: string;
-	};
+	readonly label: string;
 }
 
 const reveal = (delay: number) => ({
-	initial: { opacity: 0, y: 16 },
+	initial: { opacity: 0, y: 20 },
 	whileInView: { opacity: 1, y: 0 },
 	viewport: { once: true },
 	transition: { duration: 0.5, delay, ease: 'easeOut' as const }
 });
 
-/** Porta de entrada pública — renderizada fora do shell logado (sem sidebar, sem auth). */
-export function LandingPage({ onStartFree, onEnterprise, onEnter }: LandingPageProps): ReactElement {
-	const paths: readonly [PathCard, PathCard] = [
-		{
-			audience: 'Para Micro e Pequenas Empresas',
-			icon: Rocket,
-			title: 'Automatize seu dia a dia',
-			copy: 'Precificação inteligente, gerador de propostas e marketing em 1 clique.',
-			cta: 'Começar de Graça',
-			note: 'Sem cartão de crédito · comece em 30 segundos',
-			accent: {
-				iconWrap: 'bg-gradient-to-br from-indigo-500 to-fuchsia-500 shadow-fuchsia-500/30',
-				glow: 'group-hover:shadow-fuchsia-500/25',
-				ring: 'group-hover:border-fuchsia-400/40',
-				button: 'bg-gradient-to-r from-indigo-500 to-fuchsia-500 text-white shadow-fuchsia-500/30 hover:shadow-fuchsia-500/50',
-				badge: 'bg-fuchsia-500/10 text-fuchsia-300 ring-fuchsia-500/30'
-			}
-		},
-		{
-			audience: 'Para Grandes Corporações',
-			icon: Building2,
-			title: 'Controladoria e Eficiência Fiscal',
-			copy: 'Análise profunda de folha e adequação à Nova Reforma Tributária.',
-			cta: 'Agendar Auditoria Executiva',
-			note: 'Onboarding assistido · SLA e silo de dados dedicado',
-			accent: {
-				iconWrap: 'bg-gradient-to-br from-sky-500 to-cyan-400 shadow-sky-500/30',
-				glow: 'group-hover:shadow-sky-500/25',
-				ring: 'group-hover:border-sky-400/40',
-				button: 'bg-white text-gray-900 shadow-white/10 hover:shadow-white/20',
-				badge: 'bg-sky-500/10 text-sky-300 ring-sky-500/30'
-			}
-		}
+/** Tecnologia por trás (efeito halo) — nomes, sem preço nem botão de compra. */
+const TECH = ['Lidar Orchestrator', 'Predictive BI', 'Controladoria Enterprise', 'Oráculo de Preços IA', 'Virtual CFO'] as const;
+
+/** Card PME — linguagem simples, sensação de app fácil de usar. */
+function PMECard({ onStart }: { readonly onStart: () => void }): ReactElement {
+	const features: readonly Feature[] = [
+		{ icon: Calculator, label: 'Preço certo, sem prejuízo' },
+		{ icon: Smartphone, label: 'Orçamento bonito no celular' },
+		{ icon: HandCoins, label: 'Cobrança sem passar vergonha' }
 	];
-
-	const onCta = [onStartFree, onEnterprise] as const;
-
 	return (
-		<div className="min-h-screen bg-gray-950 font-sans text-white antialiased">
-			{/* ── Nav ─────────────────────────────────────────────────────────── */}
-			<header>
-				<nav aria-label="Navegação principal" className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-					<span className="flex items-center gap-3">
-						<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 shadow-sm backdrop-blur">
-							<Hexagon className="h-5 w-5" aria-hidden />
+		<motion.article
+			{...reveal(0)}
+			whileHover={{ y: -6 }}
+			transition={{ type: 'spring', stiffness: 280, damping: 22 }}
+			className="flex flex-col rounded-[2rem] bg-white p-10 shadow-2xl shadow-emerald-900/20 ring-1 ring-black/5"
+		>
+			<span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-600">
+				<Rocket className="h-7 w-7" aria-hidden />
+			</span>
+			<span className="mt-6 text-sm font-semibold uppercase tracking-wide text-emerald-600">Para Micro e Pequenas Empresas</span>
+			<h2 className="mt-2 text-3xl font-bold leading-tight tracking-tight text-slate-900">Para quem faz o negócio girar.</h2>
+			<p className="mt-4 text-base leading-relaxed text-slate-600">
+				Chega de quebrar a cabeça com planilhas difíceis. Calcule seu preço certo para não ter prejuízo, faça
+				orçamentos bonitos no celular e cobre clientes sem passar vergonha. Tudo fácil, rápido e sem precisar de
+				suporte.
+			</p>
+			<ul className="mt-7 flex flex-col gap-3">
+				{features.map(feature => (
+					<li key={feature.label} className="flex items-center gap-3 text-sm font-medium text-slate-700">
+						<span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+							<feature.icon className="h-4 w-4" aria-hidden />
 						</span>
-						<span className="text-base font-semibold tracking-tight">
-							Lidar <span className="text-gray-400">Core</span>
+						{feature.label}
+					</li>
+				))}
+			</ul>
+			<div className="flex-1" />
+			<button
+				type="button"
+				onClick={onStart}
+				className="mt-9 inline-flex items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-6 py-4 text-base font-bold text-white shadow-lg shadow-emerald-500/30 transition-all hover:scale-[1.02] hover:bg-emerald-600"
+			>
+				Usar Ferramentas Grátis Agora
+				<ArrowRight className="h-5 w-5" aria-hidden />
+			</button>
+			<p className="mt-3 text-center text-xs text-slate-400">Grátis · sem cadastro complicado · sem suporte necessário</p>
+		</motion.article>
+	);
+}
+
+/** Card Enterprise — linguagem corporativa, glassmorphism escuro "financeiro suíço". */
+function EnterpriseCard({ onAudit }: { readonly onAudit: () => void }): ReactElement {
+	const capabilities: readonly Feature[] = [
+		{ icon: Building2, label: 'Nova Reforma Tributária · IBS/CBS' },
+		{ icon: ShieldCheck, label: 'Mitigação de passivos' },
+		{ icon: LineChart, label: 'Headcount ROI · eficiência de folha' }
+	];
+	const bars = [40, 62, 32, 78, 50, 88, 46];
+	return (
+		<motion.article
+			{...reveal(0.12)}
+			whileHover={{ y: -6 }}
+			transition={{ type: 'spring', stiffness: 280, damping: 22 }}
+			className="relative flex flex-col overflow-hidden rounded-[2rem] border border-white/10 bg-white/[0.04] p-10 shadow-2xl shadow-black/50 backdrop-blur-xl"
+		>
+			<div aria-hidden className="pointer-events-none absolute right-9 top-10 flex h-16 items-end gap-1.5 opacity-50">
+				{bars.map((height, index) => (
+					<motion.span
+						key={index}
+						initial={{ height: 4 }}
+						whileInView={{ height }}
+						viewport={{ once: true }}
+						transition={{ duration: 0.6, delay: index * 0.06, ease: 'easeOut' }}
+						className="w-1.5 rounded-full bg-gradient-to-t from-amber-500/40 to-amber-300"
+					/>
+				))}
+			</div>
+			<span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-400/10 text-amber-300 ring-1 ring-inset ring-amber-400/30">
+				<Building2 className="h-7 w-7" aria-hidden />
+			</span>
+			<span className="mt-6 text-sm font-semibold uppercase tracking-wide text-amber-300">Para Grandes Corporações</span>
+			<h2 className="mt-2 max-w-sm text-3xl font-bold leading-tight tracking-tight text-white">
+				Enterprise &amp; Tax Control <span className="text-slate-500">(Para Grandes Operações).</span>
+			</h2>
+			<p className="mt-4 text-base leading-relaxed text-slate-400">
+				Proteja o valuation da sua empresa. Nosso ecossistema atua na adequação à Nova Reforma Tributária,
+				mitigação de passivos e mapeamento de eficiência de folha (Headcount ROI). Inteligência artificial aliada
+				à Controladoria Estratégica Humana.
+			</p>
+			<ul className="mt-7 flex flex-col gap-3">
+				{capabilities.map(capability => (
+					<li key={capability.label} className="flex items-center gap-3 text-sm font-medium text-slate-200">
+						<span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-400/10 text-amber-300">
+							<capability.icon className="h-4 w-4" aria-hidden />
 						</span>
+						{capability.label}
+					</li>
+				))}
+			</ul>
+			<div className="flex-1" />
+			<button
+				type="button"
+				onClick={onAudit}
+				className="mt-9 inline-flex items-center justify-center gap-2 rounded-2xl border border-amber-400/40 bg-slate-900 px-6 py-4 text-base font-semibold text-amber-200 shadow-lg transition-all hover:scale-[1.02] hover:border-amber-300/60 hover:bg-slate-800"
+			>
+				<Building2 className="h-5 w-5" aria-hidden />
+				Request Executive Audit
+			</button>
+			<p className="mt-3 text-center text-xs text-slate-500">Onboarding assistido · SLA dedicado · Controladoria Estratégica Humana</p>
+		</motion.article>
+	);
+}
+
+/**
+ * Landing pública OFICIAL — full-width, sem sidebar e sem carrinho (renderizada
+ * fora do shell logado). Tema base único (slate-950) para a página respirar.
+ */
+export function LandingPage({ onStartFree, onEnterprise, onEnter }: LandingPageProps): ReactElement {
+	return (
+		<div className="w-full min-h-screen bg-slate-950 font-sans text-white antialiased">
+			{/* Nav minimalista */}
+			<header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
+				<span className="flex items-center gap-3">
+					<span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 backdrop-blur">
+						<Hexagon className="h-5 w-5" aria-hidden />
 					</span>
-					<button
-						type="button"
-						onClick={onEnter}
-						aria-label="Entrar no sistema Lidar Core"
-						className="rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-gray-200 backdrop-blur transition-all hover:scale-105 hover:bg-white/10 hover:text-white"
-					>
-						Entrar
-					</button>
-				</nav>
+					<span className="text-base font-semibold tracking-tight">Lidar <span className="text-slate-400">Core</span></span>
+				</span>
+				<button
+					type="button"
+					onClick={onEnter}
+					className="rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-medium text-slate-200 backdrop-blur transition-all hover:scale-105 hover:bg-white/10 hover:text-white"
+				>
+					Entrar
+				</button>
 			</header>
 
 			<main>
-				{/* ── Hero: a visão global (unifica os dois públicos) ───────────── */}
-				<section aria-labelledby="hero-title" className="relative mx-auto max-w-5xl px-6 pb-16 pt-20 text-center">
-					<div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 mx-auto h-72 max-w-3xl rounded-full bg-gradient-to-r from-indigo-600/30 via-fuchsia-600/20 to-sky-500/30 blur-3xl" />
+				{/* Seção 1 — Hero */}
+				<section aria-labelledby="hero-title" className="relative mx-auto max-w-4xl px-6 pb-16 pt-16 text-center sm:pt-24">
+					<div aria-hidden className="pointer-events-none absolute inset-x-0 -top-8 mx-auto h-72 max-w-3xl rounded-full bg-gradient-to-r from-emerald-500/20 via-indigo-500/20 to-amber-400/20 blur-3xl" />
 					<motion.div {...reveal(0)} className="relative">
-						<span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs font-medium text-gray-300 backdrop-blur">
+						<span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-xs font-medium text-slate-300 backdrop-blur">
 							<Sparkles className="h-3.5 w-3.5 text-indigo-300" aria-hidden />
 							Infraestrutura de inteligência financeira
 						</span>
-						<h1 id="hero-title" className="mx-auto mt-6 max-w-3xl text-4xl font-semibold leading-[1.1] tracking-tight sm:text-6xl">
+						<h1 id="hero-title" className="mx-auto mt-7 max-w-3xl text-5xl font-bold leading-[1.05] tracking-tight sm:text-7xl">
 							A Infraestrutura de Inteligência para o{' '}
-							<span className="bg-gradient-to-r from-indigo-400 via-fuchsia-400 to-sky-300 bg-clip-text text-transparent">
+							<span className="bg-gradient-to-r from-emerald-300 via-indigo-300 to-amber-200 bg-clip-text text-transparent">
 								seu Negócio
 							</span>
 							.
 						</h1>
-						<p className="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-gray-400 sm:text-lg">
-							Do seu primeiro recibo gerado em segundos à auditoria tributária avançada para corporações. O
-							Lidar Core escala com você.
+						<p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-slate-400">
+							Do primeiro recibo gerado em segundos à auditoria tributária de grandes operações. Escolha por onde
+							começar — a plataforma escala com você.
 						</p>
 					</motion.div>
 				</section>
 
-				{/* ── A Bifurcação: dois caminhos, um por público ───────────────── */}
-				<section aria-label="Escolha o seu caminho" className="mx-auto max-w-6xl px-6 pb-6">
-					<div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-						{paths.map((path, index) => (
-							<motion.article
-								key={path.audience}
-								{...reveal(index * 0.12)}
-								whileHover={{ y: -8 }}
-								transition={{ type: 'spring', stiffness: 300, damping: 24 }}
-								className={`group relative flex flex-col overflow-hidden rounded-3xl border border-white/10 bg-white/[0.03] p-8 shadow-2xl shadow-black/40 backdrop-blur transition-colors ${path.accent.ring} ${path.accent.glow} hover:bg-white/[0.05]`}
-							>
-								<div aria-hidden className="pointer-events-none absolute -right-16 -top-16 h-48 w-48 rounded-full bg-white/5 blur-3xl transition-opacity duration-300 group-hover:opacity-100 opacity-0" />
-								<span className={`inline-flex w-fit items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${path.accent.badge}`}>
-									{path.audience}
-								</span>
-								<span className={`mt-6 flex h-14 w-14 items-center justify-center rounded-2xl text-white shadow-lg transition-transform duration-300 group-hover:scale-110 ${path.accent.iconWrap}`}>
-									<path.icon className="h-7 w-7" aria-hidden />
-								</span>
-								<h2 className="mt-6 text-2xl font-semibold tracking-tight">{path.title}</h2>
-								<p className="mt-3 flex-1 text-base leading-relaxed text-gray-400">{path.copy}</p>
-								<button
-									type="button"
-									onClick={onCta[index]}
-									className={`mt-8 inline-flex items-center justify-center gap-2 rounded-2xl px-6 py-4 text-base font-semibold shadow-lg transition-all hover:scale-[1.02] ${path.accent.button}`}
-								>
-									{path.cta}
-									<ArrowRight className="h-5 w-5 transition-transform duration-200 group-hover:translate-x-1" aria-hidden />
-								</button>
-								<p className="mt-3 text-center text-xs text-gray-500">{path.note}</p>
-							</motion.article>
-						))}
+				{/* Seção 2 — O Split: dois caminhos que conversam entre si */}
+				<section aria-label="Escolha o seu caminho" className="mx-auto max-w-6xl px-6 pb-24">
+					<div className="grid grid-cols-1 items-stretch gap-6 lg:grid-cols-2 lg:gap-8">
+						<PMECard onStart={onStartFree} />
+						<EnterpriseCard onAudit={onEnterprise} />
 					</div>
 				</section>
 
-				{/* ── Autoridade: o efeito halo (faixa discreta) ────────────────── */}
-				<section aria-label="Autoridade" className="mx-auto max-w-6xl px-6 py-16">
-					<motion.div
-						{...reveal(0)}
-						className="flex flex-col items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] px-6 py-8 text-center"
-					>
-						<ShieldCheck className="h-6 w-6 text-emerald-400" aria-hidden />
-						<p className="max-w-3xl text-sm leading-relaxed text-gray-400 sm:text-base">
-							Tecnologia de precisão construída para eliminar prejuízos operacionais, independentemente do seu
-							tamanho.
-						</p>
-					</motion.div>
+				{/* Nossa Tecnologia — efeito halo, sem loja nem botões de compra */}
+				<section aria-label="Nossa Tecnologia" className="border-t border-white/5 bg-white/[0.015] py-14">
+					<div className="mx-auto max-w-6xl px-6 text-center">
+						<p className="text-xs font-medium uppercase tracking-[0.2em] text-slate-500">Nossa Tecnologia</p>
+						<ul className="mt-6 flex flex-wrap items-center justify-center gap-x-10 gap-y-4">
+							{TECH.map(name => (
+								<li key={name} className="text-sm font-semibold tracking-wide text-slate-500 transition-colors hover:text-slate-300">
+									{name}
+								</li>
+							))}
+						</ul>
+					</div>
 				</section>
 			</main>
 
-			<footer className="mx-auto flex max-w-6xl items-center justify-between px-6 py-8 text-xs text-gray-600">
+			<footer className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-6 py-10 text-xs text-slate-600 sm:flex-row">
 				<span>© 2026 Lidar Core</span>
-				<span>Feito com módulos auditados e silos de dados por tenant.</span>
+				<span>Módulos auditados · silos de dados por tenant.</span>
 			</footer>
 		</div>
 	);

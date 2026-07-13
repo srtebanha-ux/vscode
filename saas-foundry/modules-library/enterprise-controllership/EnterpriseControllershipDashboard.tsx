@@ -2,8 +2,9 @@ import { useMemo, useState } from 'react';
 import { hasScopes, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, Landmark, Radar, ShieldAlert, Sparkles, Users } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, LayoutDashboard, Landmark, Radar, ShieldAlert, Sparkles, Terminal, Users } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { ExecutiveBriefingGenerator } from './ExecutiveBriefingGenerator.js';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['read:insights', 'write:insights'];
 const MODULE_ID = 'enterprise-controllership-v1';
@@ -85,6 +86,7 @@ function Dashboard(): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [exporting, setExporting] = useState(false);
+	const [view, setView] = useState<'painel' | 'dossie'>('painel');
 
 	const totals = useMemo(() => {
 		const folha = SECTORS.reduce((s, r) => s + r.custoFolha, 0);
@@ -132,6 +134,29 @@ function Dashboard(): React.JSX.Element {
 				</button>
 			</header>
 
+			{/* Alternância: painel de auditoria vs. dossiê da controladora humana */}
+			<div role="tablist" aria-label="Visão" className="flex w-fit gap-1 rounded-xl bg-zinc-900/80 p-1 ring-1 ring-zinc-800">
+				{([['painel', 'Painel', LayoutDashboard], ['dossie', 'Dossiê Executivo', Terminal]] as const).map(([id, label, Icon]) => {
+					const activeTab = view === id;
+					return (
+						<button
+							key={id}
+							type="button"
+							role="tab"
+							aria-selected={activeTab}
+							onClick={() => setView(id)}
+							className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${activeTab ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+						>
+							<Icon className="h-3.5 w-3.5" aria-hidden /> {label}
+						</button>
+					);
+				})}
+			</div>
+
+			{view === 'dossie' ? (
+				<ExecutiveBriefingGenerator />
+			) : (
+			<>
 			{/* KPIs — o tamanho do dinheiro em jogo */}
 			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
 				<KpiCard label="Desperdício de folha / mês" value={brl.format(totals.desperdicio)} delta="ociosidade acima da meta" up={false} tone="text-rose-400" />
@@ -295,6 +320,8 @@ function Dashboard(): React.JSX.Element {
 					</div>
 				</div>
 			</div>
+			</>
+			)}
 		</section>
 	);
 }

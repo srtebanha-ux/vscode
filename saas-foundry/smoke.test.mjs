@@ -246,6 +246,7 @@ const forbidden = [
 	'./modules-library/virtual-cfo/VirtualCFO_Agent.tsx',
 	'./modules-library/virtual-cmo/VirtualCMO_Agent.tsx',
 	'./modules-library/enterprise-controllership/EnterpriseControllershipDashboard.tsx',
+	'./modules-library/enterprise-controllership/ExecutiveBriefingGenerator.tsx',
 	'./modules-library/essentials/construction-calculator/ConstructionCalculator.tsx',
 	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
 	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
@@ -846,6 +847,23 @@ try {
 	assert.match(gated(['read:insights']), /Acesso negado/); // precisa dos DOIS
 	// Fora do host do Core -> lança
 	assert.throws(() => renderToStaticMarkup(createElement(EnterpriseControllership)), /outside the Core plugin host/);
+}
+
+// 27. Gerador de Dossiê Executivo: munição de argumentação pronta para o consultor humano
+{
+	const { ExecutiveBriefingGenerator } = await import('./modules-library/enterprise-controllership/dist/ExecutiveBriefingGenerator.js');
+	const html = renderToStaticMarkup(createElement(ExecutiveBriefingGenerator, { clientName: 'Metalúrgica Prisma S.A.' }));
+
+	assert.match(html, /DOSSIÊ EXECUTIVO/);
+	assert.match(html, /CONFIDENCIAL/);
+	assert.match(html, /Metalúrgica Prisma S\.A\./);
+	// Cada ralo traz risco + argumento mastigado para a diretoria
+	assert.match(html, /🚨 Risco Encontrado:/);
+	assert.match(html, /Pagamento duplicado de PIS\/COFINS/);
+	assert.match(html, /💡 Sugestão de Argumento para a Diretoria:/);
+	assert.match(html, /Correção imediata gera R\$ 45\.000 de caixa positivo no trimestre/);
+	// Botão de exportação do dossiê
+	assert.match(html, /Gerar Apresentação de Resultados \(PDF\/PPTX\)/);
 }
 
 console.log('ALL SMOKE TESTS PASSED');

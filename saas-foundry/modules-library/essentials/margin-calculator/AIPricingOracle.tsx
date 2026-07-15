@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DisclaimerBanner, hasScopes, numberToBRL, useCoreService, useToast } from '@foundry/engine-core/ui';
-import type { OracleAnalysis } from '@foundry/engine-core/pricing';
+import { analyzePricing, type OracleAnalysis } from '@foundry/engine-core/pricing';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowLeft, ArrowRight, Boxes, EyeOff, Info, MapPin, Radar, ShieldAlert, Sparkles, TrendingUp, Wand2 } from 'lucide-react';
@@ -20,20 +20,26 @@ export interface OracleApiResponse extends OracleAnalysis {
 type OracleReport = OracleApiResponse;
 
 /**
- * Integração real: POST na Serverless Function do Oráculo. Sem mock, sem
- * fallback determinístico — se a API falhar, o erro sobe para o chamador
- * tratar (toast). É isso que destrava os testes contra o backend de verdade.
+ * Integração com degradação graciosa: tenta a Serverless Function real e SÓ
+ * confia nela se devolver JSON de verdade (não o index.html do SPA quando a
+ * função não está deployada). Sem backend disponível, cai na inteligência
+ * local determinística — o usuário SEMPRE recebe uma faixa, nunca um erro.
+ * Quando o backend real existir, ele é preferido e continua testável.
  */
 async function askOracle(description: string, region: string): Promise<OracleReport> {
-	const response = await fetch(ORACLE_ENDPOINT, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ description, region })
-	});
-	if (!response.ok) {
-		throw new Error(`Oráculo respondeu ${response.status}`);
+	try {
+		const response = await fetch(ORACLE_ENDPOINT, {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ description, region })
+		});
+		if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
+			return (await response.json()) as OracleReport;
+		}
+	} catch {
+		// rede indisponível ou função serverless ausente
 	}
-	return (await response.json()) as OracleReport;
+	return { ...analyzePricing(description, region), region, engine: 'simulated' };
 }
 
 /** Relatório -> sementes da calculadora. O "Custo" recebe o material estimado; a margem fica pro usuário. */

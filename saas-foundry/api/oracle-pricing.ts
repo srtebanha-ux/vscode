@@ -1,21 +1,20 @@
 /**
  * /api/oracle-pricing — Oráculo de Preços (Serverless Function / Vercel).
  *
- * Recebe { serviceDescription, location } no corpo, injeta o system prompt de
- * PME na Anthropic (claude-3-haiku, rápido e focado em estruturar dados) e
- * devolve ESTRITAMENTE { materialCost, marketMin, marketMax, hiddenCosts }.
- * A "regra crítica de matemática" força o rateio fracionado de insumos e o
- * valor para 1 unidade base — nunca inventando o tamanho do projeto.
+ * Motor de alto custo-benefício: Google Gemini (gemini-1.5-flash) pela
+ * velocidade e cota gratuita. Recebe { serviceDescription, location }, injeta o
+ * cérebro de PME via systemInstruction e devolve ESTRITAMENTE
+ * { materialCost, marketMin, marketMax, hiddenCosts } (responseMimeType JSON).
+ * A "regra crítica" força o rateio fracionado de insumos e o valor para 1
+ * unidade base — nunca inventando o tamanho do projeto.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
 
-const MODEL = 'claude-3-haiku-20240307';
-const MAX_TOKENS = 700;
-const TIMEOUT_MS = 20_000;
+const MODEL = 'gemini-1.5-flash';
 
 export interface OraclePricingRequest {
 	readonly serviceDescription: string;
@@ -35,11 +34,11 @@ export const ORACLE_SYSTEM_PROMPT = [
 	'Fale sem jargão e baseie os números na realidade de mercado (Sebrae, GetNinjas, SINAPI).',
 	'',
 	'REGRA CRÍTICA DE MATEMÁTICA (absoluta):',
-	'- NUNCA invente o tamanho de um projeto. Se o pedido for por m², hora, unidade ou sessão, devolva o valor para APENAS 1 unidade base.',
+	'- NUNCA calcule projetos inteiros. Se o pedido for por m², hora, unidade ou sessão, devolva o valor para APENAS 1 unidade base.',
 	'- Insumo de uso contínuo (lata de tinta, saco de farinha, tinta de tatuagem): faça o RATEIO e cobre só a FRAÇÃO usada em 1 unidade base.',
 	'- É proibido cravar um preço exato: marketMin DEVE ser estritamente menor que marketMax.',
 	'',
-	'Responda ESTRITAMENTE com um JSON válido nesta interface exata, sem nenhum texto ao redor e sem markdown:',
+	'Responda EXCLUSIVAMENTE com um JSON válido nesta interface exata, sem markdown e sem texto ao redor:',
 	'{ "materialCost": number, "marketMin": number, "marketMax": number, "hiddenCosts": string[] }'
 ].join('\n');
 
@@ -69,20 +68,15 @@ export function parseOraclePricing(text: string): OraclePricingResult {
 	return { materialCost, marketMin, marketMax, hiddenCosts };
 }
 
-/** Núcleo testável: chama a IA e devolve o resultado tipado (client injetável). */
-export async function runOraclePricing(client: Pick<Anthropic, 'messages'>, payload: OraclePricingRequest): Promise<OraclePricingResult> {
-	const message = await client.messages.create({
-		model: MODEL,
-		max_tokens: MAX_TOKENS,
-		system: ORACLE_SYSTEM_PROMPT,
-		messages: [{ role: 'user', content: buildUserMessage(payload) }]
-	});
-	const text = message.content
-		.filter((block): block is Anthropic.TextBlock => block.type === 'text')
-		.map(block => block.text)
-		.join('')
-		.trim();
-	return parseOraclePricing(text);
+/** Contrato mínimo de um modelo generativo — permite injetar um fake nos testes. */
+export interface GenerativeModelLike {
+	generateContent(input: string): Promise<{ readonly response: { text(): string } }>;
+}
+
+/** Núcleo testável: chama o modelo e devolve o resultado tipado (model injetável). */
+export async function runOraclePricing(model: GenerativeModelLike, payload: OraclePricingRequest): Promise<OraclePricingResult> {
+	const result = await model.generateContent(buildUserMessage(payload));
+	return parseOraclePricing(result.response.text());
 }
 
 // Interfaces mínimas do handler serverless (evitam a dependência @vercel/node).
@@ -113,7 +107,7 @@ export function readBody(body: unknown): OraclePricingRequest | null {
 	return { serviceDescription: serviceDescription.trim(), location: location.trim() };
 }
 
-/** Handler POST: valida, chama a Anthropic e devolve 200 (JSON) ou 500 (erro). */
+/** Handler POST: valida, chama o Gemini e devolve 200 (JSON) ou 500 (erro). */
 export default async function handler(req: ApiRequest, res: ApiResponse): Promise<void> {
 	if (req.method && req.method !== 'POST') {
 		res.status(405).json({ error: 'method-not-allowed' });
@@ -125,15 +119,20 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 		return;
 	}
 
-	const apiKey = process.env['ANTHROPIC_API_KEY'];
+	const apiKey = process.env['GEMINI_API_KEY'];
 	if (!apiKey) {
-		res.status(500).json({ error: 'ANTHROPIC_API_KEY não configurada no servidor.' });
+		res.status(500).json({ error: 'GEMINI_API_KEY não configurada no servidor.' });
 		return;
 	}
 
 	try {
-		const client = new Anthropic({ apiKey, timeout: TIMEOUT_MS });
-		const result = await runOraclePricing(client, payload);
+		const genAI = new GoogleGenerativeAI(apiKey);
+		const model = genAI.getGenerativeModel({
+			model: MODEL,
+			systemInstruction: ORACLE_SYSTEM_PROMPT,
+			generationConfig: { responseMimeType: 'application/json' }
+		});
+		const result = await runOraclePricing(model, payload);
 		res.status(200).json(result);
 	} catch (error) {
 		// Timeout ou falha da IA -> 500 com JSON para o front ativar o estado de erro/fallback.

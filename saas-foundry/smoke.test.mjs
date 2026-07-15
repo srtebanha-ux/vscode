@@ -1299,4 +1299,62 @@ try {
 	assert.match(MODULE_DIRECTIVES.FISCAL, /ISS, IBS\/CBS/);
 }
 
+// 36. Rota /api/oracle-pricing: Anthropic (haiku) + JSON estrito + fail-closed
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./api/oracle-pricing.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-oraclepricing-')), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { default: handler, parseOraclePricing, runOraclePricing, readBody, ORACLE_SYSTEM_PROMPT } = await import(pathToFileURL(compiled).href);
+
+		// System prompt de PME com a regra crítica de matemática (rateio/fração + 1 unidade base)
+		assert.match(ORACLE_SYSTEM_PROMPT, /Micro e Pequenas Empresas/);
+		assert.match(ORACLE_SYSTEM_PROMPT, /APENAS 1 unidade base/);
+		assert.match(ORACLE_SYSTEM_PROMPT, /RATEIO/);
+		assert.match(ORACLE_SYSTEM_PROMPT, /"materialCost": number, "marketMin": number, "marketMax": number, "hiddenCosts": string\[\]/);
+
+		// parseOraclePricing: extrai o JSON mesmo com texto ao redor; valida a faixa
+		const ok = parseOraclePricing('claro! {"materialCost":90,"marketMin":800,"marketMax":1300,"hiddenCosts":["Lona","Deslocamento"]} pronto');
+		assert.deepEqual(ok, { materialCost: 90, marketMin: 800, marketMax: 1300, hiddenCosts: ['Lona', 'Deslocamento'] });
+		assert.throws(() => parseOraclePricing('sem json aqui'), /sem JSON/);
+		assert.throws(() => parseOraclePricing('{"materialCost":1,"marketMin":900,"marketMax":900,"hiddenCosts":[]}'), /faixa inválida/); // min == max
+
+		// readBody: contrato de entrada (serviceDescription + location), aceita string ou objeto
+		assert.deepEqual(readBody({ serviceDescription: 'Pintura 50m2', location: 'São Paulo - SP' }), { serviceDescription: 'Pintura 50m2', location: 'São Paulo - SP' });
+		assert.equal(readBody({ serviceDescription: 'x', location: 'SP' }), null); // descrição curta
+		assert.equal(readBody({ location: 'SP' }), null); // faltou serviceDescription
+		assert.equal(readBody('lixo'), null);
+
+		// runOraclePricing: núcleo com client injetado (sem rede) -> resultado tipado
+		const fakeClient = text => ({ messages: { create: async () => ({ content: [{ type: 'text', text }] }) } });
+		const result = await runOraclePricing(fakeClient('{"materialCost":45,"marketMin":350,"marketMax":520,"hiddenCosts":["Biossegurança"]}'), { serviceDescription: 'Tatuagem 15cm', location: 'Curitiba - PR' });
+		assert.equal(result.marketMin, 350);
+		assert.equal(result.marketMax, 520);
+		assert.deepEqual(result.hiddenCosts, ['Biossegurança']);
+
+		// Handler: método, corpo e chave — fail-closed com JSON
+		const mockRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
+		delete process.env.ANTHROPIC_API_KEY;
+
+		let res = mockRes();
+		await handler({ method: 'GET', body: {} }, res);
+		assert.equal(res.code, 405);
+
+		res = mockRes();
+		await handler({ method: 'POST', body: { location: 'SP' } }, res); // corpo inválido
+		assert.equal(res.code, 400);
+
+		res = mockRes();
+		await handler({ method: 'POST', body: { serviceDescription: 'Pintura residencial', location: 'São Paulo - SP' } }, res);
+		assert.equal(res.code, 500); // sem ANTHROPIC_API_KEY -> 500 (front cai no fallback)
+		assert.match(res.payload.error, /ANTHROPIC_API_KEY/);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
 console.log('ALL SMOKE TESTS PASSED');

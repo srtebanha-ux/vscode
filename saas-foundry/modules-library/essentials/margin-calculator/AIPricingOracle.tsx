@@ -10,31 +10,50 @@ const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 
-const ORACLE_ENDPOINT = '/api/pricing-oracle';
+const ORACLE_ENDPOINT = '/api/oracle-pricing';
 
-/** Contrato tipado da resposta real do backend do Oráculo. */
-export interface OracleApiResponse extends OracleAnalysis {
-	readonly engine?: 'anthropic' | 'simulated';
+type OracleReport = OracleAnalysis & { readonly engine?: 'anthropic' | 'simulated' };
+
+/** Contrato tipado da resposta real da rota /api/oracle-pricing (Anthropic). */
+interface OraclePricingApi {
+	readonly materialCost: number;
+	readonly marketMin: number;
+	readonly marketMax: number;
+	readonly hiddenCosts: readonly string[];
 }
 
-type OracleReport = OracleApiResponse;
+/** Rótulo curto do nicho a partir da descrição (a API só devolve os números). */
+function nicheLabel(description: string): string {
+	const words = description.trim().split(/\s+/).slice(0, 4).join(' ');
+	return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Seu serviço';
+}
 
 /**
- * Integração com degradação graciosa: tenta a Serverless Function real e SÓ
- * confia nela se devolver JSON de verdade (não o index.html do SPA quando a
- * função não está deployada). Sem backend disponível, cai na inteligência
- * local determinística — o usuário SEMPRE recebe uma faixa, nunca um erro.
- * Quando o backend real existir, ele é preferido e continua testável.
+ * Integração com degradação graciosa: POST na Serverless Function real
+ * (/api/oracle-pricing) e SÓ confia nela se devolver JSON de verdade (não o
+ * index.html do SPA quando a função não está deployada). Sem backend, cai na
+ * inteligência local determinística — o usuário SEMPRE recebe uma faixa.
  */
 async function askOracle(description: string, region: string): Promise<OracleReport> {
 	try {
 		const response = await fetch(ORACLE_ENDPOINT, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ description, region })
+			body: JSON.stringify({ serviceDescription: description, location: region })
 		});
 		if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
-			return (await response.json()) as OracleReport;
+			const api = (await response.json()) as OraclePricingApi;
+			return {
+				niche: nicheLabel(description),
+				segment: 'ambos',
+				materialCost: api.materialCost,
+				materialBreakdown: 'insumos e materiais do serviço',
+				hiddenCosts: api.hiddenCosts ?? [],
+				marketLow: api.marketMin,
+				marketHigh: api.marketMax,
+				region,
+				engine: 'anthropic'
+			};
 		}
 	} catch {
 		// rede indisponível ou função serverless ausente

@@ -1,0 +1,143 @@
+/**
+ * /api/oracle-pricing — Oráculo de Preços (Serverless Function / Vercel).
+ *
+ * Recebe { serviceDescription, location } no corpo, injeta o system prompt de
+ * PME na Anthropic (claude-3-haiku, rápido e focado em estruturar dados) e
+ * devolve ESTRITAMENTE { materialCost, marketMin, marketMax, hiddenCosts }.
+ * A "regra crítica de matemática" força o rateio fracionado de insumos e o
+ * valor para 1 unidade base — nunca inventando o tamanho do projeto.
+ */
+
+import Anthropic from '@anthropic-ai/sdk';
+
+// Serverless roda em Node; o tsconfig do shell só conhece o browser.
+declare const process: { readonly env: Record<string, string | undefined> };
+
+const MODEL = 'claude-3-haiku-20240307';
+const MAX_TOKENS = 700;
+const TIMEOUT_MS = 20_000;
+
+export interface OraclePricingRequest {
+	readonly serviceDescription: string;
+	readonly location: string;
+}
+
+/** Contrato de saída EXATO exigido do modelo (e devolvido ao front-end). */
+export interface OraclePricingResult {
+	readonly materialCost: number;
+	readonly marketMin: number;
+	readonly marketMax: number;
+	readonly hiddenCosts: readonly string[];
+}
+
+export const ORACLE_SYSTEM_PROMPT = [
+	'Você é o Oráculo de Preços do Lidar Core, especialista em precificação para Micro e Pequenas Empresas (PMEs) do Brasil.',
+	'Fale sem jargão e baseie os números na realidade de mercado (Sebrae, GetNinjas, SINAPI).',
+	'',
+	'REGRA CRÍTICA DE MATEMÁTICA (absoluta):',
+	'- NUNCA invente o tamanho de um projeto. Se o pedido for por m², hora, unidade ou sessão, devolva o valor para APENAS 1 unidade base.',
+	'- Insumo de uso contínuo (lata de tinta, saco de farinha, tinta de tatuagem): faça o RATEIO e cobre só a FRAÇÃO usada em 1 unidade base.',
+	'- É proibido cravar um preço exato: marketMin DEVE ser estritamente menor que marketMax.',
+	'',
+	'Responda ESTRITAMENTE com um JSON válido nesta interface exata, sem nenhum texto ao redor e sem markdown:',
+	'{ "materialCost": number, "marketMin": number, "marketMax": number, "hiddenCosts": string[] }'
+].join('\n');
+
+function buildUserMessage(payload: OraclePricingRequest): string {
+	return [
+		`Serviço/Produto: ${payload.serviceDescription}`,
+		`Localização: ${payload.location}`,
+		'Devolva o custo de material (fracionado) e a faixa de mercado para 1 unidade base, com os custos ocultos do nicho.'
+	].join('\n');
+}
+
+/** Extrai e valida o JSON estrito devolvido pela IA. Lança se estiver fora do contrato. */
+export function parseOraclePricing(text: string): OraclePricingResult {
+	const start = text.indexOf('{');
+	const end = text.lastIndexOf('}');
+	if (start === -1 || end === -1) throw new Error('resposta da IA sem JSON');
+	const raw = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+	const materialCost = Number(raw['materialCost']);
+	const marketMin = Number(raw['marketMin']);
+	const marketMax = Number(raw['marketMax']);
+	const hiddenCosts = Array.isArray(raw['hiddenCosts'])
+		? raw['hiddenCosts'].filter((cost): cost is string => typeof cost === 'string')
+		: [];
+	if (![materialCost, marketMin, marketMax].every(value => Number.isFinite(value) && value >= 0) || marketMax <= marketMin) {
+		throw new Error('JSON fora do contrato (faixa inválida)');
+	}
+	return { materialCost, marketMin, marketMax, hiddenCosts };
+}
+
+/** Núcleo testável: chama a IA e devolve o resultado tipado (client injetável). */
+export async function runOraclePricing(client: Pick<Anthropic, 'messages'>, payload: OraclePricingRequest): Promise<OraclePricingResult> {
+	const message = await client.messages.create({
+		model: MODEL,
+		max_tokens: MAX_TOKENS,
+		system: ORACLE_SYSTEM_PROMPT,
+		messages: [{ role: 'user', content: buildUserMessage(payload) }]
+	});
+	const text = message.content
+		.filter((block): block is Anthropic.TextBlock => block.type === 'text')
+		.map(block => block.text)
+		.join('')
+		.trim();
+	return parseOraclePricing(text);
+}
+
+// Interfaces mínimas do handler serverless (evitam a dependência @vercel/node).
+interface ApiRequest {
+	readonly method?: string;
+	readonly body?: unknown;
+}
+interface ApiResponse {
+	status(code: number): ApiResponse;
+	json(data: unknown): void;
+}
+
+function safeJson(value: string): unknown {
+	try {
+		return JSON.parse(value);
+	} catch {
+		return null;
+	}
+}
+
+/** Lê e valida o corpo (aceita objeto já parseado pela Vercel ou string crua). */
+export function readBody(body: unknown): OraclePricingRequest | null {
+	const source = typeof body === 'string' ? safeJson(body) : body;
+	if (typeof source !== 'object' || source === null) return null;
+	const { serviceDescription, location } = source as Record<string, unknown>;
+	if (typeof serviceDescription !== 'string' || serviceDescription.trim().length < 3) return null;
+	if (typeof location !== 'string' || location.trim().length < 2) return null;
+	return { serviceDescription: serviceDescription.trim(), location: location.trim() };
+}
+
+/** Handler POST: valida, chama a Anthropic e devolve 200 (JSON) ou 500 (erro). */
+export default async function handler(req: ApiRequest, res: ApiResponse): Promise<void> {
+	if (req.method && req.method !== 'POST') {
+		res.status(405).json({ error: 'method-not-allowed' });
+		return;
+	}
+	const payload = readBody(req.body);
+	if (!payload) {
+		res.status(400).json({ error: 'Informe serviceDescription e location no corpo da requisição.' });
+		return;
+	}
+
+	const apiKey = process.env['ANTHROPIC_API_KEY'];
+	if (!apiKey) {
+		res.status(500).json({ error: 'ANTHROPIC_API_KEY não configurada no servidor.' });
+		return;
+	}
+
+	try {
+		const client = new Anthropic({ apiKey, timeout: TIMEOUT_MS });
+		const result = await runOraclePricing(client, payload);
+		res.status(200).json(result);
+	} catch (error) {
+		// Timeout ou falha da IA -> 500 com JSON para o front ativar o estado de erro/fallback.
+		console.error('[oracle-pricing]', error instanceof Error ? error.message : error);
+		res.status(500).json({ error: 'O Oráculo está indisponível no momento. Tente novamente.' });
+	}
+}

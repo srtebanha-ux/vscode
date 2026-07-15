@@ -5,3 +5,4 @@ dist/
 # Smoke-test transient build dirs
 .smoke-apiguard-*/
 .smoke-guardlib-*/
+.smoke-oraclegemini-*/

@@ -1299,14 +1299,15 @@ try {
 	assert.match(MODULE_DIRECTIVES.FISCAL, /ISS, IBS\/CBS/);
 }
 
-// 36. Rota /api/oracle-pricing: Anthropic (haiku) + JSON estrito + fail-closed
+// 36. Rota /api/oracle-pricing: Google Gemini (1.5-flash) + JSON estrito + fail-closed
 {
 	const esbuild = await import('esbuild');
 	const { outputFiles } = await esbuild.build({
 		entryPoints: [new URL('./api/oracle-pricing.ts', import.meta.url).pathname],
-		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai']
 	});
-	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-oraclepricing-')), 'route.mjs');
+	// Temp dir sob a raiz do repo: '@google/generative-ai' (external) resolve pelo node_modules.
+	const compiled = join(await mkdtemp(new URL('./.smoke-oraclegemini-', import.meta.url).pathname), 'route.mjs');
 	try {
 		await writeFile(compiled, outputFiles[0].text);
 		const { default: handler, parseOraclePricing, runOraclePricing, readBody, ORACLE_SYSTEM_PROMPT } = await import(pathToFileURL(compiled).href);
@@ -1329,16 +1330,16 @@ try {
 		assert.equal(readBody({ location: 'SP' }), null); // faltou serviceDescription
 		assert.equal(readBody('lixo'), null);
 
-		// runOraclePricing: núcleo com client injetado (sem rede) -> resultado tipado
-		const fakeClient = text => ({ messages: { create: async () => ({ content: [{ type: 'text', text }] }) } });
-		const result = await runOraclePricing(fakeClient('{"materialCost":45,"marketMin":350,"marketMax":520,"hiddenCosts":["Biossegurança"]}'), { serviceDescription: 'Tatuagem 15cm', location: 'Curitiba - PR' });
+		// runOraclePricing: núcleo com modelo Gemini fake (sem rede) -> resultado tipado
+		const fakeModel = text => ({ generateContent: async () => ({ response: { text: () => text } }) });
+		const result = await runOraclePricing(fakeModel('{"materialCost":45,"marketMin":350,"marketMax":520,"hiddenCosts":["Biossegurança"]}'), { serviceDescription: 'Tatuagem 15cm', location: 'Curitiba - PR' });
 		assert.equal(result.marketMin, 350);
 		assert.equal(result.marketMax, 520);
 		assert.deepEqual(result.hiddenCosts, ['Biossegurança']);
 
 		// Handler: método, corpo e chave — fail-closed com JSON
 		const mockRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
-		delete process.env.ANTHROPIC_API_KEY;
+		delete process.env.GEMINI_API_KEY;
 
 		let res = mockRes();
 		await handler({ method: 'GET', body: {} }, res);
@@ -1350,8 +1351,8 @@ try {
 
 		res = mockRes();
 		await handler({ method: 'POST', body: { serviceDescription: 'Pintura residencial', location: 'São Paulo - SP' } }, res);
-		assert.equal(res.code, 500); // sem ANTHROPIC_API_KEY -> 500 (front cai no fallback)
-		assert.match(res.payload.error, /ANTHROPIC_API_KEY/);
+		assert.equal(res.code, 500); // sem GEMINI_API_KEY -> 500 (front cai no fallback)
+		assert.match(res.payload.error, /GEMINI_API_KEY/);
 	} finally {
 		await rm(join(compiled, '..'), { recursive: true, force: true });
 	}

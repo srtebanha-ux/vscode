@@ -1,7 +1,7 @@
 /**
  * /api/oracle-pricing — Oráculo de Preços (Serverless Function / Vercel).
  *
- * Motor de alto custo-benefício: Google Gemini (gemini-1.5-flash) pela
+ * Motor de alto custo-benefício: Google Gemini (gemini-2.5-flash) pela
  * velocidade e cota gratuita. Recebe { serviceDescription, location }, injeta o
  * cérebro de PME via systemInstruction e devolve ESTRITAMENTE
  * { materialCost, marketMin, marketMax, hiddenCosts } (responseMimeType JSON).
@@ -14,7 +14,11 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
 
-const MODEL = 'gemini-1.5-flash';
+// Sondado ao vivo contra a conta do projeto (2026-07): gemini-1.5-flash foi
+// aposentado (404), gemini-2.5-flash está bloqueado para contas novas,
+// gemini-flash-latest/2.0-flash devolvem 503/429 na cota gratuita nova.
+// O 3-flash-preview é o flash que responde 200 para esta chave.
+const MODEL = 'gemini-3-flash-preview';
 
 export interface OraclePricingRequest {
 	readonly serviceDescription: string;

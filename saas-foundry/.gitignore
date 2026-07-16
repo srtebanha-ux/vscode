@@ -2,6 +2,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# Segredos locais (GEMINI_API_KEY etc.) — NUNCA commitar chaves
+.env
+.env.local
+*.env.local
+
 # Smoke-test transient build dirs
 .smoke-apiguard-*/
 .smoke-guardlib-*/

@@ -196,7 +196,7 @@ function Oracle(): React.JSX.Element {
 								data-testid="oracle-idle"
 								className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500"
 							>
-								<span className="h-1.5 w-1.5 rounded-full bg-gray-400" aria-hidden /> Aguardando análise
+								<span className="h-1.5 w-1.5 rounded-full bg-gray-400" aria-hidden /> Aguardando análise...
 							</span>
 						</div>
 						<h1 className="mt-5 text-2xl font-bold tracking-tight text-gray-900">O que você vai precificar hoje?</h1>

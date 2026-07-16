@@ -615,6 +615,10 @@ try {
 	assert.match(oracle, /O que você vai precificar hoje\?/);
 	assert.match(oracle, /Localização\/Região/);
 	assert.match(oracle, /Analisar Mercado/);
+	// Limpeza Radical: sem dados da API o estado inicial é "Aguardando análise"
+	// (zero número inventado — nada de 450/1440/2160 na tela).
+	assert.match(oracle, /Aguardando análise/);
+	assert.doesNotMatch(oracle, /R\$\s*(?:450|1\.440|2\.160)\b/, 'nenhum dado zumbi mockado no render inicial');
 }
 
 // 30. Assistente Fiscal Inteligente: motor ISS/ICMS por localização + Reforma IBS/CBS

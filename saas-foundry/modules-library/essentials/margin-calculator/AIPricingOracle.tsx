@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { DisclaimerBanner, hasScopes, numberToBRL, useCoreService, useToast } from '@foundry/engine-core/ui';
-import { analyzePricing, type OracleAnalysis } from '@foundry/engine-core/pricing';
+import { DisclaimerBanner, hasScopes, numberToBRL, useCoreService } from '@foundry/engine-core/ui';
+import type { OracleAnalysis } from '@foundry/engine-core/pricing';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, ArrowRight, Boxes, EyeOff, Info, MapPin, Radar, ShieldAlert, Sparkles, TrendingUp, Wand2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, Boxes, EyeOff, Info, MapPin, Radar, RefreshCw, ShieldAlert, Sparkles, TrendingUp, Wand2 } from 'lucide-react';
 import { SmartPricingEngine, type PricingPrefill } from './SmartPricingEngine.js';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
@@ -12,9 +12,9 @@ const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' 
 
 const ORACLE_ENDPOINT = '/api/oracle-pricing';
 
-type OracleReport = OracleAnalysis & { readonly engine?: 'anthropic' | 'simulated' };
+type OracleReport = OracleAnalysis & { readonly engine: 'gemini' };
 
-/** Contrato tipado da resposta real da rota /api/oracle-pricing (Anthropic). */
+/** Contrato tipado da resposta real da rota /api/oracle-pricing (Gemini). */
 interface OraclePricingApi {
 	readonly materialCost: number;
 	readonly marketMin: number;
@@ -29,36 +29,43 @@ function nicheLabel(description: string): string {
 }
 
 /**
- * Integração com degradação graciosa: POST na Serverless Function real
- * (/api/oracle-pricing) e SÓ confia nela se devolver JSON de verdade (não o
- * index.html do SPA quando a função não está deployada). Sem backend, cai na
- * inteligência local determinística — o usuário SEMPRE recebe uma faixa.
+ * Fonte ÚNICA de verdade: a Serverless Function real (/api/oracle-pricing).
+ * SEM fallback, SEM números inventados — se a API não responder com dados
+ * válidos, a função LANÇA um erro com a mensagem real para a UI exibir de
+ * forma transparente. Nenhum dado é fabricado localmente.
  */
 async function askOracle(description: string, region: string): Promise<OracleReport> {
-	try {
-		const response = await fetch(ORACLE_ENDPOINT, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ serviceDescription: description, location: region })
-		});
-		if (response.ok && response.headers.get('content-type')?.includes('application/json')) {
-			const api = (await response.json()) as OraclePricingApi;
-			return {
-				niche: nicheLabel(description),
-				segment: 'ambos',
-				materialCost: api.materialCost,
-				materialBreakdown: 'insumos e materiais do serviço',
-				hiddenCosts: api.hiddenCosts ?? [],
-				marketLow: api.marketMin,
-				marketHigh: api.marketMax,
-				region,
-				engine: 'anthropic'
-			};
-		}
-	} catch {
-		// rede indisponível ou função serverless ausente
+	const response = await fetch(ORACLE_ENDPOINT, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ serviceDescription: description, location: region })
+	});
+
+	// Sem JSON de verdade (ex.: o SPA devolveu index.html porque a função não
+	// está deployada) NÃO é dado — é falha. Recusamos e informamos.
+	if (!response.headers.get('content-type')?.includes('application/json')) {
+		throw new Error('O servidor não retornou dados de análise. A função /api/oracle-pricing não está respondendo.');
 	}
-	return { ...analyzePricing(description, region), region, engine: 'simulated' };
+
+	const payload = (await response.json()) as Partial<OraclePricingApi> & { readonly error?: string };
+	if (!response.ok) {
+		throw new Error(payload.error ?? `Falha na análise (HTTP ${response.status}).`);
+	}
+	if (typeof payload.materialCost !== 'number' || typeof payload.marketMin !== 'number' || typeof payload.marketMax !== 'number') {
+		throw new Error('A resposta da API veio fora do formato esperado.');
+	}
+
+	return {
+		niche: nicheLabel(description),
+		segment: 'ambos',
+		materialCost: payload.materialCost,
+		materialBreakdown: 'insumos e materiais do serviço',
+		hiddenCosts: payload.hiddenCosts ?? [],
+		marketLow: payload.marketMin,
+		marketHigh: payload.marketMax,
+		region,
+		engine: 'gemini'
+	};
 }
 
 /** Relatório -> sementes da calculadora. O "Custo" recebe o material estimado; a margem fica pro usuário. */
@@ -87,17 +94,19 @@ const LOADING_STEPS: readonly string[] = [
 	'Consolidando o relatório do Oráculo…'
 ];
 
-type Phase = 'discovery' | 'analyzing' | 'result' | 'calculator';
+type Phase = 'discovery' | 'analyzing' | 'error' | 'result' | 'calculator';
 
 function Oracle(): React.JSX.Element {
-	const toast = useToast();
 	const [phase, setPhase] = useState<Phase>('discovery');
 	const [description, setDescription] = useState('');
 	const [region, setRegion] = useState('');
 	const [touched, setTouched] = useState(false);
 	const [placeholderIndex, setPlaceholderIndex] = useState(0);
 	const [stepIndex, setStepIndex] = useState(0);
+	// Fonte da verdade da UI: só existe report quando a API respondeu de fato.
 	const [report, setReport] = useState<OracleReport | null>(null);
+	const [errorMessage, setErrorMessage] = useState<string | null>(null);
+	const [isLoading, setIsLoading] = useState(false);
 	const timers = useRef<number[]>([]);
 
 	const descriptionOk = description.trim().length >= 10;
@@ -112,12 +121,24 @@ function Oracle(): React.JSX.Element {
 
 	useEffect(() => () => timers.current.forEach(window.clearTimeout), []);
 
-	/** Função de chamada: dispara o fetch real, controla o loading e trata o erro. */
+	/**
+	 * Único gatilho do fetch: o clique no botão "Analisar". Antes de buscar,
+	 * LIMPA todo o estado anterior (report + erro) para que nada residual
+	 * apareça na tela enquanto os dados novos não chegam da API.
+	 */
 	const handleSubmit = (): void => {
 		setTouched(true);
 		if (!descriptionOk || !regionOk) return;
+
+		// Limpeza total do estado anterior — zero dado zumbi na tela.
+		timers.current.forEach(window.clearTimeout);
+		timers.current = [];
+		setReport(null);
+		setErrorMessage(null);
+		setIsLoading(true);
 		setPhase('analyzing');
 		setStepIndex(0);
+
 		const stepMs = 850;
 		LOADING_STEPS.forEach((_, index) => {
 			if (index === 0) return;
@@ -131,20 +152,26 @@ function Oracle(): React.JSX.Element {
 		Promise.all([askOracle(description, region), minDelay])
 			.then(([oracleReport]) => {
 				setReport(oracleReport);
+				setIsLoading(false);
 				setPhase('result');
 			})
-			.catch(() => {
-				// API indisponível: para o loading, avisa com elegância e volta ao formulário.
+			.catch((error: unknown) => {
+				// API indisponível: para o loading e mostra o ERRO REAL na tela.
+				// Nunca inventamos números para preencher a falha.
 				timers.current.forEach(window.clearTimeout);
 				timers.current = [];
-				toast.error('O Oráculo está indisponível no momento. Tente novamente.');
-				setPhase('discovery');
+				setReport(null);
+				setErrorMessage(error instanceof Error ? error.message : 'Erro desconhecido ao consultar o Oráculo.');
+				setIsLoading(false);
+				setPhase('error');
 			});
 	};
 
 	const restart = (): void => {
 		setPhase('discovery');
 		setReport(null);
+		setErrorMessage(null);
+		setIsLoading(false);
 	};
 
 	const placeholder = useMemo(() => PLACEHOLDERS[placeholderIndex] ?? PLACEHOLDERS[0], [placeholderIndex]);
@@ -161,9 +188,17 @@ function Oracle(): React.JSX.Element {
 						transition={{ duration: 0.3, ease: 'easeOut' }}
 						className="mx-auto max-w-2xl overflow-hidden rounded-2xl bg-white p-8 shadow-sm"
 					>
-						<span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white shadow-lg shadow-indigo-500/30">
-							<Radar className="h-6 w-6" aria-hidden />
-						</span>
+						<div className="flex items-center justify-between">
+							<span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white shadow-lg shadow-indigo-500/30">
+								<Radar className="h-6 w-6" aria-hidden />
+							</span>
+							<span
+								data-testid="oracle-idle"
+								className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500"
+							>
+								<span className="h-1.5 w-1.5 rounded-full bg-gray-400" aria-hidden /> Aguardando análise
+							</span>
+						</div>
 						<h1 className="mt-5 text-2xl font-bold tracking-tight text-gray-900">O que você vai precificar hoje?</h1>
 						<p className="mt-1.5 text-sm text-gray-500">Nos dê o máximo de detalhes. O Oráculo cruza o seu contexto com o mercado da sua região.</p>
 
@@ -204,14 +239,15 @@ function Oracle(): React.JSX.Element {
 						<button
 							type="button"
 							onClick={handleSubmit}
-							className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.01]"
+							disabled={isLoading}
+							className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
 						>
-							<Sparkles className="h-4 w-4" aria-hidden /> Analisar Mercado
+							<Sparkles className="h-4 w-4" aria-hidden /> {isLoading ? 'Calculando dados de mercado…' : 'Analisar Mercado'}
 						</button>
 					</motion.section>
 				)}
 
-				{phase === 'analyzing' && (
+				{phase === 'analyzing' && isLoading && (
 					<motion.section
 						key="analyzing"
 						initial={{ opacity: 0 }}
@@ -227,7 +263,7 @@ function Oracle(): React.JSX.Element {
 								<Radar className="h-7 w-7 animate-pulse" aria-hidden />
 							</span>
 						</span>
-						<h2 className="mt-6 text-lg font-semibold tracking-tight text-gray-900">O Oráculo está trabalhando</h2>
+						<h2 className="mt-6 text-lg font-semibold tracking-tight text-gray-900" data-testid="oracle-loading-title">Calculando dados de mercado…</h2>
 						<div className="mt-2 h-5">
 							<AnimatePresence mode="wait">
 								<motion.p
@@ -247,6 +283,48 @@ function Oracle(): React.JSX.Element {
 								<span key={index} className={`h-1.5 rounded-full transition-all duration-300 ${index <= stepIndex ? 'w-6 bg-indigo-500' : 'w-1.5 bg-gray-200'}`} />
 							))}
 						</div>
+					</motion.section>
+				)}
+
+				{phase === 'error' && (
+					<motion.section
+						key="error"
+						initial={{ opacity: 0, y: 12 }}
+						animate={{ opacity: 1, y: 0 }}
+						exit={{ opacity: 0, y: -12 }}
+						transition={{ duration: 0.3, ease: 'easeOut' }}
+						className="mx-auto max-w-2xl overflow-hidden rounded-2xl bg-white p-8 shadow-sm"
+					>
+						<div
+							role="alert"
+							data-testid="oracle-error"
+							className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4"
+						>
+							<AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-500" aria-hidden />
+							<div>
+								<p className="text-sm font-semibold text-rose-700">Erro na conexão</p>
+								<p className="mt-1 text-sm leading-relaxed text-rose-600" data-testid="oracle-error-message">
+									Erro na conexão: {errorMessage}
+								</p>
+							</div>
+						</div>
+						<p className="mt-4 text-sm text-gray-500">
+							Nenhum número foi gerado — o Oráculo não inventa dados. Corrija a conexão do serviço e tente a análise novamente.
+						</p>
+						<button
+							type="button"
+							onClick={handleSubmit}
+							className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3.5 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.01]"
+						>
+							<RefreshCw className="h-4 w-4" aria-hidden /> Tentar novamente
+						</button>
+						<button
+							type="button"
+							onClick={restart}
+							className="mt-3 inline-flex w-full items-center justify-center gap-1.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600"
+						>
+							<ArrowLeft className="h-4 w-4" aria-hidden /> Voltar ao formulário
+						</button>
 					</motion.section>
 				)}
 

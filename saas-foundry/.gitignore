@@ -11,3 +11,4 @@ dist/
 .smoke-apiguard-*/
 .smoke-guardlib-*/
 .smoke-oraclegemini-*/
+.smoke-supplyplanner-*/

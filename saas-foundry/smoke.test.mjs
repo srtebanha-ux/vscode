@@ -599,43 +599,60 @@ try {
 
 	// Autorizados: render inicial mostra os campos-resultado zerados
 	// Planejador Preditivo de Estoque: wizard guiado (anti "tela em branco").
-	// Passo 1 renderiza os cards visuais de nicho — sem input de texto livre.
+	// Passo 1 renderiza a grade de cards visuais — sem input de texto livre aberto.
 	const planner = withServices(SupplyPlanner, ['ui:render']);
 	assert.match(planner, /Planejador Preditivo de Estoque/);
-	assert.match(planner, /Obras/);
-	assert.match(planner, /Beleza/);
-	assert.match(planner, /Alimentação/);
-	assert.match(planner, /Costura\/Varejo/);
+	assert.match(planner, /Construção &(amp;)? Reformas/);
+	assert.match(planner, /Estética &(amp;)? Beleza/);
+	assert.match(planner, /Alimentação &(amp;)? Gastronomia/);
+	assert.match(planner, /Moda, Costura &(amp;)? Varejo/);
+	assert.match(planner, /Oficinas &(amp;)? Serviços Mecânicos/);
+	assert.match(planner, /Mercado Pet/);
+	assert.match(planner, /Serviços Domésticos &(amp;)? Limpeza/);
+	assert.match(planner, /Tatuagem &(amp;)? Piercing/);
+	assert.match(planner, /Outro Nicho/, 'card especial de nicho customizado');
 	assert.match(planner, /data-testid="wizard-progress"/, 'barra de progresso do wizard');
 	assert.doesNotMatch(planner, /<textarea/, 'passo 1 não tem texto livre');
 
-	// Catálogo guiado: cada nicho tem templates e cada template tem campos cirúrgicos.
-	const { NICHES } = await import('./modules-library/essentials/construction-calculator/dist/SupplyPlanner.js');
-	assert.ok(NICHES.length >= 4);
-	const obras = NICHES.find(option => option.id === 'obras');
-	assert.deepEqual(obras.templates.map(option => option.label), ['Paredes/Alvenaria', 'Pintura', 'Contrapiso']);
-	const belezaNiche = NICHES.find(option => option.id === 'beleza');
-	assert.deepEqual(belezaNiche.templates.map(option => option.label), ['Mechas/Coloração', 'Manicure/Unhas', 'Estoque Mensal Base']);
+	// Catálogo guiado expandido: 8 nichos, cada um com >= 4 templates completos
+	// (campos cirúrgicos + catálogo de materiais declarativo).
+	const plannerMod = await import('./modules-library/essentials/construction-calculator/dist/SupplyPlanner.js');
+	const { NICHES, CUSTOM_TEMPLATES, CUSTOM_NICHE_ID } = plannerMod;
+	assert.equal(NICHES.length, 8, 'oito nichos principais');
 	for (const nicheOption of NICHES) {
+		assert.ok(nicheOption.templates.length >= 4, `nicho ${nicheOption.id} precisa de >= 4 templates (tem ${nicheOption.templates.length})`);
 		for (const templateOption of nicheOption.templates) {
 			assert.ok(templateOption.fields.length > 0, `template ${templateOption.id} precisa de campos`);
+			assert.ok(templateOption.catalog.length >= 3, `template ${templateOption.id} precisa de catálogo de materiais`);
 		}
 	}
+	const oficina = NICHES.find(option => option.id === 'oficina');
+	assert.ok(oficina.templates.some(option => /Revisão Geral/.test(option.label)));
+	assert.ok(oficina.templates.some(option => /Funilaria/.test(option.label)));
+	const pet = NICHES.find(option => option.id === 'pet');
+	assert.ok(pet.templates.some(option => /Banho e Tosa/.test(option.label)));
+	const tatuagem = NICHES.find(option => option.id === 'tatuagem');
+	assert.ok(tatuagem.templates.some(option => /Biossegurança/.test(option.label)));
+	assert.ok(CUSTOM_TEMPLATES.length >= 4, 'nicho customizado tem templates universais');
 
 	// Motor simulado (mock de design): determinístico, escala pelos números digitados.
 	const alvenaria = simulateSupplyPlan('obras', 'alvenaria', { areaParede: 75 });
 	assert.equal(alvenaria.engine, 'simulated');
-	assert.equal(alvenaria.niche, 'Obras');
+	assert.equal(alvenaria.niche, 'Construção & Reformas');
 	assert.match(alvenaria.items[0].quantity, /3\.150 unidades/, '75m² * 42 tijolos');
-	assert.ok(alvenaria.items.some(item => /Cimento/.test(item.name)));
 
-	const mechas = simulateSupplyPlan('beleza', 'mechas', { clientes: 50 });
-	assert.match(mechas.items[0].quantity, /50 tubos/, '1 tubo por cliente');
-	assert.ok(mechas.items.some(item => /descolorante/i.test(item.name)));
+	const revisao = simulateSupplyPlan('oficina', 'revisao', { carros: 40 });
+	assert.match(revisao.items[0].quantity, /180 litros/, '40 carros * 4,5L de óleo');
+	assert.ok(revisao.items.some(item => /Filtro de óleo/.test(item.name)));
 
-	const bolos = simulateSupplyPlan('alimentacao', 'bolos', { bolos: 10 });
-	assert.match(bolos.items.find(item => /Ovos/.test(item.name)).quantity, /60 unidades/, '6 ovos por bolo');
-	assert.ok(bolos.items.every(item => item.quantity && item.note));
+	const banho = simulateSupplyPlan('pet', 'banhoTosa', { banhos: 35 });
+	assert.ok(banho.items.some(item => /Shampoo pet/.test(item.name)));
+
+	// Nicho customizado: rótulo digitado pelo usuário + templates universais.
+	const custom = simulateSupplyPlan(CUSTOM_NICHE_ID, 'porCliente', { clientesCustom: 50 }, 'Floricultura');
+	assert.equal(custom.niche, 'Floricultura');
+	assert.match(custom.items[0].quantity, /50 unidades/, '1 insumo por cliente');
+	assert.ok(custom.items.every(item => item.quantity && item.note));
 
 	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
 	assert.match(receipt, /Recibo de Prestação de Serviço/);

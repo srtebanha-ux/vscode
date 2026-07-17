@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { hasScopes, useCoreService, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, Boxes, Check, ClipboardList, Info, Package, ShieldAlert, Sparkles, Wand2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Boxes, Check, ClipboardList, Info, Package, Search, ShieldAlert, Sparkles, Wand2 } from 'lucide-react';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 const MODULE_ID = 'construction-calculator-v1';
@@ -31,11 +31,25 @@ export interface TemplateField {
 	readonly placeholder: string;
 }
 
+/**
+ * Entrada do catálogo de materiais: quantidade = número digitado * factor
+ * (nunca abaixo de min). Dado declarativo — expandir o produto é adicionar
+ * linhas aqui, sem tocar no motor nem na UI.
+ */
+export interface CatalogEntry {
+	readonly name: string;
+	readonly factor: number;
+	readonly min?: number;
+	readonly unit: string;
+	readonly note: string;
+}
+
 export interface PlannerTemplate {
 	readonly id: string;
 	readonly label: string;
 	readonly hint: string;
 	readonly fields: readonly TemplateField[];
+	readonly catalog: readonly CatalogEntry[];
 }
 
 export interface PlannerNiche {
@@ -46,98 +60,519 @@ export interface PlannerNiche {
 	readonly templates: readonly PlannerTemplate[];
 }
 
-/** Catálogo guiado: nicho -> templates -> campos. Zero texto livre. */
+const field = (id: string, label: string, suffix: string, placeholder: string): TemplateField => ({ id, label, suffix, placeholder });
+
+/** Catálogo guiado completo: nicho -> templates -> campos + materiais. */
 export const NICHES: readonly PlannerNiche[] = [
 	{
 		id: 'obras',
 		emoji: '🏗️',
-		label: 'Obras',
-		description: 'Construção e reforma',
+		label: 'Construção & Reformas',
+		description: 'Pedreiros, pintores, empreiteiros',
 		templates: [
 			{
 				id: 'alvenaria',
 				label: 'Paredes/Alvenaria',
 				hint: 'Tijolos, cimento e areia para levantar paredes',
-				fields: [{ id: 'areaParede', label: 'Qual a metragem de parede? (m²)', suffix: 'm²', placeholder: 'Ex.: 60' }]
+				fields: [field('areaParede', 'Qual a metragem de parede? (m²)', 'm²', 'Ex.: 60')],
+				catalog: [
+					{ name: 'Tijolo baiano (9x19x19)', factor: 42, unit: 'unidades', note: 'Considerando 10% de margem de perda por quebra' },
+					{ name: 'Cimento CP-II 50kg', factor: 0.7, min: 2, unit: 'sacos', note: 'Argamassa de assentamento, traço 1:6' },
+					{ name: 'Areia média lavada', factor: 0.08, min: 1, unit: 'm³', note: 'Inclui folga para o reboco inicial' }
+				]
 			},
 			{
 				id: 'pintura',
 				label: 'Pintura',
 				hint: 'Tinta, massa e proteção para pintar',
-				fields: [{ id: 'areaPintura', label: 'Qual a metragem da área? (m²)', suffix: 'm²', placeholder: 'Ex.: 50' }]
+				fields: [field('areaPintura', 'Qual a metragem da área? (m²)', 'm²', 'Ex.: 50')],
+				catalog: [
+					{ name: 'Tinta acrílica 18L', factor: 0.02, min: 1, unit: 'latas', note: 'Rendimento de ~250m² por lata em 2 demãos' },
+					{ name: 'Massa corrida 25kg', factor: 0.04, min: 1, unit: 'sacos', note: 'Correção de imperfeições antes da pintura' },
+					{ name: 'Kit rolo + fita + lona', factor: 0.02, min: 1, unit: 'kits', note: 'Proteção de piso e acabamento limpo' }
+				]
 			},
 			{
 				id: 'contrapiso',
 				label: 'Contrapiso',
 				hint: 'Cimento, areia e brita para o piso',
-				fields: [{ id: 'areaPiso', label: 'Qual a área do piso? (m²)', suffix: 'm²', placeholder: 'Ex.: 40' }]
+				fields: [field('areaPiso', 'Qual a área do piso? (m²)', 'm²', 'Ex.: 40')],
+				catalog: [
+					{ name: 'Cimento CP-II 50kg', factor: 0.9, min: 3, unit: 'sacos', note: 'Contrapiso de 4cm, traço 1:4' },
+					{ name: 'Areia média', factor: 0.05, min: 1, unit: 'm³', note: 'Considerando 10% de margem de perda' },
+					{ name: 'Brita 0', factor: 0.03, min: 1, unit: 'm³', note: 'Para regularização da base' }
+				]
+			},
+			{
+				id: 'telhado',
+				label: 'Telhado/Cobertura',
+				hint: 'Telhas, madeiramento e fixação',
+				fields: [field('areaTelhado', 'Qual a área do telhado? (m²)', 'm²', 'Ex.: 90')],
+				catalog: [
+					{ name: 'Telha cerâmica', factor: 16, unit: 'unidades', note: '~16 telhas/m² com 5% de reserva para quebra' },
+					{ name: 'Ripa 5x2cm 3m', factor: 1.2, min: 6, unit: 'peças', note: 'Madeiramento de apoio das telhas' },
+					{ name: 'Prego telheiro 18x30', factor: 0.06, min: 1, unit: 'kg', note: 'Fixação com folga de obra' }
+				]
+			},
+			{
+				id: 'eletrica',
+				label: 'Elétrica Básica',
+				hint: 'Fios, tomadas e disjuntores por ponto',
+				fields: [field('pontos', 'Quantos pontos elétricos? (tomadas/luz)', 'pontos', 'Ex.: 20')],
+				catalog: [
+					{ name: 'Cabo flexível 2,5mm 100m', factor: 0.08, min: 1, unit: 'rolos', note: '~8m por ponto, com folga de passagem' },
+					{ name: 'Tomada/interruptor completo', factor: 1, unit: 'unidades', note: '1 conjunto por ponto planejado' },
+					{ name: 'Caixinha 4x2 + conduíte 3m', factor: 1, unit: 'kits', note: 'Infraestrutura de cada ponto' }
+				]
 			}
 		]
 	},
 	{
 		id: 'beleza',
 		emoji: '💇‍♀️',
-		label: 'Beleza',
-		description: 'Salão e estética',
+		label: 'Estética & Beleza',
+		description: 'Salões, barbearias, clínicas',
 		templates: [
 			{
 				id: 'mechas',
 				label: 'Mechas/Coloração',
 				hint: 'Tinta, descolorante e ox por cliente',
-				fields: [{ id: 'clientes', label: 'Quantas clientes estimadas para este serviço?', suffix: 'clientes', placeholder: 'Ex.: 50' }]
+				fields: [field('clientes', 'Quantas clientes estimadas para este serviço?', 'clientes', 'Ex.: 50')],
+				catalog: [
+					{ name: 'Tinta de coloração 60g', factor: 1, unit: 'tubos', note: '1 tubo por cliente, sem reaproveitamento' },
+					{ name: 'Pó descolorante 500g', factor: 0.1, min: 1, unit: 'potes', note: 'Rateio de ~10 aplicações por pote' },
+					{ name: 'Ox 30 volumes 900ml', factor: 0.16, min: 1, unit: 'frascos', note: 'Considerando 10% de margem de desperdício' }
+				]
 			},
 			{
 				id: 'manicure',
 				label: 'Manicure/Unhas',
 				hint: 'Esmaltes e descartáveis por atendimento',
-				fields: [{ id: 'atendimentos', label: 'Quantos atendimentos no mês?', suffix: 'atendimentos', placeholder: 'Ex.: 80' }]
+				fields: [field('atendimentos', 'Quantos atendimentos no mês?', 'atendimentos', 'Ex.: 80')],
+				catalog: [
+					{ name: 'Esmalte (cores variadas)', factor: 0.12, min: 3, unit: 'frascos', note: '~8 atendimentos por frasco' },
+					{ name: 'Kit descartável (lixa + palito)', factor: 1, unit: 'kits', note: '1 kit novo por cliente, por biossegurança' },
+					{ name: 'Algodão 500g', factor: 0.02, min: 1, unit: 'pacotes', note: 'Remoção e acabamento' }
+				]
 			},
 			{
-				id: 'estoqueBase',
+				id: 'barbearia',
+				label: 'Barbearia/Cortes',
+				hint: 'Lâminas, toalhas e finalização',
+				fields: [field('cortes', 'Quantos cortes estimados no mês?', 'cortes', 'Ex.: 120')],
+				catalog: [
+					{ name: 'Lâmina de barbear descartável', factor: 1, unit: 'unidades', note: '1 lâmina nova por cliente' },
+					{ name: 'Pomada/finalizador 120g', factor: 0.05, min: 1, unit: 'potes', note: '~20 aplicações por pote' },
+					{ name: 'Toalha descartável', factor: 1.1, unit: 'unidades', note: 'Considerando 10% de reposição' }
+				]
+			},
+			{
+				id: 'limpezaPele',
+				label: 'Limpeza de Pele/Estética',
+				hint: 'Máscaras, luvas e descartáveis por sessão',
+				fields: [field('sessoes', 'Quantas sessões agendadas?', 'sessões', 'Ex.: 30')],
+				catalog: [
+					{ name: 'Máscara/argila 250g', factor: 0.1, min: 1, unit: 'potes', note: '~10 sessões por pote' },
+					{ name: 'Par de luvas nitrílicas', factor: 2, unit: 'pares', note: '2 trocas por procedimento' },
+					{ name: 'Gaze e algodão (kit)', factor: 1, unit: 'kits', note: '1 kit estéril por sessão' }
+				]
+			},
+			{
+				id: 'estoqueBaseBeleza',
 				label: 'Estoque Mensal Base',
 				hint: 'Reposição geral do salão para o mês',
-				fields: [{ id: 'clientesMes', label: 'Quantas clientes você atende por mês?', suffix: 'clientes', placeholder: 'Ex.: 120' }]
+				fields: [field('clientesMes', 'Quantas clientes você atende por mês?', 'clientes', 'Ex.: 120')],
+				catalog: [
+					{ name: 'Shampoo profissional 5L', factor: 0.03, min: 1, unit: 'galões', note: '~35 lavagens por galão' },
+					{ name: 'Condicionador profissional 5L', factor: 0.025, min: 1, unit: 'galões', note: 'Acompanha o ritmo do shampoo' },
+					{ name: 'Toalhas descartáveis', factor: 1.1, unit: 'unidades', note: 'Considerando 10% de margem de reposição' }
+				]
 			}
 		]
 	},
 	{
 		id: 'alimentacao',
 		emoji: '🎂',
-		label: 'Alimentação',
-		description: 'Confeitaria e salgados',
+		label: 'Alimentação & Gastronomia',
+		description: 'Confeitarias, marmitarias, lanchonetes',
 		templates: [
 			{
 				id: 'bolos',
 				label: 'Produção de Bolos',
 				hint: 'Farinha, ovos e açúcar por unidade',
-				fields: [{ id: 'bolos', label: 'Quantos bolos você vai produzir?', suffix: 'bolos', placeholder: 'Ex.: 10' }]
+				fields: [field('bolos', 'Quantos bolos você vai produzir?', 'bolos', 'Ex.: 10')],
+				catalog: [
+					{ name: 'Farinha de trigo 5kg', factor: 0.5, min: 1, unit: 'pacotes', note: '~500g por bolo + margem de erro' },
+					{ name: 'Ovos', factor: 6, unit: 'unidades', note: '6 ovos por receita de massa' },
+					{ name: 'Açúcar refinado 5kg', factor: 0.4, min: 1, unit: 'pacotes', note: 'Massa + calda + cobertura' }
+				]
 			},
 			{
 				id: 'salgados',
 				label: 'Salgados para Festa',
 				hint: 'Cálculo por número de convidados',
-				fields: [{ id: 'convidados', label: 'Quantos convidados terá a festa?', suffix: 'convidados', placeholder: 'Ex.: 100' }]
+				fields: [field('convidados', 'Quantos convidados terá a festa?', 'convidados', 'Ex.: 100')],
+				catalog: [
+					{ name: 'Salgados variados', factor: 10, unit: 'unidades', note: 'Média de 10 salgados por convidado' },
+					{ name: 'Farinha de trigo 5kg', factor: 0.08, min: 1, unit: 'pacotes', note: 'Massa de coxinha e risole' },
+					{ name: 'Óleo para fritura 900ml', factor: 0.06, min: 1, unit: 'frascos', note: 'Troca a cada ~150 unidades fritas' }
+				]
+			},
+			{
+				id: 'marmitas',
+				label: 'Marmitas da Semana',
+				hint: 'Proteína, arroz e embalagens',
+				fields: [field('marmitas', 'Quantas marmitas por semana?', 'marmitas', 'Ex.: 60')],
+				catalog: [
+					{ name: 'Frango/carne (kg)', factor: 0.18, min: 1, unit: 'kg', note: '~180g de proteína por marmita' },
+					{ name: 'Arroz 5kg', factor: 0.03, min: 1, unit: 'pacotes', note: '~150g de arroz pronto por unidade' },
+					{ name: 'Embalagem térmica com tampa', factor: 1.05, unit: 'unidades', note: '5% de reserva para trocas' }
+				]
+			},
+			{
+				id: 'paes',
+				label: 'Padaria/Pães',
+				hint: 'Farinha, fermento e melhorador',
+				fields: [field('kgPao', 'Quantos quilos de pão por dia?', 'kg', 'Ex.: 40')],
+				catalog: [
+					{ name: 'Farinha de trigo panificável 25kg', factor: 0.03, min: 1, unit: 'sacos', note: '~700g de farinha por kg de pão' },
+					{ name: 'Fermento biológico 500g', factor: 0.02, min: 1, unit: 'pacotes', note: 'Fermentação diária' },
+					{ name: 'Melhorador de farinha 1kg', factor: 0.005, min: 1, unit: 'pacotes', note: 'Padrão de crescimento e casca' }
+				]
+			},
+			{
+				id: 'lanches',
+				label: 'Lanches/Hamburgueria',
+				hint: 'Blend, pão e queijo por lanche',
+				fields: [field('lanches', 'Quantos lanches estimados no mês?', 'lanches', 'Ex.: 300')],
+				catalog: [
+					{ name: 'Blend de hambúrguer 150g', factor: 1, unit: 'unidades', note: '1 blend por lanche, congelado' },
+					{ name: 'Pão brioche', factor: 1.05, unit: 'unidades', note: '5% de reserva para avarias' },
+					{ name: 'Queijo fatiado (kg)', factor: 0.02, min: 1, unit: 'kg', note: '~20g por lanche' }
+				]
 			}
 		]
 	},
 	{
-		id: 'costura',
+		id: 'moda',
 		emoji: '👕',
-		label: 'Costura/Varejo',
-		description: 'Confecção e uniformes',
+		label: 'Moda, Costura & Varejo',
+		description: 'Ateliês, confecções, lojas',
 		templates: [
 			{
 				id: 'pecas',
 				label: 'Produção de Peças',
 				hint: 'Tecido, linha e aviamentos por peça',
-				fields: [{ id: 'pecas', label: 'Quantas peças você vai produzir?', suffix: 'peças', placeholder: 'Ex.: 30' }]
+				fields: [field('pecas', 'Quantas peças você vai produzir?', 'peças', 'Ex.: 30')],
+				catalog: [
+					{ name: 'Tecido (largura 1,50m)', factor: 1.4, min: 2, unit: 'metros', note: '~1,4m por peça, com 10% de margem de corte' },
+					{ name: 'Linha de costura 2000j', factor: 0.1, min: 1, unit: 'cones', note: '~10 peças por cone' },
+					{ name: 'Aviamentos (botões/zíper)', factor: 1, unit: 'kits', note: '1 kit por peça produzida' }
+				]
 			},
 			{
 				id: 'uniformes',
 				label: 'Uniformes sob Encomenda',
 				hint: 'Kit completo por funcionário',
-				fields: [{ id: 'funcionarios', label: 'Para quantos funcionários?', suffix: 'pessoas', placeholder: 'Ex.: 15' }]
+				fields: [field('funcionarios', 'Para quantos funcionários?', 'pessoas', 'Ex.: 15')],
+				catalog: [
+					{ name: 'Camisetas para personalizar', factor: 2, unit: 'unidades', note: '2 unidades por funcionário (troca)' },
+					{ name: 'Tecido brim (calça/avental)', factor: 1.6, min: 2, unit: 'metros', note: '~1,6m por funcionário' },
+					{ name: 'Bordado/serigrafia', factor: 2, unit: 'aplicações', note: 'Logo em cada peça superior' }
+				]
+			},
+			{
+				id: 'enxoval',
+				label: 'Enxoval/Sob Medida',
+				hint: 'Encomendas personalizadas de cama e banho',
+				fields: [field('encomendas', 'Quantas encomendas no mês?', 'encomendas', 'Ex.: 8')],
+				catalog: [
+					{ name: 'Tecido percal/atoalhado', factor: 3.5, min: 3, unit: 'metros', note: '~3,5m por encomenda média' },
+					{ name: 'Viés e rendas', factor: 4, unit: 'metros', note: 'Acabamento das bordas' },
+					{ name: 'Embalagem presenteável', factor: 1, unit: 'unidades', note: 'Entrega com padrão premium' }
+				]
+			},
+			{
+				id: 'estoqueLoja',
+				label: 'Estoque de Loja',
+				hint: 'Reposição de varejo pelo giro mensal',
+				fields: [field('vendasMes', 'Quantas vendas você faz por mês?', 'vendas', 'Ex.: 100')],
+				catalog: [
+					{ name: 'Peças de reposição', factor: 1.2, unit: 'unidades', note: '20% acima do giro para não perder venda' },
+					{ name: 'Sacolas personalizadas', factor: 1.1, unit: 'unidades', note: 'Considerando 10% de margem' },
+					{ name: 'Etiquetas e tags', factor: 1.2, unit: 'unidades', note: 'Acompanham as peças novas' }
+				]
 			}
+		]
+	},
+	{
+		id: 'oficina',
+		emoji: '🔧',
+		label: 'Oficinas & Serviços Mecânicos',
+		description: 'Mecânica, funilaria, detalhamento',
+		templates: [
+			{
+				id: 'revisao',
+				label: 'Revisão Geral (Óleos/Filtros)',
+				hint: 'Óleo, filtros e fluidos por veículo',
+				fields: [field('carros', 'Quantos carros você atende por mês?', 'carros', 'Ex.: 40')],
+				catalog: [
+					{ name: 'Óleo de motor 5W30 (L)', factor: 4.5, unit: 'litros', note: '~4,5L por troca, com margem' },
+					{ name: 'Filtro de óleo', factor: 1, unit: 'unidades', note: '1 filtro novo por revisão' },
+					{ name: 'Filtro de ar', factor: 0.7, min: 1, unit: 'unidades', note: '~70% das revisões pedem troca' }
+				]
+			},
+			{
+				id: 'funilaria',
+				label: 'Funilaria e Pintura',
+				hint: 'Massa, lixa e tinta por painel',
+				fields: [field('paineis', 'Quantos painéis/peças para pintar?', 'painéis', 'Ex.: 12')],
+				catalog: [
+					{ name: 'Tinta automotiva (L)', factor: 0.4, min: 1, unit: 'litros', note: '~400ml por painel, com 10% de perda' },
+					{ name: 'Massa poliéster 1kg', factor: 0.3, min: 1, unit: 'latas', note: 'Correção de amassados' },
+					{ name: 'Kit lixas (80 a 600)', factor: 1, unit: 'kits', note: '1 jogo por painel trabalhado' }
+				]
+			},
+			{
+				id: 'freios',
+				label: 'Troca de Freios/Suspensão',
+				hint: 'Pastilhas, discos e amortecedores',
+				fields: [field('veiculos', 'Quantos veículos para este serviço?', 'veículos', 'Ex.: 15')],
+				catalog: [
+					{ name: 'Jogo de pastilhas dianteiras', factor: 1, unit: 'jogos', note: '1 jogo por veículo' },
+					{ name: 'Par de discos de freio', factor: 0.5, min: 1, unit: 'pares', note: '~metade dos serviços pede disco novo' },
+					{ name: 'Fluido de freio DOT4 500ml', factor: 1, unit: 'frascos', note: 'Sangria completa a cada troca' }
+				]
+			},
+			{
+				id: 'detalhamento',
+				label: 'Detalhamento/Estética',
+				hint: 'Shampoo, cera e microfibra por carro',
+				fields: [field('carrosDetalhe', 'Quantos carros no mês?', 'carros', 'Ex.: 25')],
+				catalog: [
+					{ name: 'Shampoo automotivo 5L', factor: 0.04, min: 1, unit: 'galões', note: '~25 lavagens por galão' },
+					{ name: 'Cera/selante 500g', factor: 0.1, min: 1, unit: 'potes', note: '~10 aplicações por pote' },
+					{ name: 'Toalha de microfibra', factor: 0.5, min: 2, unit: 'unidades', note: 'Rodízio com descarte por desgaste' }
+				]
+			},
+			{
+				id: 'estoqueOficina',
+				label: 'Estoque Mensal Base',
+				hint: 'Consumíveis gerais da oficina',
+				fields: [field('atendimentosOficina', 'Quantos atendimentos por mês?', 'atendimentos', 'Ex.: 60')],
+				catalog: [
+					{ name: 'Desengraxante 5L', factor: 0.03, min: 1, unit: 'galões', note: 'Limpeza de peças e bancada' },
+					{ name: 'Par de luvas nitrílicas', factor: 2, unit: 'pares', note: '2 trocas por atendimento' },
+					{ name: 'Estopa/pano industrial (kg)', factor: 0.1, min: 1, unit: 'kg', note: 'Uso contínuo no box' }
+				]
+			}
+		]
+	},
+	{
+		id: 'pet',
+		emoji: '🐶',
+		label: 'Mercado Pet',
+		description: 'Banho e tosa, clínicas, hotéis',
+		templates: [
+			{
+				id: 'banhoTosa',
+				label: 'Banho e Tosa Semanal',
+				hint: 'Shampoo, perfume e toalhas por banho',
+				fields: [field('banhos', 'Quantos banhos por semana?', 'banhos', 'Ex.: 35')],
+				catalog: [
+					{ name: 'Shampoo pet neutro 5L', factor: 0.04, min: 1, unit: 'galões', note: '~25 banhos por galão' },
+					{ name: 'Perfume/colônia pet 500ml', factor: 0.05, min: 1, unit: 'frascos', note: 'Finalização de cada banho' },
+					{ name: 'Toalha descartável pet', factor: 1.1, unit: 'unidades', note: 'Considerando 10% de reposição' }
+				]
+			},
+			{
+				id: 'clinico',
+				label: 'Atendimentos Clínicos (Vacinas/Luvas)',
+				hint: 'Seringas, luvas e antissépticos',
+				fields: [field('consultas', 'Quantos atendimentos no mês?', 'consultas', 'Ex.: 80')],
+				catalog: [
+					{ name: 'Seringa descartável 3ml', factor: 1.2, unit: 'unidades', note: 'Aplicações + 20% de reserva' },
+					{ name: 'Par de luvas de procedimento', factor: 2, unit: 'pares', note: '2 trocas por consulta' },
+					{ name: 'Álcool 70% 1L', factor: 0.05, min: 1, unit: 'frascos', note: 'Assepsia de bancada e aplicação' }
+				]
+			},
+			{
+				id: 'estoquePet',
+				label: 'Estoque Mensal de Rações/Produtos',
+				hint: 'Reposição de loja pelo giro mensal',
+				fields: [field('clientesPet', 'Quantos clientes ativos no mês?', 'clientes', 'Ex.: 120')],
+				catalog: [
+					{ name: 'Ração premium 15kg', factor: 0.3, min: 2, unit: 'sacos', note: '~30% dos clientes compram no mês' },
+					{ name: 'Petiscos e snacks', factor: 0.8, unit: 'unidades', note: 'Item de balcão com alto giro' },
+					{ name: 'Tapete higiênico (pacote 30un)', factor: 0.15, min: 1, unit: 'pacotes', note: 'Reposição quinzenal média' }
+				]
+			},
+			{
+				id: 'hotelPet',
+				label: 'Hotel/Creche Pet',
+				hint: 'Alimentação e higiene por diária',
+				fields: [field('diarias', 'Quantas diárias vendidas no mês?', 'diárias', 'Ex.: 50')],
+				catalog: [
+					{ name: 'Ração hóspede (kg)', factor: 0.4, min: 1, unit: 'kg', note: '~400g por diária de porte médio' },
+					{ name: 'Tapete higiênico', factor: 2, unit: 'unidades', note: '2 trocas por diária' },
+					{ name: 'Desinfetante pet-safe 5L', factor: 0.02, min: 1, unit: 'galões', note: 'Limpeza diária das baias' }
+				]
+			}
+		]
+	},
+	{
+		id: 'limpeza',
+		emoji: '🧹',
+		label: 'Serviços Domésticos & Limpeza',
+		description: 'Diaristas, pós-obra, lavanderias',
+		templates: [
+			{
+				id: 'faxina',
+				label: 'Faxina Residencial',
+				hint: 'Produtos e panos por faxina',
+				fields: [field('faxinas', 'Quantas faxinas no mês?', 'faxinas', 'Ex.: 20')],
+				catalog: [
+					{ name: 'Multiuso concentrado 1L', factor: 0.2, min: 1, unit: 'frascos', note: '~5 faxinas por frasco' },
+					{ name: 'Pano de microfibra', factor: 0.5, min: 2, unit: 'unidades', note: 'Rodízio com descarte quinzenal' },
+					{ name: 'Par de luvas de borracha', factor: 0.25, min: 1, unit: 'pares', note: 'Troca a cada ~4 faxinas' }
+				]
+			},
+			{
+				id: 'posObra',
+				label: 'Limpeza Pós-Obra',
+				hint: 'Removedores e EPIs por metragem',
+				fields: [field('areaPosObra', 'Qual a metragem da obra? (m²)', 'm²', 'Ex.: 120')],
+				catalog: [
+					{ name: 'Removedor de cimento 5L', factor: 0.02, min: 1, unit: 'galões', note: 'Pisos e revestimentos com respingo' },
+					{ name: 'Saco de entulho reforçado', factor: 0.15, min: 5, unit: 'unidades', note: 'Descarte de resíduos finos' },
+					{ name: 'Kit EPI (luva + máscara + óculos)', factor: 0.02, min: 2, unit: 'kits', note: 'Segurança da equipe' }
+				]
+			},
+			{
+				id: 'lavanderia',
+				label: 'Lavanderia',
+				hint: 'Sabão e amaciante por kg de roupa',
+				fields: [field('kgRoupa', 'Quantos kg de roupa por semana?', 'kg', 'Ex.: 200')],
+				catalog: [
+					{ name: 'Sabão líquido profissional 5L', factor: 0.02, min: 1, unit: 'galões', note: '~250kg de roupa por galão' },
+					{ name: 'Amaciante concentrado 5L', factor: 0.015, min: 1, unit: 'galões', note: 'Dosagem profissional' },
+					{ name: 'Embalagem/cabide de entrega', factor: 0.3, min: 5, unit: 'unidades', note: 'Apresentação da entrega' }
+				]
+			},
+			{
+				id: 'estoqueLimpeza',
+				label: 'Estoque Mensal de Produtos',
+				hint: 'Reposição geral da operação',
+				fields: [field('atendimentosLimpeza', 'Quantos atendimentos por mês?', 'atendimentos', 'Ex.: 40')],
+				catalog: [
+					{ name: 'Água sanitária 5L', factor: 0.1, min: 1, unit: 'galões', note: 'Desinfecção pesada' },
+					{ name: 'Desinfetante perfumado 5L', factor: 0.08, min: 1, unit: 'galões', note: 'Acabamento dos ambientes' },
+					{ name: 'Saco de lixo reforçado (pacote)', factor: 0.2, min: 1, unit: 'pacotes', note: 'Consumo contínuo' }
+				]
+			}
+		]
+	},
+	{
+		id: 'tatuagem',
+		emoji: '✒️',
+		label: 'Estúdios de Tatuagem & Piercing',
+		description: 'Artistas e estúdios',
+		templates: [
+			{
+				id: 'sessaoTattoo',
+				label: 'Sessão de Tatuagem (Tintas/Agulhas)',
+				hint: 'Tinta, agulhas e descartáveis por sessão',
+				fields: [field('sessoesTattoo', 'Quantas sessões agendadas no mês?', 'sessões', 'Ex.: 25')],
+				catalog: [
+					{ name: 'Tinta preta 30ml', factor: 0.1, min: 1, unit: 'frascos', note: 'Rateio de ~10 sessões por frasco' },
+					{ name: 'Cartucho de agulha estéril', factor: 3, unit: 'unidades', note: '~3 configurações por sessão' },
+					{ name: 'Batoque + filme protetor (kit)', factor: 1, unit: 'kits', note: '1 kit descartável por sessão' }
+				]
+			},
+			{
+				id: 'piercing',
+				label: 'Procedimento de Piercing',
+				hint: 'Joias, agulhas e assepsia',
+				fields: [field('procedimentos', 'Quantos procedimentos no mês?', 'procedimentos', 'Ex.: 15')],
+				catalog: [
+					{ name: 'Joia de titânio', factor: 1.1, unit: 'unidades', note: 'Inclui 10% de reserva de tamanhos' },
+					{ name: 'Agulha catéter estéril', factor: 1, unit: 'unidades', note: '1 agulha nova por perfuração' },
+					{ name: 'Clorexidina 100ml', factor: 0.1, min: 1, unit: 'frascos', note: 'Assepsia pré e pós' }
+				]
+			},
+			{
+				id: 'biosseguranca',
+				label: 'Materiais de Biossegurança',
+				hint: 'Luvas, campos e esterilização',
+				fields: [field('atendimentosBio', 'Quantos atendimentos no mês?', 'atendimentos', 'Ex.: 40')],
+				catalog: [
+					{ name: 'Par de luvas nitrílicas', factor: 3, unit: 'pares', note: '3 trocas por atendimento' },
+					{ name: 'Campo cirúrgico descartável', factor: 1, unit: 'unidades', note: '1 campo novo por cliente' },
+					{ name: 'Envelope de esterilização', factor: 2, unit: 'unidades', note: 'Autoclave dos instrumentos' }
+				]
+			},
+			{
+				id: 'estoqueTattoo',
+				label: 'Estoque Mensal Base',
+				hint: 'Reposição geral do estúdio',
+				fields: [field('sessoesMes', 'Quantas sessões por mês em média?', 'sessões', 'Ex.: 30')],
+				catalog: [
+					{ name: 'Papel toalha (fardo)', factor: 0.1, min: 1, unit: 'fardos', note: 'Uso contínuo na bancada' },
+					{ name: 'Vaselina sólida 500g', factor: 0.05, min: 1, unit: 'potes', note: 'Deslizamento e proteção' },
+					{ name: 'Plástico filme protetor (rolo)', factor: 0.15, min: 1, unit: 'rolos', note: 'Envelopamento de máquinas e macas' }
+				]
+			}
+		]
+	}
+];
+
+/** Id reservado do card "Outro Nicho" — destrava o fluxo via texto livre + IA. */
+export const CUSTOM_NICHE_ID = 'outro';
+
+/** Templates universais para nichos fora do catálogo (até a IA real assumir). */
+export const CUSTOM_TEMPLATES: readonly PlannerTemplate[] = [
+	{
+		id: 'porCliente',
+		label: 'Serviço por Cliente',
+		hint: 'Consumo estimado a cada atendimento',
+		fields: [field('clientesCustom', 'Quantos clientes estimados no mês?', 'clientes', 'Ex.: 50')],
+		catalog: [
+			{ name: 'Insumo principal do serviço', factor: 1, unit: 'unidades', note: '1 uso por cliente, sem reaproveitamento' },
+			{ name: 'Descartáveis e EPIs (kit)', factor: 1, unit: 'kits', note: 'Higiene e segurança por atendimento' },
+			{ name: 'Material de apoio/limpeza', factor: 0.1, min: 1, unit: 'unidades', note: 'Rateio de uso contínuo' }
+		]
+	},
+	{
+		id: 'porUnidade',
+		label: 'Produção por Unidade',
+		hint: 'Matéria-prima por peça produzida',
+		fields: [field('unidades', 'Quantas unidades você vai produzir?', 'unidades', 'Ex.: 100')],
+		catalog: [
+			{ name: 'Matéria-prima principal', factor: 1.1, unit: 'unidades', note: 'Considerando 10% de margem de perda' },
+			{ name: 'Embalagem individual', factor: 1.05, unit: 'unidades', note: '5% de reserva para avarias' },
+			{ name: 'Etiqueta/acabamento', factor: 1, unit: 'unidades', note: '1 por unidade final' }
+		]
+	},
+	{
+		id: 'estoqueMensal',
+		label: 'Estoque Mensal Base',
+		hint: 'Reposição geral da operação',
+		fields: [field('movimentoMes', 'Quantos atendimentos/vendas por mês?', 'no mês', 'Ex.: 80')],
+		catalog: [
+			{ name: 'Consumíveis principais', factor: 1.2, unit: 'unidades', note: '20% acima do giro para não faltar' },
+			{ name: 'Material de limpeza/higiene', factor: 0.1, min: 2, unit: 'unidades', note: 'Uso contínuo do espaço' },
+			{ name: 'Embalagens/descartáveis', factor: 1.1, unit: 'unidades', note: 'Considerando 10% de margem' }
+		]
+	},
+	{
+		id: 'eventoEncomenda',
+		label: 'Evento ou Encomenda Grande',
+		hint: 'Compra pontual por número de pessoas',
+		fields: [field('pessoas', 'Para quantas pessoas?', 'pessoas', 'Ex.: 150')],
+		catalog: [
+			{ name: 'Insumo principal por pessoa', factor: 1.1, unit: 'unidades', note: '10% de reserva de segurança' },
+			{ name: 'Descartáveis do evento', factor: 1.2, unit: 'unidades', note: 'Reposição durante o evento' },
+			{ name: 'Kit transporte/entrega', factor: 0.1, min: 1, unit: 'kits', note: 'Logística da encomenda' }
 		]
 	}
 ];
@@ -146,70 +581,31 @@ const intl = new Intl.NumberFormat('pt-BR');
 const per = (value: number, factor: number, min = 1): string => intl.format(Math.max(min, Math.round(value * factor)));
 
 /**
- * MOCK RÁPIDO — só para o clique não quebrar enquanto validamos o design.
- * Determinístico e exportado para os testes; quando a rota serverless nascer,
- * vira um fetch com o MESMO contrato SupplyPlan e a UI não muda uma linha.
+ * MOCK DE DESIGN — determinístico e declarativo: monta a lista a partir do
+ * catálogo do template escalado pelo número digitado. Quando a rota serverless
+ * nascer, vira um fetch com o MESMO contrato SupplyPlan e a UI não muda.
  */
-export function simulateSupplyPlan(nicheId: string, templateId: string, values: Readonly<Record<string, number>>): SupplyPlan {
+export function simulateSupplyPlan(
+	nicheId: string,
+	templateId: string,
+	values: Readonly<Record<string, number>>,
+	customLabel = ''
+): SupplyPlan {
+	const isCustom = nicheId === CUSTOM_NICHE_ID;
 	const niche = NICHES.find(option => option.id === nicheId);
-	const template = niche?.templates.find(option => option.id === templateId);
-	const base = { niche: niche?.label ?? 'Seu nicho', template: template?.label ?? 'Seu projeto', engine: 'simulated' as const };
+	const templates = isCustom ? CUSTOM_TEMPLATES : niche?.templates ?? [];
+	const template = templates.find(option => option.id === templateId);
 	const amount = Object.values(values)[0] ?? 0;
-
-	const catalogs: Record<string, readonly SupplyItem[]> = {
-		alvenaria: [
-			{ name: 'Tijolo baiano (9x19x19)', quantity: `${per(amount, 42)} unidades`, note: 'Considerando 10% de margem de perda por quebra' },
-			{ name: 'Cimento CP-II 50kg', quantity: `${per(amount, 0.7, 2)} sacos`, note: 'Argamassa de assentamento, traço 1:6' },
-			{ name: 'Areia média lavada', quantity: `${per(amount, 0.08, 1)} m³`, note: 'Inclui folga para o reboco inicial' }
-		],
-		pintura: [
-			{ name: 'Tinta acrílica 18L', quantity: `${per(amount, 0.02, 1)} latas`, note: 'Rendimento de ~250m² por lata em 2 demãos' },
-			{ name: 'Massa corrida 25kg', quantity: `${per(amount, 0.04, 1)} sacos`, note: 'Correção de imperfeições antes da pintura' },
-			{ name: 'Kit rolo + fita + lona', quantity: `${per(amount, 0.02, 1)} kits`, note: 'Proteção de piso e acabamento limpo' }
-		],
-		contrapiso: [
-			{ name: 'Cimento CP-II 50kg', quantity: `${per(amount, 0.9, 3)} sacos`, note: 'Contrapiso de 4cm, traço 1:4' },
-			{ name: 'Areia média', quantity: `${per(amount, 0.05, 1)} m³`, note: 'Considerando 10% de margem de perda' },
-			{ name: 'Brita 0', quantity: `${per(amount, 0.03, 1)} m³`, note: 'Para regularização da base' }
-		],
-		mechas: [
-			{ name: 'Tinta de coloração 60g', quantity: `${per(amount, 1)} tubos`, note: '1 tubo por cliente, sem reaproveitamento' },
-			{ name: 'Pó descolorante 500g', quantity: `${per(amount, 0.1, 1)} potes`, note: 'Rateio de ~10 aplicações por pote' },
-			{ name: 'Ox 30 volumes 900ml', quantity: `${per(amount, 0.16, 1)} frascos`, note: 'Considerando 10% de margem de desperdício' }
-		],
-		manicure: [
-			{ name: 'Esmalte (cores variadas)', quantity: `${per(amount, 0.12, 3)} frascos`, note: '~8 atendimentos por frasco' },
-			{ name: 'Kit descartável (lixa + palito)', quantity: `${per(amount, 1)} kits`, note: '1 kit novo por cliente, por biossegurança' },
-			{ name: 'Algodão 500g', quantity: `${per(amount, 0.02, 1)} pacotes`, note: 'Remoção e acabamento' }
-		],
-		estoqueBase: [
-			{ name: 'Shampoo profissional 5L', quantity: `${per(amount, 0.03, 1)} galões`, note: '~35 lavagens por galão' },
-			{ name: 'Condicionador profissional 5L', quantity: `${per(amount, 0.025, 1)} galões`, note: 'Acompanha o ritmo do shampoo' },
-			{ name: 'Toalhas descartáveis', quantity: `${per(amount, 1.1)} unidades`, note: 'Considerando 10% de margem de reposição' }
-		],
-		bolos: [
-			{ name: 'Farinha de trigo 5kg', quantity: `${per(amount, 0.5, 1)} pacotes`, note: '~500g por bolo + margem de erro' },
-			{ name: 'Ovos', quantity: `${per(amount, 6)} unidades`, note: '6 ovos por receita de massa' },
-			{ name: 'Açúcar refinado 5kg', quantity: `${per(amount, 0.4, 1)} pacotes`, note: 'Massa + calda + cobertura' }
-		],
-		salgados: [
-			{ name: 'Salgados variados', quantity: `${per(amount, 10)} unidades`, note: 'Média de 10 salgados por convidado' },
-			{ name: 'Farinha de trigo 5kg', quantity: `${per(amount, 0.08, 1)} pacotes`, note: 'Massa de coxinha e risole' },
-			{ name: 'Óleo para fritura 900ml', quantity: `${per(amount, 0.06, 1)} frascos`, note: 'Troca a cada ~150 unidades fritas' }
-		],
-		pecas: [
-			{ name: 'Tecido (largura 1,50m)', quantity: `${per(amount, 1.4, 2)} metros`, note: '~1,4m por peça, com 10% de margem de corte' },
-			{ name: 'Linha de costura 2000j', quantity: `${per(amount, 0.1, 1)} cones`, note: '~10 peças por cone' },
-			{ name: 'Aviamentos (botões/zíper)', quantity: `${per(amount, 1)} kits`, note: '1 kit por peça produzida' }
-		],
-		uniformes: [
-			{ name: 'Camisetas para personalizar', quantity: `${per(amount, 2)} unidades`, note: '2 unidades por funcionário (troca)' },
-			{ name: 'Tecido brim (calça/avental)', quantity: `${per(amount, 1.6, 2)} metros`, note: '~1,6m por funcionário' },
-			{ name: 'Bordado/serigrafia', quantity: `${per(amount, 2)} aplicações`, note: 'Logo em cada peça superior' }
-		]
+	return {
+		niche: isCustom ? (customLabel.trim() || 'Seu nicho') : niche?.label ?? 'Seu nicho',
+		template: template?.label ?? 'Seu projeto',
+		engine: 'simulated',
+		items: (template?.catalog ?? []).map(entry => ({
+			name: entry.name,
+			quantity: `${per(amount, entry.factor, entry.min)} ${entry.unit}`,
+			note: entry.note
+		}))
 	};
-
-	return { ...base, items: catalogs[templateId] ?? [] };
 }
 
 type Phase = 'niche' | 'template' | 'inputs' | 'loading' | 'result';
@@ -236,8 +632,8 @@ function WizardProgress({ phase }: { readonly phase: Phase }): React.JSX.Element
 					>
 						{index < current ? <Check className="h-3.5 w-3.5" aria-hidden /> : index + 1}
 					</span>
-					<span className={`text-xs font-medium ${index === current ? 'text-gray-900' : 'text-gray-400'}`}>{label}</span>
-					{index < STEP_LABELS.length - 1 && <span className="h-px w-6 bg-gray-200" aria-hidden />}
+					<span className={`hidden text-xs font-medium sm:inline ${index === current ? 'text-gray-900' : 'text-gray-400'}`}>{label}</span>
+					{index < STEP_LABELS.length - 1 && <span className="h-px w-4 bg-gray-200 sm:w-6" aria-hidden />}
 				</li>
 			))}
 		</ol>
@@ -248,6 +644,8 @@ function Planner(): React.JSX.Element {
 	const track = useTrackEvent();
 	const [phase, setPhase] = useState<Phase>('niche');
 	const [niche, setNiche] = useState<PlannerNiche | null>(null);
+	const [customOpen, setCustomOpen] = useState(false);
+	const [customNiche, setCustomNiche] = useState('');
 	const [template, setTemplate] = useState<PlannerTemplate | null>(null);
 	const [values, setValues] = useState<Record<string, string>>({});
 	// Sem dados até o motor responder: null = aguardando (zero mock residual).
@@ -258,15 +656,30 @@ function Planner(): React.JSX.Element {
 		if (timer.current !== null) window.clearTimeout(timer.current);
 	}, []);
 
+	const isCustom = niche === null && customOpen;
+	const customOk = customNiche.trim().length >= 3;
+	const activeTemplates: readonly PlannerTemplate[] = niche ? niche.templates : CUSTOM_TEMPLATES;
+	const nicheLabel = niche ? niche.label : customNiche.trim();
+	const nicheEmoji = niche ? niche.emoji : '🔍';
+
 	const numericValues: Record<string, number> = {};
-	for (const field of template?.fields ?? []) {
-		const parsed = Number((values[field.id] ?? '').replace(',', '.'));
-		numericValues[field.id] = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+	for (const inputField of template?.fields ?? []) {
+		const parsed = Number((values[inputField.id] ?? '').replace(',', '.'));
+		numericValues[inputField.id] = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 	}
-	const inputsOk = (template?.fields ?? []).length > 0 && (template?.fields ?? []).every(field => (numericValues[field.id] ?? 0) > 0);
+	const inputsOk = (template?.fields ?? []).length > 0 && (template?.fields ?? []).every(inputField => (numericValues[inputField.id] ?? 0) > 0);
 
 	const pickNiche = (option: PlannerNiche): void => {
 		setNiche(option);
+		setCustomOpen(false);
+		setTemplate(null);
+		setValues({});
+		setPhase('template');
+	};
+
+	const confirmCustomNiche = (): void => {
+		if (!customOk) return;
+		setNiche(null);
 		setTemplate(null);
 		setValues({});
 		setPhase('template');
@@ -279,13 +692,13 @@ function Planner(): React.JSX.Element {
 	};
 
 	const generate = (): void => {
-		if (!niche || !template || !inputsOk) return;
+		if (!template || !inputsOk) return;
 		setPlan(null);
 		setPhase('loading');
 		// Mock com setTimeout — validação de design; a API real entra aqui depois.
 		timer.current = window.setTimeout(() => {
-			const result = simulateSupplyPlan(niche.id, template.id, numericValues);
-			track('Lista de Compras Gerada', { moduleId: MODULE_ID, niche: niche.id, template: template.id });
+			const result = simulateSupplyPlan(niche?.id ?? CUSTOM_NICHE_ID, template.id, numericValues, customNiche);
+			track('Lista de Compras Gerada', { moduleId: MODULE_ID, niche: niche?.id ?? CUSTOM_NICHE_ID, template: template.id });
 			setPlan(result);
 			setPhase('result');
 		}, 1800);
@@ -294,6 +707,8 @@ function Planner(): React.JSX.Element {
 	const restart = (): void => {
 		setPhase('niche');
 		setNiche(null);
+		setCustomOpen(false);
+		setCustomNiche('');
 		setTemplate(null);
 		setValues({});
 		setPlan(null);
@@ -310,7 +725,7 @@ function Planner(): React.JSX.Element {
 						animate={{ opacity: 1, y: 0 }}
 						exit={{ opacity: 0, y: -12 }}
 						transition={{ duration: 0.3, ease: 'easeOut' }}
-						className="overflow-hidden rounded-2xl bg-white p-8 shadow-sm"
+						className="overflow-hidden rounded-2xl bg-white p-6 shadow-sm sm:p-8"
 					>
 						<span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white shadow-lg shadow-indigo-500/30">
 							<Boxes className="h-6 w-6" aria-hidden />
@@ -318,39 +733,93 @@ function Planner(): React.JSX.Element {
 						<h1 className="mt-5 text-2xl font-bold tracking-tight text-gray-900">Planejador Preditivo de Estoque</h1>
 						<p className="mt-1.5 text-sm text-gray-500">Em qual área você trabalha? Toque no seu nicho — sem digitar nada.</p>
 
-						<div className="mt-6 grid grid-cols-2 gap-3">
+						<div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
 							{NICHES.map(option => (
 								<button
 									key={option.id}
 									type="button"
 									onClick={() => pickNiche(option)}
 									data-testid={`niche-${option.id}`}
-									className="group flex flex-col items-start gap-2 rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md hover:shadow-indigo-500/10"
+									className="group flex flex-col items-start gap-1.5 rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md hover:shadow-indigo-500/10"
 								>
 									<span className="text-3xl" aria-hidden>{option.emoji}</span>
-									<span className="text-sm font-semibold text-gray-900 group-hover:text-indigo-600">{option.label}</span>
-									<span className="text-xs text-gray-400">{option.description}</span>
+									<span className="text-sm font-semibold leading-snug text-gray-900 group-hover:text-indigo-600">{option.label}</span>
+									<span className="text-xs leading-snug text-gray-400">{option.description}</span>
 								</button>
 							))}
+
+							{/* Card especial: nicho fora do catálogo -> texto livre destrava a IA */}
+							<button
+								type="button"
+								onClick={() => setCustomOpen(open => !open)}
+								data-testid="niche-outro"
+								aria-expanded={customOpen}
+								className={`group col-span-2 flex flex-col items-start gap-1.5 rounded-2xl border-2 border-dashed p-4 text-left transition-all sm:col-span-3 ${
+									customOpen ? 'border-indigo-400 bg-indigo-50/50' : 'border-gray-200 bg-gray-50/50 hover:border-indigo-300 hover:bg-indigo-50/30'
+								}`}
+							>
+								<span className="flex items-center gap-2">
+									<span className="text-3xl" aria-hidden>🔍</span>
+									<span>
+										<span className="block text-sm font-semibold text-gray-900 group-hover:text-indigo-600">Outro Nicho</span>
+										<span className="block text-xs text-gray-400">Não encontrou seu nicho? A IA cobre qualquer área</span>
+									</span>
+								</span>
+							</button>
 						</div>
+
+						{customOpen && (
+							<motion.div
+								initial={{ opacity: 0, height: 0 }}
+								animate={{ opacity: 1, height: 'auto' }}
+								transition={{ duration: 0.25 }}
+								className="mt-3 overflow-hidden"
+							>
+								<label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="custom-niche">
+									Não encontrou seu nicho? Digite aqui o que você faz
+								</label>
+								<div className="flex gap-2">
+									<div className="flex flex-1 items-center rounded-xl border border-gray-200 bg-white shadow-sm transition-all focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
+										<Search className="ml-3.5 h-4 w-4 shrink-0 text-gray-300" aria-hidden />
+										<input
+											id="custom-niche"
+											value={customNiche}
+											onChange={event => setCustomNiche(event.target.value)}
+											placeholder="Ex.: Chaveiro, floricultura, aulas de música…"
+											data-testid="custom-niche-input"
+											className="w-full rounded-xl bg-transparent px-3 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-300"
+										/>
+									</div>
+									<button
+										type="button"
+										onClick={confirmCustomNiche}
+										disabled={!customOk}
+										data-testid="custom-niche-continue"
+										className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+									>
+										Continuar <ArrowRight className="h-4 w-4" aria-hidden />
+									</button>
+								</div>
+							</motion.div>
+						)}
 					</motion.section>
 				)}
 
-				{phase === 'template' && niche && (
+				{phase === 'template' && (niche || isCustom || customOk) && (
 					<motion.section
 						key="template"
 						initial={{ opacity: 0, y: 12 }}
 						animate={{ opacity: 1, y: 0 }}
 						exit={{ opacity: 0, y: -12 }}
 						transition={{ duration: 0.3, ease: 'easeOut' }}
-						className="overflow-hidden rounded-2xl bg-white p-8 shadow-sm"
+						className="overflow-hidden rounded-2xl bg-white p-6 shadow-sm sm:p-8"
 					>
-						<span className="text-3xl" aria-hidden>{niche.emoji}</span>
-						<h2 className="mt-3 text-xl font-bold tracking-tight text-gray-900">O que você quer calcular em {niche.label}?</h2>
+						<span className="text-3xl" aria-hidden>{nicheEmoji}</span>
+						<h2 className="mt-3 text-xl font-bold tracking-tight text-gray-900">O que você quer calcular em {nicheLabel}?</h2>
 						<p className="mt-1.5 text-sm text-gray-500">Escolha uma opção pronta — a gente já sabe os materiais de cada uma.</p>
 
 						<div className="mt-6 grid gap-3">
-							{niche.templates.map(option => (
+							{activeTemplates.map(option => (
 								<button
 									key={option.id}
 									type="button"
@@ -375,38 +844,38 @@ function Planner(): React.JSX.Element {
 					</motion.section>
 				)}
 
-				{phase === 'inputs' && niche && template && (
+				{phase === 'inputs' && template && (
 					<motion.section
 						key="inputs"
 						initial={{ opacity: 0, y: 12 }}
 						animate={{ opacity: 1, y: 0 }}
 						exit={{ opacity: 0, y: -12 }}
 						transition={{ duration: 0.3, ease: 'easeOut' }}
-						className="overflow-hidden rounded-2xl bg-white p-8 shadow-sm"
+						className="overflow-hidden rounded-2xl bg-white p-6 shadow-sm sm:p-8"
 					>
 						<span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-600">
-							{niche.emoji} {niche.label} · {template.label}
+							{nicheEmoji} {nicheLabel} · {template.label}
 						</span>
 						<h2 className="mt-4 text-xl font-bold tracking-tight text-gray-900">Só falta o número</h2>
 						<p className="mt-1.5 text-sm text-gray-500">Preencha e a IA calcula quantidades com a margem de perda inclusa.</p>
 
 						<div className="mt-6 grid gap-4">
-							{template.fields.map(field => (
-								<label key={field.id} className="block">
-									<span className="mb-1.5 block text-sm font-medium text-gray-700">{field.label}</span>
+							{template.fields.map(inputField => (
+								<label key={inputField.id} className="block">
+									<span className="mb-1.5 block text-sm font-medium text-gray-700">{inputField.label}</span>
 									<div className="flex items-center rounded-xl border border-gray-200 bg-white shadow-sm transition-all focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
 										<input
 											type="number"
 											inputMode="decimal"
 											min={0}
 											step="any"
-											value={values[field.id] ?? ''}
-											onChange={event => setValues(current => ({ ...current, [field.id]: event.target.value }))}
-											placeholder={field.placeholder}
-											data-testid={`field-${field.id}`}
+											value={values[inputField.id] ?? ''}
+											onChange={event => setValues(current => ({ ...current, [inputField.id]: event.target.value }))}
+											placeholder={inputField.placeholder}
+											data-testid={`field-${inputField.id}`}
 											className="w-full rounded-xl bg-transparent px-4 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-300"
 										/>
-										<span className="whitespace-nowrap px-3.5 text-xs font-medium text-gray-400">{field.suffix}</span>
+										<span className="whitespace-nowrap px-3.5 text-xs font-medium text-gray-400">{inputField.suffix}</span>
 									</div>
 								</label>
 							))}
@@ -471,7 +940,7 @@ function Planner(): React.JSX.Element {
 						data-testid="planner-results"
 					>
 						<div className="border-b border-gray-100 bg-gradient-to-br from-indigo-50 to-white px-6 py-5">
-							<div className="flex items-center justify-between">
+							<div className="flex items-center justify-between gap-2">
 								<span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-indigo-600 shadow-sm">
 									<ClipboardList className="h-3.5 w-3.5" aria-hidden /> Sua Lista de Compras
 								</span>

@@ -583,7 +583,7 @@ try {
 
 // 18. Arsenal Essencial (Tier 1): scope-gate ui:render + render inicial dos utilitários
 {
-	const { default: SupplyPlanner, simulateSupplyPlan } = await import('./modules-library/essentials/construction-calculator/dist/SupplyPlanner.js');
+	const { default: SupplyPlanner } = await import('./modules-library/essentials/construction-calculator/dist/SupplyPlanner.js');
 	const { default: QuickReceiptMaker } = await import('./modules-library/essentials/quick-receipt/dist/QuickReceiptMaker.js');
 	const { default: AIPricingOracle } = await import('./modules-library/essentials/margin-calculator/dist/AIPricingOracle.js');
 
@@ -599,43 +599,43 @@ try {
 
 	// Autorizados: render inicial mostra os campos-resultado zerados
 	// Planejador Preditivo de Estoque: wizard guiado (anti "tela em branco").
-	// Passo 1 renderiza os cards visuais de nicho — sem input de texto livre.
+	// Passo 1 renderiza a grade de cards visuais — sem input de texto livre aberto.
 	const planner = withServices(SupplyPlanner, ['ui:render']);
 	assert.match(planner, /Planejador Preditivo de Estoque/);
-	assert.match(planner, /Obras/);
-	assert.match(planner, /Beleza/);
-	assert.match(planner, /Alimentação/);
-	assert.match(planner, /Costura\/Varejo/);
+	assert.match(planner, /Construção &(amp;)? Reformas/);
+	assert.match(planner, /Estética &(amp;)? Beleza/);
+	assert.match(planner, /Alimentação &(amp;)? Gastronomia/);
+	assert.match(planner, /Moda, Costura &(amp;)? Varejo/);
+	assert.match(planner, /Oficinas &(amp;)? Serviços Mecânicos/);
+	assert.match(planner, /Mercado Pet/);
+	assert.match(planner, /Serviços Domésticos &(amp;)? Limpeza/);
+	assert.match(planner, /Tatuagem &(amp;)? Piercing/);
+	assert.match(planner, /Outro Nicho/, 'card especial de nicho customizado');
 	assert.match(planner, /data-testid="wizard-progress"/, 'barra de progresso do wizard');
 	assert.doesNotMatch(planner, /<textarea/, 'passo 1 não tem texto livre');
 
-	// Catálogo guiado: cada nicho tem templates e cada template tem campos cirúrgicos.
-	const { NICHES } = await import('./modules-library/essentials/construction-calculator/dist/SupplyPlanner.js');
-	assert.ok(NICHES.length >= 4);
-	const obras = NICHES.find(option => option.id === 'obras');
-	assert.deepEqual(obras.templates.map(option => option.label), ['Paredes/Alvenaria', 'Pintura', 'Contrapiso']);
-	const belezaNiche = NICHES.find(option => option.id === 'beleza');
-	assert.deepEqual(belezaNiche.templates.map(option => option.label), ['Mechas/Coloração', 'Manicure/Unhas', 'Estoque Mensal Base']);
+	// Catálogo guiado expandido: 8 nichos, cada um com >= 4 templates com campo
+	// cirúrgico de volume. A lista de materiais agora vem da IA real (Regra de
+	// Ouro), então os templates não carregam mais catálogo local.
+	const plannerMod = await import('./modules-library/essentials/construction-calculator/dist/SupplyPlanner.js');
+	const { NICHES, CUSTOM_TEMPLATES, SEGMENTS } = plannerMod;
+	assert.equal(NICHES.length, 8, 'oito nichos principais');
 	for (const nicheOption of NICHES) {
+		assert.ok(nicheOption.templates.length >= 4, `nicho ${nicheOption.id} precisa de >= 4 templates (tem ${nicheOption.templates.length})`);
 		for (const templateOption of nicheOption.templates) {
 			assert.ok(templateOption.fields.length > 0, `template ${templateOption.id} precisa de campos`);
 		}
 	}
-
-	// Motor simulado (mock de design): determinístico, escala pelos números digitados.
-	const alvenaria = simulateSupplyPlan('obras', 'alvenaria', { areaParede: 75 });
-	assert.equal(alvenaria.engine, 'simulated');
-	assert.equal(alvenaria.niche, 'Obras');
-	assert.match(alvenaria.items[0].quantity, /3\.150 unidades/, '75m² * 42 tijolos');
-	assert.ok(alvenaria.items.some(item => /Cimento/.test(item.name)));
-
-	const mechas = simulateSupplyPlan('beleza', 'mechas', { clientes: 50 });
-	assert.match(mechas.items[0].quantity, /50 tubos/, '1 tubo por cliente');
-	assert.ok(mechas.items.some(item => /descolorante/i.test(item.name)));
-
-	const bolos = simulateSupplyPlan('alimentacao', 'bolos', { bolos: 10 });
-	assert.match(bolos.items.find(item => /Ovos/.test(item.name)).quantity, /60 unidades/, '6 ovos por bolo');
-	assert.ok(bolos.items.every(item => item.quantity && item.note));
+	const oficina = NICHES.find(option => option.id === 'oficina');
+	assert.ok(oficina.templates.some(option => /Revisão Geral/.test(option.label)));
+	assert.ok(oficina.templates.some(option => /Funilaria/.test(option.label)));
+	const pet = NICHES.find(option => option.id === 'pet');
+	assert.ok(pet.templates.some(option => /Banho e Tosa/.test(option.label)));
+	const tatuagem = NICHES.find(option => option.id === 'tatuagem');
+	assert.ok(tatuagem.templates.some(option => /Biossegurança/.test(option.label)));
+	assert.ok(CUSTOM_TEMPLATES.length >= 4, 'nicho customizado tem templates universais');
+	// Regra de Ouro nº 2: os três tiers de insumo disponíveis na UI
+	assert.deepEqual(SEGMENTS.map(option => option.id), ['Popular', 'Intermediário', 'Premium']);
 
 	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
 	assert.match(receipt, /Recibo de Prestação de Serviço/);
@@ -1390,6 +1390,80 @@ try {
 		res = mockRes();
 		await handler({ method: 'POST', body: { serviceDescription: 'Pintura residencial', location: 'São Paulo - SP' } }, res);
 		assert.equal(res.code, 500); // sem GEMINI_API_KEY -> 500 (front cai no fallback)
+		assert.match(res.payload.error, /GEMINI_API_KEY/);
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 37. Rota /api/supply-planner: consultoria Gemini com a Regra de Ouro + JSON estrito
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./api/supply-planner.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai']
+	});
+	const compiled = join(await mkdtemp(new URL('./.smoke-supplyplanner-', import.meta.url).pathname), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { default: handler, parseSupplyPlan, runSupplyPlanner, readBody, PLANNER_SYSTEM_PROMPT, SEGMENT_QUESTION } = await import(pathToFileURL(compiled).href);
+
+		// Regra de Ouro no system prompt: geografia, tier de insumo e desperdício
+		assert.match(PLANNER_SYSTEM_PROMPT, /REGRA DE OURO/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /CONTEXTO GEOGRÁFICO/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /Faria Lima/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /QUALIDADE DO INSUMO/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /DESPERDÍCIO PREDITIVO/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /Dica do Oráculo:/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /NÃO é uma calculadora/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /"analiseMercado": string, "precoMin": number, "precoMax": number/);
+
+		// parseSupplyPlan: contrato consultivo completo, com validações fail-closed
+		const goodJson = '{"analiseMercado":"Para um salão em Moema focando no segmento Premium, o preço médio é R$ 350 a R$ 600.","precoMin":350,"precoMax":600,"insumos":[{"nome":"Pó descolorante Wella Blondor 800g","quantidade":"7 potes","observacao":"Inclui 15% de margem de desperdício"}],"pontoAtencao":"Dica do Oráculo: a Wella eleva seu custo em 25%, mas permite ticket 30% maior. Vale a pena?"}';
+		const parsed = parseSupplyPlan('claro! ' + goodJson + ' pronto');
+		assert.equal(parsed.precoMin, 350);
+		assert.equal(parsed.insumos.length, 1);
+		assert.match(parsed.pontoAtencao, /Dica do Oráculo/);
+		assert.throws(() => parseSupplyPlan('sem json'), /sem JSON/);
+		assert.throws(() => parseSupplyPlan('{"analiseMercado":"x","precoMin":500,"precoMax":500,"insumos":[{"nome":"a","quantidade":"b","observacao":"c"}],"pontoAtencao":"d"}'), /faixa de preço/);
+		assert.throws(() => parseSupplyPlan('{"analiseMercado":"x","precoMin":100,"precoMax":200,"insumos":[],"pontoAtencao":"d"}'), /insumos vazia/);
+
+		// readBody: estrutura da Regra de Ouro; segmento omisso -> devolve a PERGUNTA
+		const fullBody = { nicho: 'Estética & Beleza', servico: 'Mechas/Coloração', localizacao: 'Moema, São Paulo', segmento_servico: 'Premium', marca_insumo_preferencial: 'Wella', volume_demanda: 50 };
+		assert.deepEqual(readBody(fullBody), fullBody);
+		const askResult = readBody({ nicho: 'Beleza', servico: 'Mechas', localizacao: 'SP', volume_demanda: 50 });
+		assert.equal(askResult.ask, SEGMENT_QUESTION);
+		assert.match(SEGMENT_QUESTION, /popular ou premium/);
+		assert.equal(readBody({ nicho: 'Beleza', servico: 'Mechas', localizacao: 'SP', segmento_servico: 'Premium', volume_demanda: 0 }), null); // volume inválido
+		assert.equal(readBody('lixo'), null);
+
+		// runSupplyPlanner: núcleo com modelo fake (sem rede) -> resultado tipado
+		const fakeModel = text => ({ generateContent: async () => ({ response: { text: () => text } }) });
+		const result = await runSupplyPlanner(fakeModel(goodJson), fullBody);
+		assert.equal(result.precoMax, 600);
+		assert.match(result.insumos[0].nome, /Wella Blondor/);
+
+		// Handler: método, corpo, pergunta de segmento e chave — fail-closed com JSON
+		const mockRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
+		delete process.env.GEMINI_API_KEY;
+
+		let res = mockRes();
+		await handler({ method: 'GET', body: {} }, res);
+		assert.equal(res.code, 405);
+
+		res = mockRes();
+		await handler({ method: 'POST', body: { nicho: 'Beleza' } }, res); // corpo incompleto
+		assert.equal(res.code, 400);
+
+		res = mockRes();
+		await handler({ method: 'POST', body: { nicho: 'Beleza', servico: 'Mechas', localizacao: 'SP', volume_demanda: 50 } }, res); // sem segmento
+		assert.equal(res.code, 400);
+		assert.match(res.payload.error, /popular ou premium/); // a IA pergunta, não chuta
+		assert.equal(res.payload.ask, 'segmento_servico');
+
+		res = mockRes();
+		await handler({ method: 'POST', body: fullBody }, res);
+		assert.equal(res.code, 500); // sem GEMINI_API_KEY
 		assert.match(res.payload.error, /GEMINI_API_KEY/);
 	} finally {
 		await rm(join(compiled, '..'), { recursive: true, force: true });

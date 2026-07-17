@@ -66,13 +66,18 @@ export const NICHES: readonly PlannerNiche[] = [
 		id: 'obras',
 		emoji: '🏗️',
 		label: 'Construção & Reformas',
-		description: 'Pedreiros, pintores, empreiteiros',
+		description: 'Do alicerce ao acabamento',
 		templates: [
-			{ id: 'alvenaria', label: 'Paredes/Alvenaria', hint: 'Tijolos, cimento e areia para levantar paredes', fields: [field('volume', 'Qual a metragem de parede? (m²)', 'm²', 'Ex.: 60')] },
-			{ id: 'pintura', label: 'Pintura', hint: 'Tinta, massa e proteção para pintar', fields: [field('volume', 'Qual a metragem da área? (m²)', 'm²', 'Ex.: 50')] },
-			{ id: 'contrapiso', label: 'Contrapiso', hint: 'Cimento, areia e brita para o piso', fields: [field('volume', 'Qual a área do piso? (m²)', 'm²', 'Ex.: 40')] },
-			{ id: 'telhado', label: 'Telhado/Cobertura', hint: 'Telhas, madeiramento e fixação', fields: [field('volume', 'Qual a área do telhado? (m²)', 'm²', 'Ex.: 90')] },
-			{ id: 'eletrica', label: 'Elétrica Básica', hint: 'Fios, tomadas e disjuntores por ponto', fields: [field('volume', 'Quantos pontos elétricos? (tomadas/luz)', 'pontos', 'Ex.: 20')] }
+			{ id: 'alvenaria', label: 'Paredes, Alvenaria e Muros', hint: 'Tijolos, cimento e areia para levantar paredes', fields: [field('volume', 'Qual a metragem de parede? (m²)', 'm²', 'Ex.: 60')] },
+			{ id: 'pintura', label: 'Pintura Residencial e Comercial', hint: 'Tinta, massa e proteção para pintar', fields: [field('volume', 'Qual a metragem da área? (m²)', 'm²', 'Ex.: 50')] },
+			{ id: 'porcelanato', label: 'Instalação de Porcelanato e Pisos', hint: 'Peças, argamassa colante e rejunte', fields: [field('volume', 'Qual a área do piso? (m²)', 'm²', 'Ex.: 45')] },
+			{ id: 'contrapiso', label: 'Contrapiso e Nivelamento', hint: 'Cimento, areia e brita para o piso', fields: [field('volume', 'Qual a área do piso? (m²)', 'm²', 'Ex.: 40')] },
+			{ id: 'drywall', label: 'Instalação de Gesso e Drywall', hint: 'Placas, perfis, fitas e massa', fields: [field('volume', 'Qual a área de parede/forro? (m²)', 'm²', 'Ex.: 35')] },
+			{ id: 'telhado', label: 'Telhado, Calhas e Cobertura', hint: 'Telhas, madeiramento, calhas e fixação', fields: [field('volume', 'Qual a área do telhado? (m²)', 'm²', 'Ex.: 90')] },
+			{ id: 'eletrica', label: 'Elétrica (Padrão, fiação e quadros)', hint: 'Fios, tomadas, disjuntores e quadros', fields: [field('volume', 'Quantos pontos elétricos? (tomadas/luz)', 'pontos', 'Ex.: 20')] },
+			{ id: 'hidraulica', label: 'Hidráulica (Tubulação e esgoto)', hint: 'Tubos, conexões, caixas d’água e registros', fields: [field('volume', 'Quantos pontos de água/esgoto?', 'pontos', 'Ex.: 12')] },
+			{ id: 'energiaSolar', label: 'Energia Solar', hint: 'Placas, inversores e cabeamento', fields: [field('volume', 'Qual o consumo mensal? (kWh)', 'kWh', 'Ex.: 450')] },
+			{ id: 'serralheria', label: 'Serralheria e Vidraçaria', hint: 'Perfis, vidros e ferragens', fields: [field('volume', 'Qual a área de esquadrias/vidro? (m²)', 'm²', 'Ex.: 18')] }
 		]
 	},
 	{
@@ -81,11 +86,13 @@ export const NICHES: readonly PlannerNiche[] = [
 		label: 'Estética & Beleza',
 		description: 'Salões, barbearias, clínicas',
 		templates: [
-			{ id: 'mechas', label: 'Mechas/Coloração', hint: 'Tinta, descolorante e ox por cliente', fields: [field('volume', 'Quantas clientes estimadas para este serviço?', 'clientes', 'Ex.: 50')] },
-			{ id: 'manicure', label: 'Manicure/Unhas', hint: 'Esmaltes e descartáveis por atendimento', fields: [field('volume', 'Quantos atendimentos no mês?', 'atendimentos', 'Ex.: 80')] },
-			{ id: 'barbearia', label: 'Barbearia/Cortes', hint: 'Lâminas, toalhas e finalização', fields: [field('volume', 'Quantos cortes estimados no mês?', 'cortes', 'Ex.: 120')] },
-			{ id: 'limpezaPele', label: 'Limpeza de Pele/Estética', hint: 'Máscaras, luvas e descartáveis por sessão', fields: [field('volume', 'Quantas sessões agendadas?', 'sessões', 'Ex.: 30')] },
-			{ id: 'estoqueBaseBeleza', label: 'Estoque Mensal Base', hint: 'Reposição geral do salão para o mês', fields: [field('volume', 'Quantas clientes você atende por mês?', 'clientes', 'Ex.: 120')] }
+			{ id: 'mechas', label: 'Mechas, Luzes e Coloração', hint: 'Tinta, descolorante e ox por cliente', fields: [field('volume', 'Quantas clientes estimadas para este serviço?', 'clientes', 'Ex.: 50')] },
+			{ id: 'cortes', label: 'Cortes, Escovas e Cronograma Capilar', hint: 'Shampoos, máscaras e finalizadores', fields: [field('volume', 'Quantos atendimentos no mês?', 'atendimentos', 'Ex.: 100')] },
+			{ id: 'manicure', label: 'Manicure, Pedicure e Alongamento (Gel/Fibra)', hint: 'Esmaltes, géis, tips e descartáveis', fields: [field('volume', 'Quantos atendimentos no mês?', 'atendimentos', 'Ex.: 80')] },
+			{ id: 'barbearia', label: 'Barbearia, Degradê e Barboterapia', hint: 'Lâminas, toalhas quentes e finalização', fields: [field('volume', 'Quantos cortes estimados no mês?', 'cortes', 'Ex.: 120')] },
+			{ id: 'cilios', label: 'Extensão de Cílios e Sobrancelhas', hint: 'Fios, colas, henna e micropigmentação', fields: [field('volume', 'Quantos atendimentos no mês?', 'atendimentos', 'Ex.: 40')] },
+			{ id: 'harmonizacao', label: 'Harmonização Facial e Botox', hint: 'Seringas, toxinas e agulhas', fields: [field('volume', 'Quantos procedimentos no mês?', 'procedimentos', 'Ex.: 20')] },
+			{ id: 'podologia', label: 'Podologia e Tratamentos', hint: 'Lâminas, cremes e esterilização', fields: [field('volume', 'Quantos atendimentos no mês?', 'atendimentos', 'Ex.: 60')] }
 		]
 	},
 	{
@@ -94,11 +101,14 @@ export const NICHES: readonly PlannerNiche[] = [
 		label: 'Alimentação & Gastronomia',
 		description: 'Confeitarias, marmitarias, lanchonetes',
 		templates: [
-			{ id: 'bolos', label: 'Produção de Bolos', hint: 'Farinha, ovos e açúcar por unidade', fields: [field('volume', 'Quantos bolos você vai produzir?', 'bolos', 'Ex.: 10')] },
-			{ id: 'salgados', label: 'Salgados para Festa', hint: 'Cálculo por número de convidados', fields: [field('volume', 'Quantos convidados terá a festa?', 'convidados', 'Ex.: 100')] },
-			{ id: 'marmitas', label: 'Marmitas da Semana', hint: 'Proteína, arroz e embalagens', fields: [field('volume', 'Quantas marmitas por semana?', 'marmitas', 'Ex.: 60')] },
-			{ id: 'paes', label: 'Padaria/Pães', hint: 'Farinha, fermento e melhorador', fields: [field('volume', 'Quantos quilos de pão por dia?', 'kg', 'Ex.: 40')] },
-			{ id: 'lanches', label: 'Lanches/Hamburgueria', hint: 'Blend, pão e queijo por lanche', fields: [field('volume', 'Quantos lanches estimados no mês?', 'lanches', 'Ex.: 300')] }
+			{ id: 'pizzaria', label: 'Pizzaria', hint: 'Farinha, queijos, fermento, lenha e caixas', fields: [field('volume', 'Quantas pizzas por mês?', 'pizzas', 'Ex.: 800')] },
+			{ id: 'hamburgueria', label: 'Hamburgueria Artesanal', hint: 'Blends de carne, pães, queijos e embalagens', fields: [field('volume', 'Quantos lanches por mês?', 'lanches', 'Ex.: 600')] },
+			{ id: 'acai', label: 'Delivery de Açaí', hint: 'Caixas de açaí, leite em pó, frutas e potes', fields: [field('volume', 'Quantos potes/copos por mês?', 'potes', 'Ex.: 900')] },
+			{ id: 'sushi', label: 'Sushi e Culinária Oriental', hint: 'Salmão, arroz, alga, shoyu e embalagens', fields: [field('volume', 'Quantos combos/pedidos por mês?', 'pedidos', 'Ex.: 400')] },
+			{ id: 'bolos', label: 'Confeitaria e Bolos Decorados', hint: 'Farinha, açúcar, pastas e corantes', fields: [field('volume', 'Quantos bolos por mês?', 'bolos', 'Ex.: 25')] },
+			{ id: 'salgados', label: 'Salgados e Doces para Festa', hint: 'Massas, óleo, recheios e forminhas', fields: [field('volume', 'Quantos convidados terá a festa?', 'convidados', 'Ex.: 100')] },
+			{ id: 'marmitas', label: 'Restaurante/Marmitaria', hint: 'Proteínas, guarnições e descartáveis térmicos', fields: [field('volume', 'Quantas refeições por semana?', 'refeições', 'Ex.: 250')] },
+			{ id: 'paes', label: 'Padaria e Panificação', hint: 'Trigo, fermento, frios e sacos de papel', fields: [field('volume', 'Quantos quilos de pão por dia?', 'kg', 'Ex.: 40')] }
 		]
 	},
 	{
@@ -116,14 +126,15 @@ export const NICHES: readonly PlannerNiche[] = [
 	{
 		id: 'oficina',
 		emoji: '🔧',
-		label: 'Oficinas & Serviços Mecânicos',
-		description: 'Mecânica, funilaria, detalhamento',
+		label: 'Oficinas & Automotivo',
+		description: 'Mecânica, funilaria, estética',
 		templates: [
-			{ id: 'revisao', label: 'Revisão Geral (Óleos/Filtros)', hint: 'Óleo, filtros e fluidos por veículo', fields: [field('volume', 'Quantos carros você atende por mês?', 'carros', 'Ex.: 40')] },
-			{ id: 'funilaria', label: 'Funilaria e Pintura', hint: 'Massa, lixa e tinta por painel', fields: [field('volume', 'Quantos painéis/peças para pintar?', 'painéis', 'Ex.: 12')] },
-			{ id: 'freios', label: 'Troca de Freios/Suspensão', hint: 'Pastilhas, discos e amortecedores', fields: [field('volume', 'Quantos veículos para este serviço?', 'veículos', 'Ex.: 15')] },
-			{ id: 'detalhamento', label: 'Detalhamento/Estética', hint: 'Shampoo, cera e microfibra por carro', fields: [field('volume', 'Quantos carros no mês?', 'carros', 'Ex.: 25')] },
-			{ id: 'estoqueOficina', label: 'Estoque Mensal Base', hint: 'Consumíveis gerais da oficina', fields: [field('volume', 'Quantos atendimentos por mês?', 'atendimentos', 'Ex.: 60')] }
+			{ id: 'revisao', label: 'Revisão Geral de Carros', hint: 'Óleo, filtros e fluidos por veículo', fields: [field('volume', 'Quantos carros você atende por mês?', 'carros', 'Ex.: 40')] },
+			{ id: 'motos', label: 'Manutenção de Motos', hint: 'Relação, óleo e freios', fields: [field('volume', 'Quantas motos por mês?', 'motos', 'Ex.: 30')] },
+			{ id: 'funilaria', label: 'Funilaria, Pintura e Martelinho', hint: 'Massa, lixa e tinta por painel', fields: [field('volume', 'Quantos painéis/peças para pintar?', 'painéis', 'Ex.: 12')] },
+			{ id: 'arCondicionado', label: 'Ar Condicionado Automotivo', hint: 'Gás refrigerante e filtros de cabine', fields: [field('volume', 'Quantos veículos por mês?', 'veículos', 'Ex.: 20')] },
+			{ id: 'detalhamento', label: 'Estética Automotiva e Polimento', hint: 'Shampoo, cera, boinas e microfibra', fields: [field('volume', 'Quantos carros no mês?', 'carros', 'Ex.: 25')] },
+			{ id: 'borracharia', label: 'Borracharia e Alinhamento', hint: 'Remendos, bicos, pesos e contrapesos', fields: [field('volume', 'Quantos atendimentos por mês?', 'atendimentos', 'Ex.: 100')] }
 		]
 	},
 	{
@@ -260,6 +271,9 @@ function Planner(): React.JSX.Element {
 	const [customOpen, setCustomOpen] = useState(false);
 	const [customNiche, setCustomNiche] = useState('');
 	const [template, setTemplate] = useState<PlannerTemplate | null>(null);
+	const [templateQuery, setTemplateQuery] = useState('');
+	const [customServiceOpen, setCustomServiceOpen] = useState(false);
+	const [customService, setCustomService] = useState('');
 	const [volume, setVolume] = useState('');
 	const [location, setLocation] = useState('');
 	const [segment, setSegment] = useState<ServiceSegment | null>(null);
@@ -278,6 +292,14 @@ function Planner(): React.JSX.Element {
 	const nicheLabel = niche ? niche.label : customNiche.trim();
 	const nicheEmoji = niche ? niche.emoji : '🔍';
 
+	// Busca em tempo real do Passo 2 (sem acento e sem caixa).
+	const fold = (value: string): string => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+	const query = fold(templateQuery.trim());
+	const visibleTemplates = query
+		? activeTemplates.filter(option => fold(`${option.label} ${option.hint}`).includes(query))
+		: activeTemplates;
+	const customServiceOk = customService.trim().length >= 3;
+
 	const parsedVolume = Number(volume.replace(',', '.'));
 	const volumeOk = Number.isFinite(parsedVolume) && parsedVolume > 0;
 	const locationOk = location.trim().length >= 2;
@@ -287,6 +309,9 @@ function Planner(): React.JSX.Element {
 		setNiche(option);
 		setCustomOpen(false);
 		setTemplate(null);
+		setTemplateQuery('');
+		setCustomServiceOpen(false);
+		setCustomService('');
 		setVolume('');
 		setPhase('template');
 	};
@@ -295,6 +320,9 @@ function Planner(): React.JSX.Element {
 		if (!customOk) return;
 		setNiche(null);
 		setTemplate(null);
+		setTemplateQuery('');
+		setCustomServiceOpen(false);
+		setCustomService('');
 		setVolume('');
 		setPhase('template');
 	};
@@ -303,6 +331,18 @@ function Planner(): React.JSX.Element {
 		setTemplate(option);
 		setVolume('');
 		setPhase('inputs');
+	};
+
+	/** Card de fuga do Passo 2: serviço digitado manualmente vira um template. */
+	const pickCustomService = (): void => {
+		if (!customServiceOk) return;
+		const label = customService.trim();
+		pickTemplate({
+			id: 'servicoManual',
+			label,
+			hint: 'Serviço descrito manualmente — a IA monta a lista',
+			fields: [field('volume', `Qual o volume estimado de "${label}"? (clientes/unidades/m²)`, 'no período', 'Ex.: 50')]
+		});
 	};
 
 	/** Único gatilho do fetch real; limpa o estado anterior antes de buscar. */
@@ -345,6 +385,9 @@ function Planner(): React.JSX.Element {
 		setCustomOpen(false);
 		setCustomNiche('');
 		setTemplate(null);
+		setTemplateQuery('');
+		setCustomServiceOpen(false);
+		setCustomService('');
 		setVolume('');
 		setLocation('');
 		setSegment(null);
@@ -457,25 +500,92 @@ function Planner(): React.JSX.Element {
 						<h2 className="mt-3 text-xl font-bold tracking-tight text-gray-900">O que você quer calcular em {nicheLabel}?</h2>
 						<p className="mt-1.5 text-sm text-gray-500">Escolha uma opção pronta — a IA analisa mercado, marcas e desperdício.</p>
 
-						<div className="mt-6 grid gap-3">
-							{activeTemplates.map(option => (
+						{/* Busca em tempo real: o catálogo é grande, ninguém rola lista à toa */}
+						<div className="mt-5 flex items-center rounded-xl border border-gray-200 bg-white shadow-sm transition-all focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
+							<Search className="ml-3.5 h-4 w-4 shrink-0 text-gray-300" aria-hidden />
+							<input
+								value={templateQuery}
+								onChange={event => setTemplateQuery(event.target.value)}
+								placeholder="Pesquisar serviço… (ex.: pizza, drywall, botox)"
+								data-testid="template-search"
+								className="w-full rounded-xl bg-transparent px-3 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-300"
+							/>
+						</div>
+
+						<div className="mt-4 grid gap-3 sm:grid-cols-2">
+							{visibleTemplates.map(option => (
 								<button
 									key={option.id}
 									type="button"
 									onClick={() => pickTemplate(option)}
 									data-testid={`template-${option.id}`}
-									className="group flex items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm transition-all hover:border-indigo-300 hover:shadow-md hover:shadow-indigo-500/10"
+									className="group flex items-start justify-between gap-3 rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm transition-all hover:border-indigo-300 hover:shadow-md hover:shadow-indigo-500/10"
 								>
 									<span>
-										<span className="block text-sm font-semibold text-gray-900 group-hover:text-indigo-600">{option.label}</span>
-										<span className="mt-0.5 block text-xs text-gray-400">{option.hint}</span>
+										<span className="block text-sm font-semibold leading-snug text-gray-900 group-hover:text-indigo-600">{option.label}</span>
+										<span className="mt-0.5 block text-xs leading-snug text-gray-400">{option.hint}</span>
 									</span>
 									<span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-50 text-gray-300 transition-colors group-hover:bg-indigo-50 group-hover:text-indigo-500">
 										<Sparkles className="h-4 w-4" aria-hidden />
 									</span>
 								</button>
 							))}
+
+							{/* Opção de fuga: SEMPRE o último card de todas as listas */}
+							<button
+								type="button"
+								onClick={() => setCustomServiceOpen(open => !open)}
+								data-testid="template-outro"
+								aria-expanded={customServiceOpen}
+								className={`group flex items-start gap-3 rounded-2xl border-2 border-dashed p-4 text-left transition-all ${
+									customServiceOpen ? 'border-indigo-400 bg-indigo-50/50' : 'border-gray-200 bg-gray-50/50 hover:border-indigo-300 hover:bg-indigo-50/30'
+								}`}
+							>
+								<span className="text-xl leading-none" aria-hidden>➕</span>
+								<span>
+									<span className="block text-sm font-semibold text-gray-900 group-hover:text-indigo-600">Outro (Digitar manualmente)</span>
+									<span className="mt-0.5 block text-xs text-gray-400">Seu serviço não está na lista? A IA entende qualquer descrição</span>
+								</span>
+							</button>
 						</div>
+
+						{visibleTemplates.length === 0 && !customServiceOpen && (
+							<p className="mt-3 text-center text-sm text-gray-400" data-testid="template-empty">
+								Nada encontrado para “{templateQuery.trim()}” — use o card “➕ Outro” para digitar manualmente.
+							</p>
+						)}
+
+						{customServiceOpen && (
+							<motion.div
+								initial={{ opacity: 0, height: 0 }}
+								animate={{ opacity: 1, height: 'auto' }}
+								transition={{ duration: 0.25 }}
+								className="mt-3 overflow-hidden"
+							>
+								<label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="custom-service">
+									Descreva o serviço que você quer calcular
+								</label>
+								<div className="flex gap-2">
+									<input
+										id="custom-service"
+										value={customService}
+										onChange={event => setCustomService(event.target.value)}
+										placeholder="Ex.: Crepe suíço para eventos, instalação de piscina…"
+										data-testid="custom-service-input"
+										className="w-full flex-1 rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-300 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+									/>
+									<button
+										type="button"
+										onClick={pickCustomService}
+										disabled={!customServiceOk}
+										data-testid="custom-service-continue"
+										className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+									>
+										Continuar <ArrowRight className="h-4 w-4" aria-hidden />
+									</button>
+								</div>
+							</motion.div>
+						)}
 
 						<button type="button" onClick={restart} className="mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600">
 							<ArrowLeft className="h-4 w-4" aria-hidden /> Trocar de nicho

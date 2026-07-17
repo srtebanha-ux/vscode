@@ -606,7 +606,7 @@ try {
 	assert.match(planner, /Estética &(amp;)? Beleza/);
 	assert.match(planner, /Alimentação &(amp;)? Gastronomia/);
 	assert.match(planner, /Moda, Costura &(amp;)? Varejo/);
-	assert.match(planner, /Oficinas &(amp;)? Serviços Mecânicos/);
+	assert.match(planner, /Oficinas &(amp;)? Automotivo/);
 	assert.match(planner, /Mercado Pet/);
 	assert.match(planner, /Serviços Domésticos &(amp;)? Limpeza/);
 	assert.match(planner, /Tatuagem &(amp;)? Piercing/);
@@ -626,9 +626,26 @@ try {
 			assert.ok(templateOption.fields.length > 0, `template ${templateOption.id} precisa de campos`);
 		}
 	}
+	// Mega expansão: gigantes do delivery/fast food + obra do alicerce ao acabamento
+	const alimentacao = NICHES.find(option => option.id === 'alimentacao');
+	assert.equal(alimentacao.templates.length, 8, 'alimentação cobre delivery e fast food');
+	for (const label of ['Pizzaria', 'Hamburgueria Artesanal', 'Delivery de Açaí', 'Sushi e Culinária Oriental', 'Padaria e Panificação']) {
+		assert.ok(alimentacao.templates.some(option => option.label === label), `alimentação precisa de ${label}`);
+	}
+	const obrasNiche = NICHES.find(option => option.id === 'obras');
+	assert.equal(obrasNiche.templates.length, 10, 'obras cobre do alicerce ao acabamento');
+	for (const pattern of [/Porcelanato/, /Drywall/, /Hidráulica/, /Energia Solar/, /Serralheria/]) {
+		assert.ok(obrasNiche.templates.some(option => pattern.test(option.label)), `obras precisa de ${pattern}`);
+	}
+	const belezaMega = NICHES.find(option => option.id === 'beleza');
+	assert.equal(belezaMega.templates.length, 7);
+	assert.ok(belezaMega.templates.some(option => /Harmonização Facial/.test(option.label)));
+	assert.ok(belezaMega.templates.some(option => /Podologia/.test(option.label)));
 	const oficina = NICHES.find(option => option.id === 'oficina');
+	assert.equal(oficina.templates.length, 6);
 	assert.ok(oficina.templates.some(option => /Revisão Geral/.test(option.label)));
-	assert.ok(oficina.templates.some(option => /Funilaria/.test(option.label)));
+	assert.ok(oficina.templates.some(option => /Manutenção de Motos/.test(option.label)));
+	assert.ok(oficina.templates.some(option => /Borracharia/.test(option.label)));
 	const pet = NICHES.find(option => option.id === 'pet');
 	assert.ok(pet.templates.some(option => /Banho e Tosa/.test(option.label)));
 	const tatuagem = NICHES.find(option => option.id === 'tatuagem');

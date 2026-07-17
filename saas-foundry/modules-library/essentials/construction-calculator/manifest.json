@@ -1,7 +1,9 @@
 {
   "id": "construction-calculator-v1",
-  "displayName": "Calculadora de Insumos",
-  "version": "1.0.0",
-  "permissions": ["ui:render"],
-  "entryPoint": "ConstructionCalculator.tsx"
+  "displayName": "Planejador Preditivo de Estoque",
+  "version": "2.0.0",
+  "permissions": [
+    "ui:render"
+  ],
+  "entryPoint": "SupplyPlanner.tsx"
 }

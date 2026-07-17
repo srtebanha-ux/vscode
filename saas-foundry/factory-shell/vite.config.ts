@@ -25,17 +25,23 @@ function oracleDevApi(): Plugin {
 					raw += chunk;
 				});
 				req.on('end', () => {
-					const reply = {
-						status(code: number): typeof reply {
+					interface DevApiReply {
+						status(code: number): DevApiReply;
+						json(data: unknown): void;
+					}
+					const reply: DevApiReply = {
+						status(code) {
 							res.statusCode = code;
 							return reply;
 						},
-						json(data: unknown): void {
+						json(data) {
 							res.setHeader('content-type', 'application/json');
 							res.end(JSON.stringify(data));
 						}
 					};
-					void oraclePricingHandler({ method: req.method, body: raw }, reply);
+					const request: { method?: string; body?: unknown } = { body: raw };
+					if (req.method !== undefined) request.method = req.method;
+					void oraclePricingHandler(request, reply);
 				});
 			});
 		}

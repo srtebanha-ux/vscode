@@ -17,7 +17,7 @@ const TaxScenarioSimulator = lazy(() =>
 );
 
 // Ferramentas PME (Arsenal Essencial) — PME e, por conveniência, o Admin.
-const ConstructionCalculator = lazy(() => import('../../../modules-library/essentials/construction-calculator/ConstructionCalculator.tsx'));
+const SupplyPlanner = lazy(() => import('../../../modules-library/essentials/construction-calculator/SupplyPlanner.tsx'));
 const SmartInvoiceHelper = lazy(() => import('../../../modules-library/essentials/smart-invoice/SmartInvoiceHelper.tsx'));
 
 const ADMIN_ONLY: readonly AppRole[] = [AppRole.ADMIN_CONTROLLER];
@@ -62,7 +62,7 @@ export const SECURE_ROUTES: readonly SecureRoute[] = [
 		allowedRoles: PME_OR_ADMIN,
 		element: (
 			<RoleGuard allowedRoles={PME_OR_ADMIN}>
-				<Lazy component={ConstructionCalculator} />
+				<Lazy component={SupplyPlanner} />
 			</RoleGuard>
 		)
 	},

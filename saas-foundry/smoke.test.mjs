@@ -250,7 +250,7 @@ const forbidden = [
 	'./modules-library/enterprise-controllership/ERPSyncBridge.tsx',
 	'./modules-library/enterprise-controllership/TaxScenarioSimulator.tsx',
 	'./modules-library/enterprise-controllership/FiscalDiscoveryHub.tsx',
-	'./modules-library/essentials/construction-calculator/ConstructionCalculator.tsx',
+	'./modules-library/essentials/construction-calculator/SupplyPlanner.tsx',
 	'./modules-library/essentials/quick-receipt/QuickReceiptMaker.tsx',
 	'./modules-library/essentials/margin-calculator/SmartPricingEngine.tsx',
 	'./modules-library/essentials/margin-calculator/AIPricingOracle.tsx',
@@ -583,14 +583,14 @@ try {
 
 // 18. Arsenal Essencial (Tier 1): scope-gate ui:render + render inicial dos utilitários
 {
-	const { default: ConstructionCalculator } = await import('./modules-library/essentials/construction-calculator/dist/ConstructionCalculator.js');
+	const { default: SupplyPlanner, simulateSupplyPlan } = await import('./modules-library/essentials/construction-calculator/dist/SupplyPlanner.js');
 	const { default: QuickReceiptMaker } = await import('./modules-library/essentials/quick-receipt/dist/QuickReceiptMaker.js');
 	const { default: AIPricingOracle } = await import('./modules-library/essentials/margin-calculator/dist/AIPricingOracle.js');
 
 	const withServices = (Component, grantedScopes) =>
 		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
 
-	for (const Component of [ConstructionCalculator, QuickReceiptMaker, AIPricingOracle]) {
+	for (const Component of [SupplyPlanner, QuickReceiptMaker, AIPricingOracle]) {
 		// Sem ui:render -> fecha o acesso (fail-closed, igual aos módulos enterprise)
 		assert.match(withServices(Component, []), /Acesso negado/);
 		// Fora do host -> lança (nunca renderiza sem os serviços do Core)
@@ -598,10 +598,28 @@ try {
 	}
 
 	// Autorizados: render inicial mostra os campos-resultado zerados
-	const construction = withServices(ConstructionCalculator, ['ui:render']);
-	assert.match(construction, /Volume de Concreto/);
-	assert.match(construction, /Custo Total Estimado/);
-	assert.match(construction, /Salvar Orçamento/);
+	// Planejador Preditivo de Estoque: formulário conversacional (fricção zero)
+	const planner = withServices(SupplyPlanner, ['ui:render']);
+	assert.match(planner, /Planejador Preditivo de Estoque/);
+	assert.match(planner, /Qual é o seu nicho\?/);
+	assert.match(planner, /O que você precisa planejar\?/);
+	assert.match(planner, /Gerar Lista de Compras/);
+
+	// Motor simulado (mock de design): nicho de obra -> materiais de construção,
+	// escalados pela metragem citada; demais nichos -> materiais de beleza.
+	const obra = simulateSupplyPlan('Construção', 'Vou construir uma casa de 75m² com 5 cômodos');
+	assert.equal(obra.engine, 'simulated');
+	assert.equal(obra.niche, 'Construção');
+	assert.ok(obra.items.some(item => /Tijolo baiano/.test(item.name)));
+	assert.ok(obra.items.some(item => /Cimento/.test(item.name)));
+	assert.ok(obra.items.some(item => /Areia/.test(item.name)));
+	assert.match(obra.items[0].quantity, /3\.150 unidades/, '75m² * 42 tijolos');
+	assert.ok(obra.items.every(item => item.quantity && item.note));
+
+	const beleza = simulateSupplyPlan('Beleza', 'Preciso comprar material para atender 50 clientes de mechas no mês');
+	assert.equal(beleza.niche, 'Beleza');
+	assert.ok(beleza.items.some(item => /Tinta/.test(item.name)));
+	assert.ok(beleza.items.some(item => /descolorante/i.test(item.name)));
 
 	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
 	assert.match(receipt, /Recibo de Prestação de Serviço/);

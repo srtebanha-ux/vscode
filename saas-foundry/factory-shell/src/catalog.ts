@@ -1,4 +1,4 @@
-import { BrainCircuit, Calculator, CircleDollarSign, FileText, Landmark, Megaphone, ReceiptText, TrendingUp, Workflow, type LucideIcon } from 'lucide-react';
+import { Boxes, BrainCircuit, CircleDollarSign, FileText, Landmark, Megaphone, ReceiptText, TrendingUp, Workflow, type LucideIcon } from 'lucide-react';
 
 /** Universo de público do módulo — segmenta a jornada PME vs. Enterprise. */
 export type UserTier = 'pme' | 'enterprise';
@@ -131,9 +131,9 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 	{
 		id: 'construction-calculator-v1',
 		tier: 'pme',
-		name: 'Calculadora de Insumos',
-		description: 'Volume de concreto e custo da obra calculados enquanto você digita.',
-		icon: Calculator,
+		name: 'Planejador Preditivo de Estoque',
+		description: 'Descreva o projeto como numa mensagem e receba a lista de compras exata, de obras a salões.',
+		icon: Boxes,
 		price: 39,
 		tag: '🔧 Essencial',
 		tagClasses: 'bg-sky-500/10 text-sky-300 ring-1 ring-inset ring-sky-500/30',
@@ -141,9 +141,9 @@ export const AVAILABLE_MODULES: readonly AvailableModule[] = [
 		iconColor: 'text-sky-400',
 		glowClass: 'hover:shadow-sky-500/40 hover:ring-sky-500/60',
 		benefits: [
-			'Orçamento de obra em 2 segundos, sem planilha',
-			'Volume e custo total em tempo real',
-			'Salve e reenvie o orçamento na hora'
+			'Lista de compras com quantidades exatas por IA',
+			'Serve para qualquer nicho: obra, beleza, confeitaria',
+			'Margem de perda já calculada em cada item'
 		]
 	},
 	{

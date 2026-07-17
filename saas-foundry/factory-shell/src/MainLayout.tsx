@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { BrainCircuit, Calculator, CircleDollarSign, FileText, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Puzzle, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
+import { Boxes, BrainCircuit, CircleDollarSign, FileText, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Puzzle, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
 
 export interface SessionInfo {
@@ -26,7 +26,7 @@ const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
 	'virtual-cfo-v1': CircleDollarSign,
 	'virtual-cmo-v1': Megaphone,
 	'enterprise-controllership-v1': Landmark,
-	'construction-calculator-v1': Calculator,
+	'construction-calculator-v1': Boxes,
 	'quick-receipt-maker-v1': FileText,
 	'margin-calculator-v1': TrendingUp
 };

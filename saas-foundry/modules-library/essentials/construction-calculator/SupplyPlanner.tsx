@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { hasScopes, useCoreService, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, Boxes, ClipboardList, Info, Package, ShieldAlert, Sparkles, Wand2 } from 'lucide-react';
+import { ArrowLeft, Boxes, Check, ClipboardList, Info, Package, ShieldAlert, Sparkles, Wand2 } from 'lucide-react';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 const MODULE_ID = 'construction-calculator-v1';
@@ -17,125 +17,295 @@ export interface SupplyItem {
 /** Plano completo devolvido pelo motor (hoje simulado; amanhã, a API real). */
 export interface SupplyPlan {
 	readonly niche: string;
+	readonly template: string;
 	readonly items: readonly SupplyItem[];
 	/** 'simulated' deixa EXPLÍCITO na UI que é prévia de design, não dado real. */
 	readonly engine: 'simulated';
 }
 
-const NICHE_SUGGESTIONS: readonly string[] = ['Construção', 'Beleza', 'Confeitaria', 'Tatuagem'];
-
-const CONSTRUCTION_PATTERN = /obra|constru|casa|reforma|alvenaria|laje|parede|cômodo|comodo|muro|fundação|fundacao|m²|m2/i;
-
-/** Extrai a primeira metragem citada no texto (ex.: "75m²" -> 75). */
-function readArea(description: string): number | null {
-	const match = /(\d+(?:[.,]\d+)?)\s*m²?2?/i.exec(description);
-	if (!match?.[1]) return null;
-	const area = Number(match[1].replace(',', '.'));
-	return Number.isFinite(area) && area > 0 ? area : null;
+/** Campo numérico cirúrgico exibido no Passo 3 — texto claro e empático. */
+export interface TemplateField {
+	readonly id: string;
+	readonly label: string;
+	readonly suffix: string;
+	readonly placeholder: string;
 }
 
-const intl = new Intl.NumberFormat('pt-BR');
+export interface PlannerTemplate {
+	readonly id: string;
+	readonly label: string;
+	readonly hint: string;
+	readonly fields: readonly TemplateField[];
+}
 
-/**
- * MOCK TEMPORÁRIO — apenas para validar o visual antes de plugar a API real.
- * Determinístico e exportado para os testes. Quando a rota serverless existir,
- * esta função é substituída por um fetch (mesmo contrato SupplyPlan) e a UI
- * não muda uma linha.
- */
-export function simulateSupplyPlan(niche: string, description: string): SupplyPlan {
-	const context = `${niche} ${description}`;
-	if (CONSTRUCTION_PATTERN.test(context)) {
-		// Escala honesta pela metragem citada (75m² de referência quando omitida).
-		const area = readArea(description) ?? 75;
-		return {
-			niche: 'Construção',
-			engine: 'simulated',
-			items: [
-				{
-					name: 'Tijolo baiano (9x19x19)',
-					quantity: `${intl.format(Math.round(area * 42))} unidades`,
-					note: 'Considerando 10% de margem de perda por quebra'
-				},
-				{
-					name: 'Cimento CP-II 50kg',
-					quantity: `${intl.format(Math.max(10, Math.round(area * 0.7)))} sacos`,
-					note: 'Assentamento + reboco das alvenarias'
-				},
-				{
-					name: 'Areia média lavada',
-					quantity: `${intl.format(Math.max(2, Math.round(area * 0.08)))} m³`,
-					note: 'Traço 1:6 para argamassa de assentamento'
-				}
-			]
-		};
-	}
-	return {
-		niche: niche.trim() || 'Beleza',
-		engine: 'simulated',
-		items: [
+export interface PlannerNiche {
+	readonly id: string;
+	readonly emoji: string;
+	readonly label: string;
+	readonly description: string;
+	readonly templates: readonly PlannerTemplate[];
+}
+
+/** Catálogo guiado: nicho -> templates -> campos. Zero texto livre. */
+export const NICHES: readonly PlannerNiche[] = [
+	{
+		id: 'obras',
+		emoji: '🏗️',
+		label: 'Obras',
+		description: 'Construção e reforma',
+		templates: [
 			{
-				name: 'Tinta de coloração 60g',
-				quantity: '50 tubos',
-				note: '1 tubo por atendimento, sem reaproveitamento'
+				id: 'alvenaria',
+				label: 'Paredes/Alvenaria',
+				hint: 'Tijolos, cimento e areia para levantar paredes',
+				fields: [{ id: 'areaParede', label: 'Qual a metragem de parede? (m²)', suffix: 'm²', placeholder: 'Ex.: 60' }]
 			},
 			{
-				name: 'Pó descolorante 500g',
-				quantity: '5 potes',
-				note: 'Rateio de ~10 aplicações por pote'
+				id: 'pintura',
+				label: 'Pintura',
+				hint: 'Tinta, massa e proteção para pintar',
+				fields: [{ id: 'areaPintura', label: 'Qual a metragem da área? (m²)', suffix: 'm²', placeholder: 'Ex.: 50' }]
 			},
 			{
-				name: 'Ox 30 volumes 900ml',
-				quantity: '8 frascos',
-				note: 'Considerando 10% de margem de desperdício'
+				id: 'contrapiso',
+				label: 'Contrapiso',
+				hint: 'Cimento, areia e brita para o piso',
+				fields: [{ id: 'areaPiso', label: 'Qual a área do piso? (m²)', suffix: 'm²', placeholder: 'Ex.: 40' }]
 			}
 		]
+	},
+	{
+		id: 'beleza',
+		emoji: '💇‍♀️',
+		label: 'Beleza',
+		description: 'Salão e estética',
+		templates: [
+			{
+				id: 'mechas',
+				label: 'Mechas/Coloração',
+				hint: 'Tinta, descolorante e ox por cliente',
+				fields: [{ id: 'clientes', label: 'Quantas clientes estimadas para este serviço?', suffix: 'clientes', placeholder: 'Ex.: 50' }]
+			},
+			{
+				id: 'manicure',
+				label: 'Manicure/Unhas',
+				hint: 'Esmaltes e descartáveis por atendimento',
+				fields: [{ id: 'atendimentos', label: 'Quantos atendimentos no mês?', suffix: 'atendimentos', placeholder: 'Ex.: 80' }]
+			},
+			{
+				id: 'estoqueBase',
+				label: 'Estoque Mensal Base',
+				hint: 'Reposição geral do salão para o mês',
+				fields: [{ id: 'clientesMes', label: 'Quantas clientes você atende por mês?', suffix: 'clientes', placeholder: 'Ex.: 120' }]
+			}
+		]
+	},
+	{
+		id: 'alimentacao',
+		emoji: '🎂',
+		label: 'Alimentação',
+		description: 'Confeitaria e salgados',
+		templates: [
+			{
+				id: 'bolos',
+				label: 'Produção de Bolos',
+				hint: 'Farinha, ovos e açúcar por unidade',
+				fields: [{ id: 'bolos', label: 'Quantos bolos você vai produzir?', suffix: 'bolos', placeholder: 'Ex.: 10' }]
+			},
+			{
+				id: 'salgados',
+				label: 'Salgados para Festa',
+				hint: 'Cálculo por número de convidados',
+				fields: [{ id: 'convidados', label: 'Quantos convidados terá a festa?', suffix: 'convidados', placeholder: 'Ex.: 100' }]
+			}
+		]
+	},
+	{
+		id: 'costura',
+		emoji: '👕',
+		label: 'Costura/Varejo',
+		description: 'Confecção e uniformes',
+		templates: [
+			{
+				id: 'pecas',
+				label: 'Produção de Peças',
+				hint: 'Tecido, linha e aviamentos por peça',
+				fields: [{ id: 'pecas', label: 'Quantas peças você vai produzir?', suffix: 'peças', placeholder: 'Ex.: 30' }]
+			},
+			{
+				id: 'uniformes',
+				label: 'Uniformes sob Encomenda',
+				hint: 'Kit completo por funcionário',
+				fields: [{ id: 'funcionarios', label: 'Para quantos funcionários?', suffix: 'pessoas', placeholder: 'Ex.: 15' }]
+			}
+		]
+	}
+];
+
+const intl = new Intl.NumberFormat('pt-BR');
+const per = (value: number, factor: number, min = 1): string => intl.format(Math.max(min, Math.round(value * factor)));
+
+/**
+ * MOCK RÁPIDO — só para o clique não quebrar enquanto validamos o design.
+ * Determinístico e exportado para os testes; quando a rota serverless nascer,
+ * vira um fetch com o MESMO contrato SupplyPlan e a UI não muda uma linha.
+ */
+export function simulateSupplyPlan(nicheId: string, templateId: string, values: Readonly<Record<string, number>>): SupplyPlan {
+	const niche = NICHES.find(option => option.id === nicheId);
+	const template = niche?.templates.find(option => option.id === templateId);
+	const base = { niche: niche?.label ?? 'Seu nicho', template: template?.label ?? 'Seu projeto', engine: 'simulated' as const };
+	const amount = Object.values(values)[0] ?? 0;
+
+	const catalogs: Record<string, readonly SupplyItem[]> = {
+		alvenaria: [
+			{ name: 'Tijolo baiano (9x19x19)', quantity: `${per(amount, 42)} unidades`, note: 'Considerando 10% de margem de perda por quebra' },
+			{ name: 'Cimento CP-II 50kg', quantity: `${per(amount, 0.7, 2)} sacos`, note: 'Argamassa de assentamento, traço 1:6' },
+			{ name: 'Areia média lavada', quantity: `${per(amount, 0.08, 1)} m³`, note: 'Inclui folga para o reboco inicial' }
+		],
+		pintura: [
+			{ name: 'Tinta acrílica 18L', quantity: `${per(amount, 0.02, 1)} latas`, note: 'Rendimento de ~250m² por lata em 2 demãos' },
+			{ name: 'Massa corrida 25kg', quantity: `${per(amount, 0.04, 1)} sacos`, note: 'Correção de imperfeições antes da pintura' },
+			{ name: 'Kit rolo + fita + lona', quantity: `${per(amount, 0.02, 1)} kits`, note: 'Proteção de piso e acabamento limpo' }
+		],
+		contrapiso: [
+			{ name: 'Cimento CP-II 50kg', quantity: `${per(amount, 0.9, 3)} sacos`, note: 'Contrapiso de 4cm, traço 1:4' },
+			{ name: 'Areia média', quantity: `${per(amount, 0.05, 1)} m³`, note: 'Considerando 10% de margem de perda' },
+			{ name: 'Brita 0', quantity: `${per(amount, 0.03, 1)} m³`, note: 'Para regularização da base' }
+		],
+		mechas: [
+			{ name: 'Tinta de coloração 60g', quantity: `${per(amount, 1)} tubos`, note: '1 tubo por cliente, sem reaproveitamento' },
+			{ name: 'Pó descolorante 500g', quantity: `${per(amount, 0.1, 1)} potes`, note: 'Rateio de ~10 aplicações por pote' },
+			{ name: 'Ox 30 volumes 900ml', quantity: `${per(amount, 0.16, 1)} frascos`, note: 'Considerando 10% de margem de desperdício' }
+		],
+		manicure: [
+			{ name: 'Esmalte (cores variadas)', quantity: `${per(amount, 0.12, 3)} frascos`, note: '~8 atendimentos por frasco' },
+			{ name: 'Kit descartável (lixa + palito)', quantity: `${per(amount, 1)} kits`, note: '1 kit novo por cliente, por biossegurança' },
+			{ name: 'Algodão 500g', quantity: `${per(amount, 0.02, 1)} pacotes`, note: 'Remoção e acabamento' }
+		],
+		estoqueBase: [
+			{ name: 'Shampoo profissional 5L', quantity: `${per(amount, 0.03, 1)} galões`, note: '~35 lavagens por galão' },
+			{ name: 'Condicionador profissional 5L', quantity: `${per(amount, 0.025, 1)} galões`, note: 'Acompanha o ritmo do shampoo' },
+			{ name: 'Toalhas descartáveis', quantity: `${per(amount, 1.1)} unidades`, note: 'Considerando 10% de margem de reposição' }
+		],
+		bolos: [
+			{ name: 'Farinha de trigo 5kg', quantity: `${per(amount, 0.5, 1)} pacotes`, note: '~500g por bolo + margem de erro' },
+			{ name: 'Ovos', quantity: `${per(amount, 6)} unidades`, note: '6 ovos por receita de massa' },
+			{ name: 'Açúcar refinado 5kg', quantity: `${per(amount, 0.4, 1)} pacotes`, note: 'Massa + calda + cobertura' }
+		],
+		salgados: [
+			{ name: 'Salgados variados', quantity: `${per(amount, 10)} unidades`, note: 'Média de 10 salgados por convidado' },
+			{ name: 'Farinha de trigo 5kg', quantity: `${per(amount, 0.08, 1)} pacotes`, note: 'Massa de coxinha e risole' },
+			{ name: 'Óleo para fritura 900ml', quantity: `${per(amount, 0.06, 1)} frascos`, note: 'Troca a cada ~150 unidades fritas' }
+		],
+		pecas: [
+			{ name: 'Tecido (largura 1,50m)', quantity: `${per(amount, 1.4, 2)} metros`, note: '~1,4m por peça, com 10% de margem de corte' },
+			{ name: 'Linha de costura 2000j', quantity: `${per(amount, 0.1, 1)} cones`, note: '~10 peças por cone' },
+			{ name: 'Aviamentos (botões/zíper)', quantity: `${per(amount, 1)} kits`, note: '1 kit por peça produzida' }
+		],
+		uniformes: [
+			{ name: 'Camisetas para personalizar', quantity: `${per(amount, 2)} unidades`, note: '2 unidades por funcionário (troca)' },
+			{ name: 'Tecido brim (calça/avental)', quantity: `${per(amount, 1.6, 2)} metros`, note: '~1,6m por funcionário' },
+			{ name: 'Bordado/serigrafia', quantity: `${per(amount, 2)} aplicações`, note: 'Logo em cada peça superior' }
+		]
 	};
+
+	return { ...base, items: catalogs[templateId] ?? [] };
 }
 
-type Phase = 'form' | 'loading' | 'result';
+type Phase = 'niche' | 'template' | 'inputs' | 'loading' | 'result';
+
+const STEP_LABELS: readonly string[] = ['Nicho', 'O que calcular', 'Números'];
+
+function stepIndexOf(phase: Phase): number {
+	if (phase === 'niche') return 0;
+	if (phase === 'template') return 1;
+	return 2;
+}
+
+/** Barra de progresso do wizard — o usuário sempre sabe onde está. */
+function WizardProgress({ phase }: { readonly phase: Phase }): React.JSX.Element {
+	const current = stepIndexOf(phase);
+	return (
+		<ol className="mb-6 flex items-center justify-center gap-2" data-testid="wizard-progress">
+			{STEP_LABELS.map((label, index) => (
+				<li key={label} className="flex items-center gap-2">
+					<span
+						className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-colors ${
+							index < current ? 'bg-indigo-500 text-white' : index === current ? 'bg-indigo-100 text-indigo-600 ring-2 ring-indigo-400' : 'bg-gray-100 text-gray-400'
+						}`}
+					>
+						{index < current ? <Check className="h-3.5 w-3.5" aria-hidden /> : index + 1}
+					</span>
+					<span className={`text-xs font-medium ${index === current ? 'text-gray-900' : 'text-gray-400'}`}>{label}</span>
+					{index < STEP_LABELS.length - 1 && <span className="h-px w-6 bg-gray-200" aria-hidden />}
+				</li>
+			))}
+		</ol>
+	);
+}
 
 function Planner(): React.JSX.Element {
 	const track = useTrackEvent();
-	const [phase, setPhase] = useState<Phase>('form');
-	const [niche, setNiche] = useState('');
-	const [description, setDescription] = useState('');
-	const [touched, setTouched] = useState(false);
-	// Sem dados até a IA responder: null = estado "aguardando" (zero mock residual).
+	const [phase, setPhase] = useState<Phase>('niche');
+	const [niche, setNiche] = useState<PlannerNiche | null>(null);
+	const [template, setTemplate] = useState<PlannerTemplate | null>(null);
+	const [values, setValues] = useState<Record<string, string>>({});
+	// Sem dados até o motor responder: null = aguardando (zero mock residual).
 	const [plan, setPlan] = useState<SupplyPlan | null>(null);
 	const timer = useRef<number | null>(null);
-
-	const nicheOk = niche.trim().length >= 3;
-	const descriptionOk = description.trim().length >= 10;
 
 	useEffect(() => () => {
 		if (timer.current !== null) window.clearTimeout(timer.current);
 	}, []);
 
+	const numericValues: Record<string, number> = {};
+	for (const field of template?.fields ?? []) {
+		const parsed = Number((values[field.id] ?? '').replace(',', '.'));
+		numericValues[field.id] = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+	}
+	const inputsOk = (template?.fields ?? []).length > 0 && (template?.fields ?? []).every(field => (numericValues[field.id] ?? 0) > 0);
+
+	const pickNiche = (option: PlannerNiche): void => {
+		setNiche(option);
+		setTemplate(null);
+		setValues({});
+		setPhase('template');
+	};
+
+	const pickTemplate = (option: PlannerTemplate): void => {
+		setTemplate(option);
+		setValues({});
+		setPhase('inputs');
+	};
+
 	const generate = (): void => {
-		setTouched(true);
-		if (!nicheOk || !descriptionOk) return;
+		if (!niche || !template || !inputsOk) return;
 		setPlan(null);
 		setPhase('loading');
-		// Simulação com setTimeout — validação de design; a API real entra aqui.
+		// Mock com setTimeout — validação de design; a API real entra aqui depois.
 		timer.current = window.setTimeout(() => {
-			const result = simulateSupplyPlan(niche, description);
-			track('Lista de Compras Gerada', { moduleId: MODULE_ID, niche: result.niche, itens: result.items.length });
+			const result = simulateSupplyPlan(niche.id, template.id, numericValues);
+			track('Lista de Compras Gerada', { moduleId: MODULE_ID, niche: niche.id, template: template.id });
 			setPlan(result);
 			setPhase('result');
 		}, 1800);
 	};
 
 	const restart = (): void => {
-		setPhase('form');
+		setPhase('niche');
+		setNiche(null);
+		setTemplate(null);
+		setValues({});
 		setPlan(null);
 	};
 
 	return (
 		<div className="mx-auto max-w-3xl">
+			{phase !== 'loading' && phase !== 'result' && <WizardProgress phase={phase} />}
 			<AnimatePresence mode="wait">
-				{phase === 'form' && (
+				{phase === 'niche' && (
 					<motion.section
-						key="form"
+						key="niche"
 						initial={{ opacity: 0, y: 12 }}
 						animate={{ opacity: 1, y: 0 }}
 						exit={{ opacity: 0, y: -12 }}
@@ -146,61 +316,114 @@ function Planner(): React.JSX.Element {
 							<Boxes className="h-6 w-6" aria-hidden />
 						</span>
 						<h1 className="mt-5 text-2xl font-bold tracking-tight text-gray-900">Planejador Preditivo de Estoque</h1>
-						<p className="mt-1.5 text-sm text-gray-500">
-							Conte o que você vai fazer, como numa mensagem de WhatsApp. A IA monta a lista de compras com as quantidades certas.
-						</p>
+						<p className="mt-1.5 text-sm text-gray-500">Em qual área você trabalha? Toque no seu nicho — sem digitar nada.</p>
 
-						<div className="mt-6">
-							<label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="planner-niche">Qual é o seu nicho?</label>
-							<input
-								id="planner-niche"
-								value={niche}
-								onChange={event => setNiche(event.target.value)}
-								placeholder="Ex.: Construção, Beleza, Confeitaria, Tatuagem…"
-								aria-invalid={touched && !nicheOk}
-								className={`w-full rounded-xl border bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-300 ${
-									touched && !nicheOk ? 'border-rose-300 ring-2 ring-rose-100' : 'border-gray-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'
-								}`}
-							/>
-							<div className="mt-2 flex flex-wrap gap-1.5">
-								{NICHE_SUGGESTIONS.map(suggestion => (
-									<button
-										key={suggestion}
-										type="button"
-										onClick={() => setNiche(suggestion)}
-										className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-											niche === suggestion ? 'bg-indigo-500 text-white' : 'bg-gray-100 text-gray-500 hover:bg-indigo-50 hover:text-indigo-600'
-										}`}
-									>
-										{suggestion}
-									</button>
-								))}
-							</div>
-							{touched && !nicheOk && <p className="mt-1 text-xs text-rose-500">Diga o seu nicho (ou toque numa sugestão acima).</p>}
+						<div className="mt-6 grid grid-cols-2 gap-3">
+							{NICHES.map(option => (
+								<button
+									key={option.id}
+									type="button"
+									onClick={() => pickNiche(option)}
+									data-testid={`niche-${option.id}`}
+									className="group flex flex-col items-start gap-2 rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md hover:shadow-indigo-500/10"
+								>
+									<span className="text-3xl" aria-hidden>{option.emoji}</span>
+									<span className="text-sm font-semibold text-gray-900 group-hover:text-indigo-600">{option.label}</span>
+									<span className="text-xs text-gray-400">{option.description}</span>
+								</button>
+							))}
+						</div>
+					</motion.section>
+				)}
+
+				{phase === 'template' && niche && (
+					<motion.section
+						key="template"
+						initial={{ opacity: 0, y: 12 }}
+						animate={{ opacity: 1, y: 0 }}
+						exit={{ opacity: 0, y: -12 }}
+						transition={{ duration: 0.3, ease: 'easeOut' }}
+						className="overflow-hidden rounded-2xl bg-white p-8 shadow-sm"
+					>
+						<span className="text-3xl" aria-hidden>{niche.emoji}</span>
+						<h2 className="mt-3 text-xl font-bold tracking-tight text-gray-900">O que você quer calcular em {niche.label}?</h2>
+						<p className="mt-1.5 text-sm text-gray-500">Escolha uma opção pronta — a gente já sabe os materiais de cada uma.</p>
+
+						<div className="mt-6 grid gap-3">
+							{niche.templates.map(option => (
+								<button
+									key={option.id}
+									type="button"
+									onClick={() => pickTemplate(option)}
+									data-testid={`template-${option.id}`}
+									className="group flex items-center justify-between gap-3 rounded-2xl border border-gray-200 bg-white p-4 text-left shadow-sm transition-all hover:border-indigo-300 hover:shadow-md hover:shadow-indigo-500/10"
+								>
+									<span>
+										<span className="block text-sm font-semibold text-gray-900 group-hover:text-indigo-600">{option.label}</span>
+										<span className="mt-0.5 block text-xs text-gray-400">{option.hint}</span>
+									</span>
+									<span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-50 text-gray-300 transition-colors group-hover:bg-indigo-50 group-hover:text-indigo-500">
+										<Sparkles className="h-4 w-4" aria-hidden />
+									</span>
+								</button>
+							))}
 						</div>
 
-						<div className="mt-4">
-							<label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="planner-desc">O que você precisa planejar?</label>
-							<textarea
-								id="planner-desc"
-								value={description}
-								onChange={event => setDescription(event.target.value)}
-								rows={4}
-								placeholder={'Ex.: "Vou construir uma casa de 75m² com 5 cômodos" ou "Preciso comprar material para atender 50 clientes de mechas no mês"'}
-								aria-invalid={touched && !descriptionOk}
-								className={`w-full resize-none rounded-xl border bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-300 ${
-									touched && !descriptionOk ? 'border-rose-300 ring-2 ring-rose-100' : 'border-gray-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'
-								}`}
-							/>
-							{touched && !descriptionOk && <p className="mt-1 text-xs text-rose-500">Descreva com um pouco mais de detalhe (mín. 10 caracteres).</p>}
+						<button type="button" onClick={restart} className="mt-6 inline-flex items-center gap-1.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600">
+							<ArrowLeft className="h-4 w-4" aria-hidden /> Trocar de nicho
+						</button>
+					</motion.section>
+				)}
+
+				{phase === 'inputs' && niche && template && (
+					<motion.section
+						key="inputs"
+						initial={{ opacity: 0, y: 12 }}
+						animate={{ opacity: 1, y: 0 }}
+						exit={{ opacity: 0, y: -12 }}
+						transition={{ duration: 0.3, ease: 'easeOut' }}
+						className="overflow-hidden rounded-2xl bg-white p-8 shadow-sm"
+					>
+						<span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-600">
+							{niche.emoji} {niche.label} · {template.label}
+						</span>
+						<h2 className="mt-4 text-xl font-bold tracking-tight text-gray-900">Só falta o número</h2>
+						<p className="mt-1.5 text-sm text-gray-500">Preencha e a IA calcula quantidades com a margem de perda inclusa.</p>
+
+						<div className="mt-6 grid gap-4">
+							{template.fields.map(field => (
+								<label key={field.id} className="block">
+									<span className="mb-1.5 block text-sm font-medium text-gray-700">{field.label}</span>
+									<div className="flex items-center rounded-xl border border-gray-200 bg-white shadow-sm transition-all focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
+										<input
+											type="number"
+											inputMode="decimal"
+											min={0}
+											step="any"
+											value={values[field.id] ?? ''}
+											onChange={event => setValues(current => ({ ...current, [field.id]: event.target.value }))}
+											placeholder={field.placeholder}
+											data-testid={`field-${field.id}`}
+											className="w-full rounded-xl bg-transparent px-4 py-3 text-sm text-gray-900 outline-none placeholder:text-gray-300"
+										/>
+										<span className="whitespace-nowrap px-3.5 text-xs font-medium text-gray-400">{field.suffix}</span>
+									</div>
+								</label>
+							))}
 						</div>
 
 						<button
 							type="button"
 							onClick={generate}
-							className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.01]"
+							disabled={!inputsOk}
+							data-testid="generate-button"
+							className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
 						>
 							<Sparkles className="h-4 w-4" aria-hidden /> Gerar Lista de Compras
+						</button>
+
+						<button type="button" onClick={() => setPhase('template')} className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600">
+							<ArrowLeft className="h-4 w-4" aria-hidden /> Escolher outro cálculo
 						</button>
 					</motion.section>
 				)}
@@ -261,7 +484,9 @@ function Planner(): React.JSX.Element {
 									</span>
 								)}
 							</div>
-							<h2 className="mt-3 text-lg font-semibold tracking-tight text-gray-900">{plan.niche}</h2>
+							<h2 className="mt-3 text-lg font-semibold tracking-tight text-gray-900">
+								{plan.niche} · <span className="text-gray-500">{plan.template}</span>
+							</h2>
 						</div>
 
 						<ul className="grid gap-3 p-6">
@@ -296,10 +521,10 @@ function Planner(): React.JSX.Element {
 							</button>
 							<button
 								type="button"
-								onClick={generate}
+								onClick={() => setPhase('inputs')}
 								className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md"
 							>
-								<Wand2 className="h-4 w-4" aria-hidden /> Recalcular Lista
+								<Wand2 className="h-4 w-4" aria-hidden /> Ajustar os números
 							</button>
 						</div>
 					</motion.section>

@@ -1,10 +1,10 @@
 /**
  * /api/supply-planner — Planejador Preditivo de Estoque (Serverless / Vercel).
  *
- * Motor CONSULTIVO, não calculadora: aplica a Regra de Ouro (contexto
- * geográfico, tier de insumo por segmento/marca e margem preditiva de
- * desperdício do nicho) via Google Gemini e devolve JSON estrito com análise
- * de mercado, lista de insumos otimizada e o Ponto de Atenção do Oráculo.
+ * Motor "Analista de Suprimentos": recebe { nicho, subcategoria,
+ * descricao_usuario } e devolve a lista EXATA de insumos com margem de perda e
+ * consumo oculto, mais uma dica estratégica de compra. Saída forçada em JSON
+ * estrito via responseMimeType (o response_format do Gemini).
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -16,64 +16,75 @@ declare const process: { readonly env: Record<string, string | undefined> };
 // o 3-flash-preview responde 200 e honra o contrato JSON.
 const MODEL = 'gemini-3-flash-preview';
 
-export type ServiceSegment = 'Popular' | 'Intermediário' | 'Premium';
-
-/** Estrutura de entrada que a IA SEMPRE processa (Regra de Ouro). */
+/** Estrutura de entrada enviada pelo front (contexto extra é opcional). */
 export interface SupplyPlannerRequest {
 	readonly nicho: string;
-	readonly servico: string;
-	readonly localizacao: string;
-	readonly segmento_servico: ServiceSegment;
+	readonly subcategoria: string;
+	readonly descricao_usuario: string;
+	/** Contexto opcional que calibra quantidades e a dica (região/segmento/marca). */
+	readonly localizacao?: string;
+	readonly segmento_servico?: string;
 	readonly marca_insumo_preferencial?: string;
-	readonly volume_demanda: number;
 }
 
-export interface SupplyPlannerItem {
+export interface SupplyMaterial {
 	readonly nome: string;
-	readonly quantidade: string;
+	readonly quantidade: number;
+	readonly unidade: string;
 	readonly observacao: string;
 }
 
 /** Contrato de saída EXATO exigido do modelo (e devolvido ao front-end). */
 export interface SupplyPlannerResult {
-	readonly analiseMercado: string;
-	readonly precoMin: number;
-	readonly precoMax: number;
-	readonly insumos: readonly SupplyPlannerItem[];
-	readonly pontoAtencao: string;
+	readonly materiais: readonly SupplyMaterial[];
+	readonly dica_estrategica: string;
 }
 
 export const PLANNER_SYSTEM_PROMPT = [
-	'Você é o Analista de Mercado e Consultor de Compras do Lidar Core, especialista em PMEs brasileiras.',
-	'Você NÃO é uma calculadora de somar: toda resposta é uma análise consultiva.',
+	'Você é o motor de cálculo do Lidar Core, um ERP para pequenas empresas. Sua função é receber a descrição de um serviço ou produto e calcular a lista exata de insumos (matérias-primas e embalagens) necessários para executá-lo.',
 	'',
-	'REGRA DE OURO (obrigatória em TODA resposta):',
-	'1. CONTEXTO GEOGRÁFICO: cruze a localização informada (cidade/bairro) com o padrão de renda da região (ex.: Faria Lima cobra 2-3x mais que a periferia) para ajustar preço de venda e margem.',
-	'2. QUALIDADE DO INSUMO (TIER): calcule o custo dos materiais no nível do segmento informado — Popular (marcas econômicas), Intermediário (custo-benefício) ou Premium (marcas profissionais). Se o usuário indicou marca preferencial, precifique NELA e cite-a pelo nome; senão, cite 1 marca real típica do tier em cada insumo.',
-	'3. DESPERDÍCIO PREDITIVO: adicione margem de segurança (quebra/perda) típica do nicho às quantidades e explicite o percentual na observação do insumo.',
+	'REGRAS DE CÁLCULO E ANÁLISE:',
+	'1. Precisão por Nicho: Entenda as métricas padrão.',
+	'   - Se for pizzaria: Calcule farinha, água, fermento, queijo, molho e caixas de papelão baseado no volume.',
+	'   - Se for obra (ex: alvenaria): Calcule tijolos por m², cimento, areia e aditivos.',
+	'   - Se for beleza: Calcule tubos de tinta, ml de OX, gramas de descolorante.',
+	'2. Margem de Perda (Desperdício): NENHUM processo é perfeito. Adicione automaticamente uma margem de quebra/perda (ex: +10% de tijolos para quebra, +5% de farinha para perda na sova) e informe isso na observação.',
+	'3. Consumo Oculto: Lembre o usuário de itens descartáveis necessários (ex: luvas, pincéis, papel manteiga, fita crepe).',
+	'4. Se o usuário informar localização, segmento (Popular/Intermediário/Premium) ou marca preferencial, calibre marcas, quantidades e a dica estratégica com esse contexto.',
 	'',
-	'REGRA CRÍTICA DE MATEMÁTICA: as quantidades devem cobrir EXATAMENTE o volume de demanda informado (+ margem de desperdício). Insumo de uso contínuo entra RATEADO. Nunca invente um volume diferente do pedido.',
+	'REGRA ESTRITA DE SAÍDA (FORMATO JSON):',
+	'Você NÃO DEVE retornar nenhum texto, saudação ou explicação em Markdown. Retorne APENAS um objeto JSON válido, seguindo exatamente a estrutura abaixo:',
 	'',
-	'Formato do conteúdo:',
-	'- analiseMercado: "Para um [nicho] em [localização] focando no segmento [segmento], o preço médio de mercado para este serviço é R$ X a R$ Y." (adapte com naturalidade, mantendo faixa em reais).',
-	'- insumos: lista de compras com marca/quantidade exata para o volume pedido; observação curta com a margem de desperdício aplicada.',
-	'- pontoAtencao: comece com "Dica do Oráculo:" — uma recomendação analítica sobre marca/tier vs. ticket médio, com percentuais, terminando com uma pergunta reflexiva (ex.: "Vale a pena?").',
-	'- É proibido cravar preço exato: precoMin DEVE ser estritamente menor que precoMax.',
-	'',
-	'Responda EXCLUSIVAMENTE com um JSON válido nesta interface exata, sem markdown e sem texto ao redor:',
-	'{ "analiseMercado": string, "precoMin": number, "precoMax": number, "insumos": [{ "nome": string, "quantidade": string, "observacao": string }], "pontoAtencao": string }'
+	'{',
+	'  "materiais": [',
+	'    {',
+	'      "nome": "Farinha de Trigo",',
+	'      "quantidade": 15,',
+	'      "unidade": "kg",',
+	'      "observacao": "Inclui 5% de margem de perda. Suficiente para 50 massas."',
+	'    },',
+	'    {',
+	'      "nome": "Caixa de Pizza 35cm",',
+	'      "quantidade": 50,',
+	'      "unidade": "unidades",',
+	'      "observacao": "Embalagem para entrega."',
+	'    }',
+	'  ],',
+	'  "dica_estrategica": "Comprar farinha em sacos de 25kg no atacado reduzirá seu custo unitário em aproximadamente 15%."',
+	'}'
 ].join('\n');
 
 function buildUserMessage(payload: SupplyPlannerRequest): string {
-	return [
+	const lines = [
 		`Nicho: ${payload.nicho}`,
-		`Serviço/Projeto: ${payload.servico}`,
-		`Localização: ${payload.localizacao}`,
-		`Segmento do serviço: ${payload.segmento_servico}`,
-		`Marca de insumo preferencial: ${payload.marca_insumo_preferencial ?? 'nenhuma (sugira a marca do tier)'}`,
-		`Volume de demanda: ${payload.volume_demanda}`,
-		'Aplique a Regra de Ouro e devolva a análise consultiva completa no JSON estrito.'
-	].join('\n');
+		`Subcategoria: ${payload.subcategoria}`,
+		`Descrição do usuário: ${payload.descricao_usuario}`
+	];
+	if (payload.localizacao) lines.push(`Localização: ${payload.localizacao}`);
+	if (payload.segmento_servico) lines.push(`Segmento do serviço: ${payload.segmento_servico}`);
+	if (payload.marca_insumo_preferencial) lines.push(`Marca de insumo preferencial: ${payload.marca_insumo_preferencial}`);
+	lines.push('Calcule a lista de insumos e devolva APENAS o JSON no formato exigido.');
+	return lines.join('\n');
 }
 
 /** Extrai e valida o JSON estrito devolvido pela IA. Lança se estiver fora do contrato. */
@@ -82,26 +93,20 @@ export function parseSupplyPlan(text: string): SupplyPlannerResult {
 	const end = text.lastIndexOf('}');
 	if (start === -1 || end === -1) throw new Error('resposta da IA sem JSON');
 	const raw = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
-	const analiseMercado = raw['analiseMercado'];
-	const pontoAtencao = raw['pontoAtencao'];
-	const precoMin = Number(raw['precoMin']);
-	const precoMax = Number(raw['precoMax']);
-	const insumos = Array.isArray(raw['insumos'])
-		? raw['insumos'].flatMap((item): SupplyPlannerItem[] => {
+	const dica = raw['dica_estrategica'];
+	const materiais = Array.isArray(raw['materiais'])
+		? raw['materiais'].flatMap((item): SupplyMaterial[] => {
 			if (typeof item !== 'object' || item === null) return [];
-			const { nome, quantidade, observacao } = item as Record<string, unknown>;
-			return typeof nome === 'string' && typeof quantidade === 'string' && typeof observacao === 'string'
-				? [{ nome, quantidade, observacao }]
+			const { nome, quantidade, unidade, observacao } = item as Record<string, unknown>;
+			const qty = Number(quantidade);
+			return typeof nome === 'string' && typeof unidade === 'string' && typeof observacao === 'string' && Number.isFinite(qty) && qty > 0
+				? [{ nome, quantidade: qty, unidade, observacao }]
 				: [];
 		})
 		: [];
-	if (typeof analiseMercado !== 'string' || !analiseMercado.trim()) throw new Error('análise de mercado ausente');
-	if (typeof pontoAtencao !== 'string' || !pontoAtencao.trim()) throw new Error('ponto de atenção ausente');
-	if (![precoMin, precoMax].every(value => Number.isFinite(value) && value >= 0) || precoMax <= precoMin) {
-		throw new Error('faixa de preço fora do contrato');
-	}
-	if (insumos.length === 0) throw new Error('lista de insumos vazia');
-	return { analiseMercado, precoMin, precoMax, insumos, pontoAtencao };
+	if (materiais.length === 0) throw new Error('lista de materiais vazia');
+	if (typeof dica !== 'string' || !dica.trim()) throw new Error('dica estratégica ausente');
+	return { materiais, dica_estrategica: dica };
 }
 
 /** Contrato mínimo de um modelo generativo — permite injetar um fake nos testes. */
@@ -133,33 +138,27 @@ function safeJson(value: string): unknown {
 	}
 }
 
-const SEGMENTS: readonly ServiceSegment[] = ['Popular', 'Intermediário', 'Premium'];
-
-/** Pergunta devolvida quando o segmento vem omisso (Regra de Ouro nº 1). */
-export const SEGMENT_QUESTION = 'Estamos falando de um serviço popular ou premium nesta região?';
-
 /** Lê e valida o corpo (aceita objeto já parseado pela Vercel ou string crua). */
-export function readBody(body: unknown): SupplyPlannerRequest | { readonly ask: string } | null {
+export function readBody(body: unknown): SupplyPlannerRequest | null {
 	const source = typeof body === 'string' ? safeJson(body) : body;
 	if (typeof source !== 'object' || source === null) return null;
-	const { nicho, servico, localizacao, segmento_servico, marca_insumo_preferencial, volume_demanda } = source as Record<string, unknown>;
+	const { nicho, subcategoria, descricao_usuario, localizacao, segmento_servico, marca_insumo_preferencial } = source as Record<string, unknown>;
 	if (typeof nicho !== 'string' || nicho.trim().length < 2) return null;
-	if (typeof servico !== 'string' || servico.trim().length < 2) return null;
-	if (typeof localizacao !== 'string' || localizacao.trim().length < 2) return null;
-	const volume = Number(volume_demanda);
-	if (!Number.isFinite(volume) || volume <= 0) return null;
-	// Segmento omisso não é erro genérico: devolvemos a PERGUNTA para o usuário.
-	if (typeof segmento_servico !== 'string' || !SEGMENTS.includes(segmento_servico as ServiceSegment)) {
-		return { ask: SEGMENT_QUESTION };
-	}
-	const marca = typeof marca_insumo_preferencial === 'string' && marca_insumo_preferencial.trim() ? { marca_insumo_preferencial: marca_insumo_preferencial.trim() } : {};
+	if (typeof subcategoria !== 'string' || subcategoria.trim().length < 2) return null;
+	if (typeof descricao_usuario !== 'string' || descricao_usuario.trim().length < 3) return null;
+	const optional = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
+	const extras: Record<string, string> = {};
+	const loc = optional(localizacao);
+	const seg = optional(segmento_servico);
+	const marca = optional(marca_insumo_preferencial);
+	if (loc) extras['localizacao'] = loc;
+	if (seg) extras['segmento_servico'] = seg;
+	if (marca) extras['marca_insumo_preferencial'] = marca;
 	return {
 		nicho: nicho.trim(),
-		servico: servico.trim(),
-		localizacao: localizacao.trim(),
-		segmento_servico: segmento_servico as ServiceSegment,
-		volume_demanda: volume,
-		...marca
+		subcategoria: subcategoria.trim(),
+		descricao_usuario: descricao_usuario.trim(),
+		...extras
 	};
 }
 
@@ -171,11 +170,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 	}
 	const payload = readBody(req.body);
 	if (!payload) {
-		res.status(400).json({ error: 'Informe nicho, servico, localizacao e volume_demanda no corpo da requisição.' });
-		return;
-	}
-	if ('ask' in payload) {
-		res.status(400).json({ error: payload.ask, ask: 'segmento_servico' });
+		res.status(400).json({ error: 'Informe nicho, subcategoria e descricao_usuario no corpo da requisição.' });
 		return;
 	}
 
@@ -190,6 +185,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 		const model = genAI.getGenerativeModel({
 			model: MODEL,
 			systemInstruction: PLANNER_SYSTEM_PROMPT,
+			// response_format do Gemini: força a saída a ser SÓ JSON, sem Markdown.
 			generationConfig: { responseMimeType: 'application/json' }
 		});
 		const result = await runSupplyPlanner(model, payload);

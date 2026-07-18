@@ -1423,44 +1423,48 @@ try {
 	const compiled = join(await mkdtemp(new URL('./.smoke-supplyplanner-', import.meta.url).pathname), 'route.mjs');
 	try {
 		await writeFile(compiled, outputFiles[0].text);
-		const { default: handler, parseSupplyPlan, runSupplyPlanner, readBody, PLANNER_SYSTEM_PROMPT, SEGMENT_QUESTION } = await import(pathToFileURL(compiled).href);
+		const { default: handler, parseSupplyPlan, runSupplyPlanner, readBody, PLANNER_SYSTEM_PROMPT } = await import(pathToFileURL(compiled).href);
 
-		// Regra de Ouro no system prompt: geografia, tier de insumo e desperdício
-		assert.match(PLANNER_SYSTEM_PROMPT, /REGRA DE OURO/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /CONTEXTO GEOGRÁFICO/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /Faria Lima/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /QUALIDADE DO INSUMO/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /DESPERDÍCIO PREDITIVO/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /Dica do Oráculo:/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /NÃO é uma calculadora/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /"analiseMercado": string, "precoMin": number, "precoMax": number/);
+		// System prompt do Analista de Suprimentos: métricas por nicho, perda e consumo oculto
+		assert.match(PLANNER_SYSTEM_PROMPT, /motor de cálculo do Lidar Core/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /Precisão por Nicho/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /caixas de papelão/); // métrica de pizzaria
+		assert.match(PLANNER_SYSTEM_PROMPT, /tijolos por m²/); // métrica de obra
+		assert.match(PLANNER_SYSTEM_PROMPT, /gramas de descolorante/); // métrica de beleza
+		assert.match(PLANNER_SYSTEM_PROMPT, /Margem de Perda/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /Consumo Oculto/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /REGRA ESTRITA DE SAÍDA \(FORMATO JSON\)/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /NÃO DEVE retornar nenhum texto, saudação ou explicação em Markdown/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /"dica_estrategica"/);
 
-		// parseSupplyPlan: contrato consultivo completo, com validações fail-closed
-		const goodJson = '{"analiseMercado":"Para um salão em Moema focando no segmento Premium, o preço médio é R$ 350 a R$ 600.","precoMin":350,"precoMax":600,"insumos":[{"nome":"Pó descolorante Wella Blondor 800g","quantidade":"7 potes","observacao":"Inclui 15% de margem de desperdício"}],"pontoAtencao":"Dica do Oráculo: a Wella eleva seu custo em 25%, mas permite ticket 30% maior. Vale a pena?"}';
+		// parseSupplyPlan: contrato { materiais[], dica_estrategica } fail-closed
+		const goodJson = '{"materiais":[{"nome":"Farinha de Trigo","quantidade":15,"unidade":"kg","observacao":"Inclui 5% de margem de perda. Suficiente para 50 massas."},{"nome":"Caixa de Pizza 35cm","quantidade":50,"unidade":"unidades","observacao":"Embalagem para entrega."}],"dica_estrategica":"Comprar farinha em sacos de 25kg no atacado reduz o custo em ~15%."}';
 		const parsed = parseSupplyPlan('claro! ' + goodJson + ' pronto');
-		assert.equal(parsed.precoMin, 350);
-		assert.equal(parsed.insumos.length, 1);
-		assert.match(parsed.pontoAtencao, /Dica do Oráculo/);
+		assert.equal(parsed.materiais.length, 2);
+		assert.equal(parsed.materiais[0].quantidade, 15);
+		assert.equal(parsed.materiais[0].unidade, 'kg');
+		assert.match(parsed.dica_estrategica, /atacado/);
 		assert.throws(() => parseSupplyPlan('sem json'), /sem JSON/);
-		assert.throws(() => parseSupplyPlan('{"analiseMercado":"x","precoMin":500,"precoMax":500,"insumos":[{"nome":"a","quantidade":"b","observacao":"c"}],"pontoAtencao":"d"}'), /faixa de preço/);
-		assert.throws(() => parseSupplyPlan('{"analiseMercado":"x","precoMin":100,"precoMax":200,"insumos":[],"pontoAtencao":"d"}'), /insumos vazia/);
+		assert.throws(() => parseSupplyPlan('{"materiais":[],"dica_estrategica":"x"}'), /materiais vazia/);
+		assert.throws(() => parseSupplyPlan('{"materiais":[{"nome":"a","quantidade":5,"unidade":"kg","observacao":"b"}]}'), /dica estratégica/);
 
-		// readBody: estrutura da Regra de Ouro; segmento omisso -> devolve a PERGUNTA
-		const fullBody = { nicho: 'Estética & Beleza', servico: 'Mechas/Coloração', localizacao: 'Moema, São Paulo', segmento_servico: 'Premium', marca_insumo_preferencial: 'Wella', volume_demanda: 50 };
+		// readBody: { nicho, subcategoria, descricao_usuario } + contexto opcional
+		const fullBody = { nicho: 'Alimentação & Gastronomia', subcategoria: 'Pizzaria', descricao_usuario: '50 pizzas de mussarela' };
 		assert.deepEqual(readBody(fullBody), fullBody);
-		const askResult = readBody({ nicho: 'Beleza', servico: 'Mechas', localizacao: 'SP', volume_demanda: 50 });
-		assert.equal(askResult.ask, SEGMENT_QUESTION);
-		assert.match(SEGMENT_QUESTION, /popular ou premium/);
-		assert.equal(readBody({ nicho: 'Beleza', servico: 'Mechas', localizacao: 'SP', segmento_servico: 'Premium', volume_demanda: 0 }), null); // volume inválido
+		const withContext = readBody({ ...fullBody, localizacao: 'Moema, SP', segmento_servico: 'Premium', marca_insumo_preferencial: 'Wella' });
+		assert.equal(withContext.localizacao, 'Moema, SP');
+		assert.equal(withContext.marca_insumo_preferencial, 'Wella');
+		assert.equal(readBody({ nicho: 'Alimentação', subcategoria: 'Pizzaria' }), null); // faltou descricao_usuario
+		assert.equal(readBody({ nicho: 'A', subcategoria: 'Pizzaria', descricao_usuario: '50 pizzas' }), null); // nicho curto
 		assert.equal(readBody('lixo'), null);
 
 		// runSupplyPlanner: núcleo com modelo fake (sem rede) -> resultado tipado
 		const fakeModel = text => ({ generateContent: async () => ({ response: { text: () => text } }) });
 		const result = await runSupplyPlanner(fakeModel(goodJson), fullBody);
-		assert.equal(result.precoMax, 600);
-		assert.match(result.insumos[0].nome, /Wella Blondor/);
+		assert.equal(result.materiais[1].nome, 'Caixa de Pizza 35cm');
+		assert.equal(result.materiais[1].quantidade, 50);
 
-		// Handler: método, corpo, pergunta de segmento e chave — fail-closed com JSON
+		// Handler: método, corpo e chave — fail-closed com JSON
 		const mockRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
 		delete process.env.GEMINI_API_KEY;
 
@@ -1469,14 +1473,9 @@ try {
 		assert.equal(res.code, 405);
 
 		res = mockRes();
-		await handler({ method: 'POST', body: { nicho: 'Beleza' } }, res); // corpo incompleto
+		await handler({ method: 'POST', body: { nicho: 'Alimentação' } }, res); // corpo incompleto
 		assert.equal(res.code, 400);
-
-		res = mockRes();
-		await handler({ method: 'POST', body: { nicho: 'Beleza', servico: 'Mechas', localizacao: 'SP', volume_demanda: 50 } }, res); // sem segmento
-		assert.equal(res.code, 400);
-		assert.match(res.payload.error, /popular ou premium/); // a IA pergunta, não chuta
-		assert.equal(res.payload.ask, 'segmento_servico');
+		assert.match(res.payload.error, /nicho, subcategoria e descricao_usuario/);
 
 		res = mockRes();
 		await handler({ method: 'POST', body: fullBody }, res);

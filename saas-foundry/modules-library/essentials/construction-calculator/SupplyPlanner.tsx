@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { hasScopes, useCoreService, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, ArrowLeft, ArrowRight, Boxes, Check, ClipboardList, Info, Lightbulb, MapPin, Package, RefreshCw, Search, ShieldAlert, Sparkles, TrendingUp, Wand2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, Boxes, Check, ClipboardList, Info, Lightbulb, MapPin, Package, RefreshCw, Search, ShieldAlert, Sparkles, Wand2 } from 'lucide-react';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 const MODULE_ID = 'construction-calculator-v1';
 const PLANNER_ENDPOINT = '/api/supply-planner';
 
-const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+const qty = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 });
 
 export type ServiceSegment = 'Popular' | 'Intermediário' | 'Premium';
 
@@ -18,20 +18,18 @@ export const SEGMENTS: readonly { readonly id: ServiceSegment; readonly label: s
 	{ id: 'Premium', label: 'Premium', hint: 'Marca profissional, ticket alto' }
 ];
 
-/** Um item da lista de insumos otimizada devolvida pela IA. */
-export interface PlannerItem {
+/** Um material calculado pelo Analista de Suprimentos (IA). */
+export interface PlannerMaterial {
 	readonly nome: string;
-	readonly quantidade: string;
+	readonly quantidade: number;
+	readonly unidade: string;
 	readonly observacao: string;
 }
 
-/** Análise consultiva completa da IA (contrato da rota /api/supply-planner). */
+/** Resposta da rota /api/supply-planner: lista exata + dica estratégica. */
 export interface PlannerReport {
-	readonly analiseMercado: string;
-	readonly precoMin: number;
-	readonly precoMax: number;
-	readonly insumos: readonly PlannerItem[];
-	readonly pontoAtencao: string;
+	readonly materiais: readonly PlannerMaterial[];
+	readonly dica_estrategica: string;
 	readonly engine: 'gemini';
 }
 
@@ -188,24 +186,22 @@ export const CUSTOM_TEMPLATES: readonly PlannerTemplate[] = [
 
 /** Contrato bruto da rota (a IA não devolve o campo engine — nós carimbamos). */
 interface PlannerApi {
-	readonly analiseMercado: string;
-	readonly precoMin: number;
-	readonly precoMax: number;
-	readonly insumos: readonly PlannerItem[];
-	readonly pontoAtencao: string;
+	readonly materiais: readonly PlannerMaterial[];
+	readonly dica_estrategica: string;
 }
 
 /**
- * Fonte ÚNICA de verdade: a rota real /api/supply-planner (Gemini com a Regra
- * de Ouro). SEM fallback, SEM números inventados — falha vira erro transparente.
+ * Fonte ÚNICA de verdade: a rota real /api/supply-planner (Analista de
+ * Suprimentos via Gemini). SEM fallback, SEM números inventados — falha vira
+ * erro transparente na tela.
  */
 async function askPlanner(payload: {
 	readonly nicho: string;
-	readonly servico: string;
-	readonly localizacao: string;
-	readonly segmento_servico: ServiceSegment;
+	readonly subcategoria: string;
+	readonly descricao_usuario: string;
+	readonly localizacao?: string;
+	readonly segmento_servico?: ServiceSegment;
 	readonly marca_insumo_preferencial?: string;
-	readonly volume_demanda: number;
 }): Promise<PlannerReport> {
 	const response = await fetch(PLANNER_ENDPOINT, {
 		method: 'POST',
@@ -219,17 +215,10 @@ async function askPlanner(payload: {
 	if (!response.ok) {
 		throw new Error(data.error ?? `Falha na análise (HTTP ${response.status}).`);
 	}
-	if (typeof data.analiseMercado !== 'string' || typeof data.precoMin !== 'number' || typeof data.precoMax !== 'number' || !Array.isArray(data.insumos) || typeof data.pontoAtencao !== 'string') {
+	if (!Array.isArray(data.materiais) || data.materiais.length === 0 || typeof data.dica_estrategica !== 'string') {
 		throw new Error('A resposta da API veio fora do formato esperado.');
 	}
-	return {
-		analiseMercado: data.analiseMercado,
-		precoMin: data.precoMin,
-		precoMax: data.precoMax,
-		insumos: data.insumos,
-		pontoAtencao: data.pontoAtencao,
-		engine: 'gemini'
-	};
+	return { materiais: data.materiais, dica_estrategica: data.dica_estrategica, engine: 'gemini' };
 }
 
 type Phase = 'niche' | 'template' | 'inputs' | 'loading' | 'error' | 'result';
@@ -352,17 +341,19 @@ function Planner(): React.JSX.Element {
 		setErrorMessage(null);
 		setPhase('loading');
 		const brandTrim = brand.trim();
+		const suffix = template.fields[0]?.suffix ?? 'unidades';
 		const minDelay = new Promise<void>(resolve => {
 			timer.current = window.setTimeout(resolve, 1800);
 		});
 		Promise.all([
 			askPlanner({
 				nicho: nicheLabel,
-				servico: template.label,
+				subcategoria: template.label,
+				// Ex.: "800 pizzas — Pizzaria" / "30 m² — Paredes, Alvenaria e Muros"
+				descricao_usuario: `${parsedVolume} ${suffix} — ${template.label}`,
 				localizacao: location.trim(),
 				segmento_servico: segment,
-				...(brandTrim ? { marca_insumo_preferencial: brandTrim } : {}),
-				volume_demanda: parsedVolume
+				...(brandTrim ? { marca_insumo_preferencial: brandTrim } : {})
 			}),
 			minDelay
 		])
@@ -786,25 +777,14 @@ function Planner(): React.JSX.Element {
 							</h2>
 						</div>
 
-						{/* 1. Análise de Mercado (contexto geográfico + segmento) */}
-						<div className="mx-6 mt-5 rounded-2xl border border-gray-100 p-5" data-testid="planner-market">
-							<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-500">
-								<TrendingUp className="h-4 w-4 text-emerald-500" aria-hidden /> Análise de Mercado
-							</span>
-							<p className="mt-2 text-sm leading-relaxed text-gray-600">{report.analiseMercado}</p>
-							<p className="mt-2 text-2xl font-bold tracking-tight text-gray-900">
-								{brl.format(report.precoMin)} <span className="text-gray-300">a</span> {brl.format(report.precoMax)}
-							</p>
-						</div>
-
-						{/* 2. Lista de Insumos Otimizada (com marcas e desperdício) */}
+						{/* 1. Lista de Materiais calculada pelo Analista de Suprimentos */}
 						<div className="px-6 pt-5">
 							<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-500">
-								<Package className="h-4 w-4 text-indigo-500" aria-hidden /> Lista de Insumos Otimizada
+								<Package className="h-4 w-4 text-indigo-500" aria-hidden /> Lista de Materiais Calculada
 							</span>
 						</div>
 						<ul className="grid gap-3 p-6 pt-3">
-							{report.insumos.map(item => (
+							{report.materiais.map(item => (
 								<li
 									key={item.nome}
 									className="flex items-start gap-4 rounded-2xl border border-gray-100 p-4 transition-shadow hover:shadow-sm"
@@ -815,19 +795,21 @@ function Planner(): React.JSX.Element {
 									</span>
 									<div className="min-w-0">
 										<p className="text-sm font-semibold text-gray-900">{item.nome}</p>
-										<p className="mt-0.5 text-lg font-bold tracking-tight text-indigo-600">{item.quantidade}</p>
+										<p className="mt-0.5 text-lg font-bold tracking-tight text-indigo-600">
+											{qty.format(item.quantidade)} <span className="text-sm font-semibold text-indigo-400">{item.unidade}</span>
+										</p>
 										<p className="mt-0.5 text-xs text-gray-400">{item.observacao}</p>
 									</div>
 								</li>
 							))}
 						</ul>
 
-						{/* 3. Ponto de Atenção — o ouro consultivo da IA */}
+						{/* 2. Dica Estratégica — o ouro consultivo da IA */}
 						<div className="mx-6 rounded-2xl bg-amber-50/60 p-5 ring-1 ring-inset ring-amber-100" data-testid="planner-insight">
 							<span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
-								<Lightbulb className="h-4 w-4" aria-hidden /> Ponto de Atenção
+								<Lightbulb className="h-4 w-4" aria-hidden /> Dica Estratégica
 							</span>
-							<p className="mt-2 text-sm leading-relaxed text-amber-900">{report.pontoAtencao}</p>
+							<p className="mt-2 text-sm leading-relaxed text-amber-900">{report.dica_estrategica}</p>
 						</div>
 
 						<div className="mx-6 mt-4 flex items-start gap-2 rounded-xl bg-gray-50 p-4 text-xs leading-relaxed text-gray-500">

@@ -713,6 +713,30 @@ try {
 	const atrair = buildCampaign('atrair', 'consultoria', 'PMEs');
 	assert.match(atrair.diagnostico, /não te conhece|nunca ouviu falar/);
 
+	// MarketingPlanView: plano guiado dia a dia para leigo total
+	const { buildPlanoCampanha } = cmoMod;
+	const { MarketingPlanView } = await import('./modules-library/virtual-cmo/dist/MarketingPlanView.js');
+	const plano = buildPlanoCampanha('promocao', 'marmitas fitness', 'quem treina');
+	assert.equal(plano.titulo_campanha, 'Semana do Caixa Rápido');
+	assert.equal(plano.acoes.length, 4, '3 peças + texto principal viram 4 ações');
+	assert.deepEqual(plano.acoes.map(acao => acao.dia_postagem), ['Hoje', 'Amanhã', 'Sexta-feira', 'Sábado']);
+	assert.ok(plano.acoes.every(acao => acao.status === 'pendente'));
+	assert.ok(plano.acoes.every(acao => acao.direcao_visual.length > 20), 'toda ação tem direção visual para leigo');
+	assert.match(plano.acoes[0].direcao_visual, /mesa bem iluminada/, 'instrução de foto em linguagem de gente');
+	assert.equal(plano.acoes[1].formato, 'Mensagem de WhatsApp');
+
+	const planHtml = renderToStaticMarkup(createElement(MarketingPlanView, { plano }));
+	assert.match(planHtml, /Semana do Caixa Rápido/);
+	assert.match(planHtml, /0 de 4 feitas/, 'barra de progresso começa zerada');
+	assert.match(planHtml, /Hoje/);
+	assert.match(planHtml, /Sexta-feira/);
+	assert.match(planHtml, /O que fazer/i);
+	assert.match(planHtml, /Texto pronto — é só copiar/);
+	assert.match(planHtml, /Gostei do texto, aprovar/, 'primeiro passo do ciclo de status');
+	// Plano de fidelização é só WhatsApp — sem exigir produção de foto complexa
+	const planoFidelizar = buildPlanoCampanha('fidelizar', 'tatuagem', 'jovens');
+	assert.ok(planoFidelizar.acoes.slice(0, 3).every(acao => acao.formato === 'Mensagem de WhatsApp'));
+
 	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
 	assert.match(receipt, /Recibo de Prestação de Serviço/);
 	assert.match(receipt, /Baixar PDF/);

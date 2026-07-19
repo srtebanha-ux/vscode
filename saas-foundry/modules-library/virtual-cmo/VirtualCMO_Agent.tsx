@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { hasScopes, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, ClipboardCopy, Loader2, Megaphone, ShieldAlert, Sparkles } from 'lucide-react';
+import { ArrowLeft, Loader2, Megaphone, ShieldAlert, Sparkles } from 'lucide-react';
+import { MarketingPlanView, type AcaoMarketing, type PlanoCampanha } from './MarketingPlanView.js';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['read:insights', 'write:insights'];
 const MODULE_ID = 'virtual-cmo-v1';
@@ -118,6 +119,85 @@ export function buildCampaign(goalId: CmoGoal['id'], product: string, customer: 
 	};
 }
 
+/** Metadados do plano dia a dia por objetivo: quando, formato e direção visual. */
+const PLAN_META: Readonly<Record<CmoGoal['id'], {
+	readonly titulo: string;
+	readonly objetivo: (product: string) => string;
+	readonly formatos: readonly [string, string, string, string];
+	readonly direcoes: readonly [string, string, string, string];
+	readonly formatoPrincipal: string;
+}>> = {
+	atrair: {
+		titulo: 'Campanha: apresente seu trabalho para gente nova',
+		objetivo: product => `Fazer quem nunca ouviu falar de ${product} te conhecer e chamar no direct.`,
+		formatos: ['Instagram Reels', 'Instagram Story', 'Instagram Reels', 'Texto do anúncio/página'],
+		direcoes: [
+			'Grave em pé, com o celular na altura do rosto e luz de janela. Fale olhando para a câmera, sem ler.',
+			'Filme um cliente real usando o produto (peça autorização) ou mostre um antes/depois com duas fotos.',
+			'Grave você respondendo a pergunta de preço com naturalidade, como se fosse um áudio de WhatsApp.',
+			'Não precisa de foto: cole este texto na sua página, bio ou anúncio do Instagram.'
+		],
+		formatoPrincipal: 'Texto do anúncio/página'
+	},
+	promocao: {
+		titulo: 'Semana do Caixa Rápido',
+		objetivo: product => `Gerar vendas de ${product} ainda esta semana com uma oferta de verdade, com prazo.`,
+		formatos: ['Instagram Story', 'Mensagem de WhatsApp', 'Post no Feed', 'Texto da oferta'],
+		direcoes: [
+			'Tire uma foto do produto em cima de uma mesa bem iluminada, de dia, perto da janela. Fundo limpo.',
+			'Não precisa de foto: envie esta mensagem para a sua lista de clientes no WhatsApp, um a um ou por lista de transmissão.',
+			'Use uma foto de antes/depois ou do produto pronto. Se tiver foto com cliente sorrindo, melhor ainda.',
+			'Guarde este texto: ele é a sua oferta oficial. Use em qualquer canal onde perguntarem o preço.'
+		],
+		formatoPrincipal: 'Texto da oferta'
+	},
+	fidelizar: {
+		titulo: 'Semana de Reativação de Clientes',
+		objetivo: product => `Trazer de volta quem já comprou ${product} — custa 5x menos que conquistar um estranho.`,
+		formatos: ['Mensagem de WhatsApp', 'Mensagem de WhatsApp', 'Mensagem de WhatsApp', 'Mensagem VIP'],
+		direcoes: [
+			'Não precisa de foto: abra o WhatsApp, escolha 10 clientes antigos e envie trocando [nome] pelo nome de cada um.',
+			'Envie para os 5 melhores clientes. Dica: mande de manhã, entre 9h e 11h, quando a resposta é maior.',
+			'Envie para clientes satisfeitos. Se tiver um brinde simples (10% off, mimo), já deixe decidido antes.',
+			'Reserve esta mensagem para os 3 clientes que mais gastam com você. Personalize a primeira frase.'
+		],
+		formatoPrincipal: 'Mensagem VIP'
+	},
+	conteudo: {
+		titulo: 'Sua Semana de Conteúdo',
+		objetivo: product => `Manter o perfil vivo com 3 posts sobre ${product} — sem precisar inventar nada.`,
+		formatos: ['Post no Feed', 'Post no Feed', 'Post no Feed', 'Bio do Instagram'],
+		direcoes: [
+			'Grave 30 segundos com o celular apoiado (pode ser numa caneca). Luz de janela e fala natural.',
+			'Tire 3 fotos do processo: começo, meio e resultado. Poste como carrossel, nessa ordem.',
+			'Print de uma conversa com feedback de cliente (apague o nome/foto) ou foto do resultado final.',
+			'Não precisa de foto: copie este texto e cole na sua bio do Instagram agora — leva 30 segundos.'
+		],
+		formatoPrincipal: 'Bio do Instagram'
+	}
+};
+
+const PLAN_DAYS: readonly [string, string, string, string] = ['Hoje', 'Amanhã', 'Sexta-feira', 'Sábado'];
+
+/**
+ * Monta o plano guiado dia a dia a partir do kit do objetivo: cada peça vira
+ * uma ação com QUANDO postar, FORMATO, direção visual para leigo e o texto
+ * pronto. Em produção, a LLM devolve este PlanoCampanha diretamente.
+ */
+export function buildPlanoCampanha(goalId: CmoGoal['id'], product: string, customer: string): PlanoCampanha {
+	const kit = buildCampaign(goalId, product, customer);
+	const meta = PLAN_META[goalId];
+	const textos = [...kit.pecas, kit.textoPrincipal];
+	const acoes: AcaoMarketing[] = textos.map((texto, index) => ({
+		dia_postagem: PLAN_DAYS[index] ?? 'Esta semana',
+		formato: meta.formatos[index] ?? meta.formatoPrincipal,
+		direcao_visual: meta.direcoes[index] ?? 'Siga a instrução do texto — não precisa de produção.',
+		texto_pronto: texto,
+		status: 'pendente'
+	}));
+	return { titulo_campanha: meta.titulo, objetivo: meta.objetivo(product), acoes };
+}
+
 /** Passo a passo visual do "Como funciona" (3 ícones, linguagem simples). */
 export const HOW_IT_WORKS: readonly { readonly emoji: string; readonly title: string; readonly text: string }[] = [
 	{ emoji: '🎯', title: 'Escolha o Objetivo', text: 'Ex.: atrair clientes ou limpar estoque. Só clicar.' },
@@ -156,10 +236,12 @@ function CmoAgent(): React.JSX.Element {
 	const [customer, setCustomer] = useState('');
 	const [thinking, setThinking] = useState(false);
 	const [kit, setKit] = useState<CampaignKit | null>(null);
+	const [plano, setPlano] = useState<PlanoCampanha | null>(null);
 
 	const pickGoal = (option: CmoGoal): void => {
 		setGoal(option);
 		setKit(null);
+		setPlano(null);
 		setPhase('brief');
 		track('CMO Objetivo Escolhido', { moduleId: MODULE_ID, objetivo: option.id });
 	};
@@ -172,34 +254,20 @@ function CmoAgent(): React.JSX.Element {
 		}
 		setThinking(true);
 		setKit(null);
+		setPlano(null);
 		await new Promise(resolve => setTimeout(resolve, 1400)); // latência da LLM (simulada)
 		setKit(buildCampaign(goal.id, product.trim(), customer.trim()));
+		setPlano(buildPlanoCampanha(goal.id, product.trim(), customer.trim()));
 		setThinking(false);
 		setPhase('result');
-		track('Cálculo Realizado', { moduleId: MODULE_ID, kind: 'campaign-kit', objetivo: goal.id });
+		track('Cálculo Realizado', { moduleId: MODULE_ID, kind: 'campaign-plan', objetivo: goal.id });
 	};
 
 	const restart = (): void => {
 		setPhase('welcome');
 		setGoal(null);
 		setKit(null);
-	};
-
-	const copyStrategy = async (): Promise<void> => {
-		if (!kit) return;
-		const strategy = [
-			`== ${kit.pecasTitulo.toUpperCase()} ==`,
-			...kit.pecas.map((peca, index) => `${index + 1}. ${peca}`),
-			'',
-			`== ${kit.textoPrincipalTitulo.toUpperCase()} ==`,
-			kit.textoPrincipal
-		].join('\n');
-		try {
-			await navigator.clipboard.writeText(strategy);
-			toast.success('Campanha copiada — é só colar e publicar.');
-		} catch {
-			toast.error('Não foi possível copiar a campanha.');
-		}
+		setPlano(null);
 	};
 
 	const inputClasses =
@@ -326,7 +394,7 @@ function CmoAgent(): React.JSX.Element {
 					</motion.div>
 				)}
 
-				{phase === 'result' && kit && goal && (
+				{phase === 'result' && kit && plano && goal && (
 					<motion.div
 						key="result"
 						initial={{ opacity: 0, scale: 0.97 }}
@@ -339,41 +407,19 @@ function CmoAgent(): React.JSX.Element {
 							<span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-fuchsia-600 shadow-sm">
 								{goal.emoji} {goal.title}
 							</span>
-							<h2 className="mt-3 text-lg font-semibold tracking-tight text-gray-900">Sua campanha está pronta 🎉</h2>
-							<p className="mt-1 text-sm text-gray-500">Copie, cole e publique — sem precisar mexer em nada.</p>
+							<h2 className="mt-3 text-lg font-semibold tracking-tight text-gray-900">Seu plano está pronto 🎉</h2>
+							<p className="mt-1 text-sm text-gray-500">Siga os passos na ordem: cada card diz o que fazer, quando e com qual texto.</p>
 						</div>
 
-						<div className="space-y-4 p-6">
+						<div className="space-y-4 p-4 sm:p-6">
 							{/* Diagnóstico amigável */}
 							<article className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
 								<h3 className="text-sm font-bold text-amber-700">O olhar do seu CMO</h3>
 								<p className="mt-2 text-sm leading-relaxed text-amber-800">{kit.diagnostico}</p>
 							</article>
 
-							{/* Peças da campanha */}
-							<article className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm" data-testid="campaign-kit">
-								<h3 className="text-sm font-bold text-gray-900">{kit.pecasTitulo}</h3>
-								<ol className="mt-3 space-y-2">
-									{kit.pecas.map((peca, index) => (
-										<li key={peca} className="flex gap-2 rounded-xl bg-gray-50 px-3 py-2.5 text-xs leading-relaxed text-gray-700">
-											<span className="font-bold text-fuchsia-600">{index + 1}.</span>
-											{peca}
-										</li>
-									))}
-								</ol>
-								<h3 className="mt-4 text-sm font-bold text-gray-900">{kit.textoPrincipalTitulo}</h3>
-								<blockquote className="mt-2 rounded-xl border-l-4 border-fuchsia-400 bg-fuchsia-50/60 px-3 py-2.5 text-xs italic leading-relaxed text-gray-700">
-									{kit.textoPrincipal}
-								</blockquote>
-								<button
-									type="button"
-									onClick={() => void copyStrategy()}
-									className="mt-4 flex items-center gap-2 rounded-xl bg-fuchsia-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:scale-105 hover:bg-fuchsia-500 hover:shadow-md"
-								>
-									<ClipboardCopy className="h-4 w-4" aria-hidden />
-									Copiar Campanha
-								</button>
-							</article>
+							{/* O plano guiado dia a dia (hoje, amanhã e depois) */}
+							<MarketingPlanView plano={plano} />
 						</div>
 
 						<div className="flex flex-col gap-3 border-t border-gray-100 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">

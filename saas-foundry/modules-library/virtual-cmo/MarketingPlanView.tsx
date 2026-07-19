@@ -108,7 +108,8 @@ export function MarketingPlanView({ plano, onStatusChange }: MarketingPlanViewPr
 				{plano.acoes.map((acao, index) => {
 					const status = statuses[index] ?? 'pendente';
 					const meta = STATUS_META[status];
-					const isToday = /^hoje$/i.test(acao.dia_postagem.trim());
+					// "Hoje", "Hoje (Aquecimento)", "hoje à noite" — tudo ganha o destaque
+					const isToday = /^hoje\b/i.test(acao.dia_postagem.trim());
 					return (
 						<motion.li
 							key={`${acao.dia_postagem}-${acao.formato}-${index}`}

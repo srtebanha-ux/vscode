@@ -678,6 +678,41 @@ try {
 	assert.match(resultsHtml, /Copiar lista/, 'botão de copiar para WhatsApp/fornecedor');
 	assert.match(resultsHtml, /Análise de IA em tempo real/);
 
+	// Virtual CMO: onboarding didático (boas-vindas + como funciona + dores reais)
+	const cmoMod = await import('./modules-library/virtual-cmo/dist/VirtualCMO_Agent.js');
+	const { default: VirtualCMO_Agent, CMO_GOALS, HOW_IT_WORKS, buildCampaign } = cmoMod;
+	const cmoHtml = withServices(VirtualCMO_Agent, ['read:insights', 'write:insights']);
+	assert.match(cmoHtml, /Conheça seu Novo Diretor de Marketing/);
+	assert.match(cmoHtml, /sua agência de bolso/);
+	assert.match(cmoHtml, /Como funciona/i);
+	assert.match(cmoHtml, /Escolha o Objetivo/);
+	assert.match(cmoHtml, /A IA Trabalha/);
+	assert.match(cmoHtml, /Você Publica/);
+	assert.match(cmoHtml, /O que vamos resolver hoje\?/);
+	assert.match(cmoHtml, /Quero atrair novos clientes/);
+	assert.match(cmoHtml, /Preciso de caixa rápido/);
+	assert.match(cmoHtml, /Quero fidelizar quem já comprou/);
+	assert.match(cmoHtml, /Não sei o que postar no Instagram/);
+	assert.doesNotMatch(cmoHtml, /<textarea/, 'boas-vindas sem texto livre (zero tela em branco)');
+	assert.equal(HOW_IT_WORKS.length, 3);
+	assert.equal(CMO_GOALS.length, 4);
+	for (const goalOption of CMO_GOALS) {
+		assert.ok(goalOption.microcopy.length > 20, `microcopy do objetivo ${goalOption.id}`);
+	}
+	// Fail-closed: sem escopos de insights, acesso negado
+	assert.match(withServices(VirtualCMO_Agent, []), /Acesso negado/);
+
+	// Motor simulado por objetivo: cada dor gera peças diferentes
+	const fidelizar = buildCampaign('fidelizar', 'tatuagem', 'jovens da região');
+	assert.match(fidelizar.pecasTitulo, /WhatsApp/);
+	assert.ok(fidelizar.pecas.every(peca => peca.includes('[nome]') || /indica/i.test(peca)));
+	const promocao = buildCampaign('promocao', 'marmitas fitness', 'quem treina');
+	assert.match(promocao.pecas.join(' '), /sexta/i, 'promoção tem prazo/urgência');
+	const conteudo = buildCampaign('conteudo', 'bolos decorados', 'noivas');
+	assert.match(conteudo.pecas.join(' '), /Segunda.*Quarta.*Sexta/s, 'cardápio semanal de posts');
+	const atrair = buildCampaign('atrair', 'consultoria', 'PMEs');
+	assert.match(atrair.diagnostico, /não te conhece|nunca ouviu falar/);
+
 	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
 	assert.match(receipt, /Recibo de Prestação de Serviço/);
 	assert.match(receipt, /Baixar PDF/);

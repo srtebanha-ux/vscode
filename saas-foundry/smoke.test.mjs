@@ -654,6 +654,30 @@ try {
 	// Perfil operacional: os dois modos de compra disponíveis na UI
 	assert.deepEqual(PROFILES.map(option => option.id), ['Custo-Benefício', 'Especializado']);
 
+	// PlannerResults: componente presentacional puro (renderiza o ResultadoIA
+	// sem serviços do Core) — dá para plugar em qualquer tela.
+	const { PlannerResults } = plannerMod;
+	const resultadoFixture = {
+		analise_contexto: 'Cálculo operacional para 100 pizzas no perfil Custo-Benefício.',
+		lista_insumos: [
+			{ item: 'Farinha de Trigo Tipo 1', quantidade_calculada: '28 kg', motivo_margem_perda: 'Inclui 12% para perda na sova.', sugestao_qualidade: 'Moinhos nacionais rendem mais por real.' }
+		],
+		dica_estrategica: 'Provisione a faixa do Simples Nacional para não corroer a margem.'
+	};
+	const resultsHtml = renderToStaticMarkup(createElement(PlannerResults, {
+		resultado: resultadoFixture, titulo: 'Alimentação & Gastronomia', subtitulo: 'Pizzaria',
+		onRestart: () => {}, onAdjust: () => {}
+	}));
+	assert.match(resultsHtml, /data-testid="planner-context"/);
+	assert.match(resultsHtml, /100 pizzas/);
+	assert.match(resultsHtml, /28 kg/);
+	assert.match(resultsHtml, /12% para perda na sova/);
+	assert.match(resultsHtml, /Moinhos nacionais/);
+	assert.match(resultsHtml, /Dica Estratégica/);
+	assert.match(resultsHtml, /Simples Nacional/);
+	assert.match(resultsHtml, /Copiar lista/, 'botão de copiar para WhatsApp/fornecedor');
+	assert.match(resultsHtml, /Análise de IA em tempo real/);
+
 	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
 	assert.match(receipt, /Recibo de Prestação de Serviço/);
 	assert.match(receipt, /Baixar PDF/);

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { hasScopes, useCoreService, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, ArrowLeft, ArrowRight, Boxes, Check, ClipboardList, Info, Lightbulb, MapPin, Package, RefreshCw, Search, ShieldAlert, Sparkles, Wand2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, Boxes, Check, ClipboardList, Copy, Info, Lightbulb, MapPin, Package, RefreshCw, Search, ShieldAlert, Sparkles, Wand2 } from 'lucide-react';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 const MODULE_ID = 'construction-calculator-v1';
@@ -16,20 +16,22 @@ export const PROFILES: readonly { readonly id: OperationalProfile; readonly labe
 ];
 
 /** Um insumo calculado pelo Motor de Planejamento Operacional (IA). */
-export interface PlannerInsumo {
+export interface Insumo {
 	readonly item: string;
 	readonly quantidade_calculada: string;
 	readonly motivo_margem_perda: string;
 	readonly sugestao_qualidade: string;
 }
 
-/** Resposta da rota /api/supply-planner: contexto + lista exata + dica. */
-export interface PlannerReport {
+/** Contrato de resultado devolvido pela IA (rota /api/supply-planner). */
+export interface ResultadoIA {
 	readonly analise_contexto: string;
-	readonly lista_insumos: readonly PlannerInsumo[];
+	readonly lista_insumos: readonly Insumo[];
 	readonly dica_estrategica: string;
-	readonly engine: 'gemini';
 }
+
+/** Resultado carimbado com a origem (nunca renderizamos dado sem origem). */
+export type PlannerReport = ResultadoIA & { readonly engine: 'gemini' };
 
 /** Campo numérico cirúrgico exibido no Passo 3 — texto claro e empático. */
 export interface TemplateField {
@@ -185,7 +187,7 @@ export const CUSTOM_TEMPLATES: readonly PlannerTemplate[] = [
 /** Contrato bruto da rota (a IA não devolve o campo engine — nós carimbamos). */
 interface PlannerApi {
 	readonly analise_contexto: string;
-	readonly lista_insumos: readonly PlannerInsumo[];
+	readonly lista_insumos: readonly Insumo[];
 	readonly dica_estrategica: string;
 }
 
@@ -753,94 +755,163 @@ function Planner(): React.JSX.Element {
 				)}
 
 				{phase === 'result' && report && (
-					<motion.section
+					<PlannerResults
 						key="result"
-						initial={{ opacity: 0, scale: 0.97 }}
-						animate={{ opacity: 1, scale: 1 }}
-						exit={{ opacity: 0, scale: 0.98 }}
-						transition={{ duration: 0.3, ease: 'easeOut' }}
-						className="overflow-hidden rounded-2xl bg-white shadow-sm"
-						data-testid="planner-results"
-					>
-						<div className="border-b border-gray-100 bg-gradient-to-br from-indigo-50 to-white px-6 py-5">
-							<div className="flex items-center justify-between gap-2">
-								<span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-indigo-600 shadow-sm">
-									<ClipboardList className="h-3.5 w-3.5" aria-hidden /> Análise do Planejador
-								</span>
-								<span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200" data-testid="planner-live-badge">
-									Análise de IA em tempo real
-								</span>
-							</div>
-							<h2 className="mt-3 text-lg font-semibold tracking-tight text-gray-900">
-								{nicheLabel} · <span className="text-gray-500">{template?.label}</span>
-							</h2>
-						</div>
-
-						{/* 1. Análise de contexto: a IA mostra que entendeu a escala */}
-						<div className="mx-6 mt-5 flex items-start gap-2 rounded-xl bg-indigo-50/60 p-4 text-sm leading-relaxed text-indigo-900" data-testid="planner-context">
-							<ClipboardList className="mt-0.5 h-4 w-4 shrink-0 text-indigo-500" aria-hidden />
-							<span>{report.analise_contexto}</span>
-						</div>
-
-						{/* 2. Lista de compras calculada pelo Motor Operacional */}
-						<div className="px-6 pt-5">
-							<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-500">
-								<Package className="h-4 w-4 text-indigo-500" aria-hidden /> Lista de Compras Calculada
-							</span>
-						</div>
-						<ul className="grid gap-3 p-6 pt-3">
-							{report.lista_insumos.map(entry => (
-								<li
-									key={entry.item}
-									className="flex items-start gap-4 rounded-2xl border border-gray-100 p-4 transition-shadow hover:shadow-sm"
-									data-testid="planner-item"
-								>
-									<span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-500">
-										<Package className="h-5 w-5" aria-hidden />
-									</span>
-									<div className="min-w-0">
-										<p className="text-sm font-semibold text-gray-900">{entry.item}</p>
-										<p className="mt-0.5 text-lg font-bold tracking-tight text-indigo-600">{entry.quantidade_calculada}</p>
-										<p className="mt-0.5 text-xs text-gray-400">{entry.motivo_margem_perda}</p>
-										<p className="mt-1 flex items-start gap-1 text-xs text-emerald-700">
-											<Sparkles className="mt-0.5 h-3 w-3 shrink-0" aria-hidden /> {entry.sugestao_qualidade}
-										</p>
-									</div>
-								</li>
-							))}
-						</ul>
-
-						{/* 3. Dica Estratégica — proteção de caixa, ocultos e tributação */}
-						<div className="mx-6 rounded-2xl bg-amber-50/60 p-5 ring-1 ring-inset ring-amber-100" data-testid="planner-insight">
-							<span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
-								<Lightbulb className="h-4 w-4" aria-hidden /> Dica Estratégica
-							</span>
-							<p className="mt-2 text-sm leading-relaxed text-amber-900">{report.dica_estrategica}</p>
-						</div>
-
-						<div className="mx-6 mt-4 flex items-start gap-2 rounded-xl bg-gray-50 p-4 text-xs leading-relaxed text-gray-500">
-							<Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" aria-hidden />
-							<span>
-								Estimativas de mercado para planejamento. Confirme preços e rendimentos com seus fornecedores antes de fechar o pedido.
-							</span>
-						</div>
-
-						<div className="flex flex-col gap-3 border-t border-gray-100 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-							<button type="button" onClick={restart} className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600">
-								<ArrowLeft className="h-4 w-4" aria-hidden /> Planejar outro projeto
-							</button>
-							<button
-								type="button"
-								onClick={() => setPhase('inputs')}
-								className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md"
-							>
-								<Wand2 className="h-4 w-4" aria-hidden /> Ajustar os números
-							</button>
-						</div>
-					</motion.section>
+						resultado={report}
+						titulo={nicheLabel}
+						subtitulo={template?.label ?? ''}
+						onRestart={restart}
+						onAdjust={() => setPhase('inputs')}
+					/>
 				)}
 			</AnimatePresence>
 		</div>
+	);
+}
+
+export interface PlannerResultsProps {
+	readonly resultado: ResultadoIA;
+	/** Contexto do cabeçalho (nicho escolhido no wizard). */
+	readonly titulo: string;
+	/** Serviço/subcategoria calculada. */
+	readonly subtitulo: string;
+	readonly onRestart: () => void;
+	readonly onAdjust: () => void;
+}
+
+/**
+ * Visualização premium do resultado da IA (mobile-first).
+ * Componente presentacional puro: recebe o ResultadoIA pronto e não conhece
+ * fetch nem estado do wizard — dá para plugar em qualquer tela.
+ */
+export function PlannerResults({ resultado, titulo, subtitulo, onRestart, onAdjust }: PlannerResultsProps): React.JSX.Element {
+	const [copied, setCopied] = useState(false);
+	const copyTimer = useRef<number | null>(null);
+
+	useEffect(() => () => {
+		if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+	}, []);
+
+	/** Lista pronta para colar no WhatsApp/fornecedor. */
+	const copyList = (): void => {
+		const text = [
+			`🛒 Lista de Compras — ${titulo} · ${subtitulo}`,
+			'',
+			...resultado.lista_insumos.map(entry => `• ${entry.item}: ${entry.quantidade_calculada} (${entry.motivo_margem_perda})`),
+			'',
+			`💡 ${resultado.dica_estrategica}`
+		].join('\n');
+		navigator.clipboard?.writeText(text).then(() => {
+			setCopied(true);
+			copyTimer.current = window.setTimeout(() => setCopied(false), 2000);
+		}).catch(() => {
+			// clipboard indisponível (http/permite negada): botão simplesmente não confirma
+		});
+	};
+
+	return (
+		<motion.section
+			initial={{ opacity: 0, scale: 0.97 }}
+			animate={{ opacity: 1, scale: 1 }}
+			exit={{ opacity: 0, scale: 0.98 }}
+			transition={{ duration: 0.3, ease: 'easeOut' }}
+			className="overflow-hidden rounded-2xl bg-white shadow-sm"
+			data-testid="planner-results"
+		>
+			<div className="border-b border-gray-100 bg-gradient-to-br from-indigo-50 to-white px-4 py-5 sm:px-6">
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-indigo-600 shadow-sm">
+						<ClipboardList className="h-3.5 w-3.5" aria-hidden /> Análise do Planejador
+					</span>
+					<span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200" data-testid="planner-live-badge">
+						Análise de IA em tempo real
+					</span>
+				</div>
+				<h2 className="mt-3 text-lg font-semibold tracking-tight text-gray-900">
+					{titulo} · <span className="text-gray-500">{subtitulo}</span>
+				</h2>
+			</div>
+
+			{/* 1. Análise de contexto: a IA mostra que entendeu a escala */}
+			<div className="mx-4 mt-5 flex items-start gap-2 rounded-xl bg-indigo-50/60 p-4 text-sm leading-relaxed text-indigo-900 sm:mx-6" data-testid="planner-context">
+				<ClipboardList className="mt-0.5 h-4 w-4 shrink-0 text-indigo-500" aria-hidden />
+				<span>{resultado.analise_contexto}</span>
+			</div>
+
+			{/* 2. Lista de compras calculada pelo Motor Operacional */}
+			<div className="flex items-center justify-between px-4 pt-5 sm:px-6">
+				<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-500">
+					<Package className="h-4 w-4 text-indigo-500" aria-hidden /> Lista de Compras Calculada
+				</span>
+				<button
+					type="button"
+					onClick={copyList}
+					data-testid="copy-list-button"
+					className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all ${
+						copied ? 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200' : 'bg-gray-100 text-gray-600 hover:bg-indigo-50 hover:text-indigo-600'
+					}`}
+				>
+					{copied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+					{copied ? 'Copiado!' : 'Copiar lista'}
+				</button>
+			</div>
+			<ul className="grid gap-3 p-4 pt-3 sm:p-6 sm:pt-3">
+				{resultado.lista_insumos.map((entry, index) => (
+					<motion.li
+						key={entry.item}
+						initial={{ opacity: 0, y: 8 }}
+						animate={{ opacity: 1, y: 0 }}
+						transition={{ duration: 0.25, delay: 0.05 * index, ease: 'easeOut' }}
+						className="flex items-start gap-3 rounded-2xl border border-gray-100 p-4 transition-shadow hover:shadow-sm sm:gap-4"
+						data-testid="planner-item"
+					>
+						<span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-500">
+							<Package className="h-5 w-5" aria-hidden />
+						</span>
+						<div className="min-w-0 flex-1">
+							<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+								<p className="text-sm font-semibold leading-snug text-gray-900">{entry.item}</p>
+								<p className="text-lg font-bold tracking-tight text-indigo-600">{entry.quantidade_calculada}</p>
+							</div>
+							<p className="mt-1 flex items-start gap-1 text-xs leading-relaxed text-amber-700">
+								<AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden /> {entry.motivo_margem_perda}
+							</p>
+							<p className="mt-1 flex items-start gap-1 text-xs leading-relaxed text-emerald-700">
+								<Sparkles className="mt-0.5 h-3 w-3 shrink-0" aria-hidden /> {entry.sugestao_qualidade}
+							</p>
+						</div>
+					</motion.li>
+				))}
+			</ul>
+
+			{/* 3. Dica Estratégica — proteção de caixa, ocultos e tributação */}
+			<div className="mx-4 rounded-2xl bg-amber-50/60 p-5 ring-1 ring-inset ring-amber-100 sm:mx-6" data-testid="planner-insight">
+				<span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
+					<Lightbulb className="h-4 w-4" aria-hidden /> Dica Estratégica
+				</span>
+				<p className="mt-2 text-sm leading-relaxed text-amber-900">{resultado.dica_estrategica}</p>
+			</div>
+
+			<div className="mx-4 mt-4 flex items-start gap-2 rounded-xl bg-gray-50 p-4 text-xs leading-relaxed text-gray-500 sm:mx-6">
+				<Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+				<span>
+					Estimativas de mercado para planejamento. Confirme preços e rendimentos com seus fornecedores antes de fechar o pedido.
+				</span>
+			</div>
+
+			<div className="flex flex-col gap-3 border-t border-gray-100 px-4 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+				<button type="button" onClick={onRestart} className="inline-flex items-center justify-center gap-1.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600 sm:justify-start">
+					<ArrowLeft className="h-4 w-4" aria-hidden /> Planejar outro projeto
+				</button>
+				<button
+					type="button"
+					onClick={onAdjust}
+					className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md"
+				>
+					<Wand2 className="h-4 w-4" aria-hidden /> Ajustar os números
+				</button>
+			</div>
+		</motion.section>
 	);
 }
 

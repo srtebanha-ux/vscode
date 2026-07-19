@@ -618,7 +618,7 @@ try {
 	// cirúrgico de volume. A lista de materiais agora vem da IA real (Regra de
 	// Ouro), então os templates não carregam mais catálogo local.
 	const plannerMod = await import('./modules-library/essentials/construction-calculator/dist/SupplyPlanner.js');
-	const { NICHES, CUSTOM_TEMPLATES, SEGMENTS } = plannerMod;
+	const { NICHES, CUSTOM_TEMPLATES, PROFILES } = plannerMod;
 	assert.equal(NICHES.length, 8, 'oito nichos principais');
 	for (const nicheOption of NICHES) {
 		assert.ok(nicheOption.templates.length >= 4, `nicho ${nicheOption.id} precisa de >= 4 templates (tem ${nicheOption.templates.length})`);
@@ -651,8 +651,91 @@ try {
 	const tatuagem = NICHES.find(option => option.id === 'tatuagem');
 	assert.ok(tatuagem.templates.some(option => /Biossegurança/.test(option.label)));
 	assert.ok(CUSTOM_TEMPLATES.length >= 4, 'nicho customizado tem templates universais');
-	// Regra de Ouro nº 2: os três tiers de insumo disponíveis na UI
-	assert.deepEqual(SEGMENTS.map(option => option.id), ['Popular', 'Intermediário', 'Premium']);
+	// Perfil operacional: os dois modos de compra disponíveis na UI
+	assert.deepEqual(PROFILES.map(option => option.id), ['Custo-Benefício', 'Especializado']);
+
+	// PlannerResults: componente presentacional puro (renderiza o ResultadoIA
+	// sem serviços do Core) — dá para plugar em qualquer tela.
+	const { PlannerResults } = plannerMod;
+	const resultadoFixture = {
+		analise_contexto: 'Cálculo operacional para 100 pizzas no perfil Custo-Benefício.',
+		lista_insumos: [
+			{ item: 'Farinha de Trigo Tipo 1', quantidade_calculada: '28 kg', motivo_margem_perda: 'Inclui 12% para perda na sova.', sugestao_qualidade: 'Moinhos nacionais rendem mais por real.' }
+		],
+		dica_estrategica: 'Provisione a faixa do Simples Nacional para não corroer a margem.'
+	};
+	const resultsHtml = renderToStaticMarkup(createElement(PlannerResults, {
+		resultado: resultadoFixture, titulo: 'Alimentação & Gastronomia', subtitulo: 'Pizzaria',
+		onRestart: () => {}, onAdjust: () => {}
+	}));
+	assert.match(resultsHtml, /data-testid="planner-context"/);
+	assert.match(resultsHtml, /100 pizzas/);
+	assert.match(resultsHtml, /28 kg/);
+	assert.match(resultsHtml, /12% para perda na sova/);
+	assert.match(resultsHtml, /Moinhos nacionais/);
+	assert.match(resultsHtml, /Dica Estratégica/);
+	assert.match(resultsHtml, /Simples Nacional/);
+	assert.match(resultsHtml, /Copiar lista/, 'botão de copiar para WhatsApp/fornecedor');
+	assert.match(resultsHtml, /Análise de IA em tempo real/);
+
+	// Virtual CMO: onboarding didático (boas-vindas + como funciona + dores reais)
+	const cmoMod = await import('./modules-library/virtual-cmo/dist/VirtualCMO_Agent.js');
+	const { default: VirtualCMO_Agent, CMO_GOALS, HOW_IT_WORKS, buildCampaign } = cmoMod;
+	const cmoHtml = withServices(VirtualCMO_Agent, ['read:insights', 'write:insights']);
+	assert.match(cmoHtml, /Conheça seu Novo Diretor de Marketing/);
+	assert.match(cmoHtml, /sua agência de bolso/);
+	assert.match(cmoHtml, /Como funciona/i);
+	assert.match(cmoHtml, /Escolha o Objetivo/);
+	assert.match(cmoHtml, /A IA Trabalha/);
+	assert.match(cmoHtml, /Você Publica/);
+	assert.match(cmoHtml, /O que vamos resolver hoje\?/);
+	assert.match(cmoHtml, /Quero atrair novos clientes/);
+	assert.match(cmoHtml, /Preciso de caixa rápido/);
+	assert.match(cmoHtml, /Quero fidelizar quem já comprou/);
+	assert.match(cmoHtml, /Não sei o que postar no Instagram/);
+	assert.doesNotMatch(cmoHtml, /<textarea/, 'boas-vindas sem texto livre (zero tela em branco)');
+	assert.equal(HOW_IT_WORKS.length, 3);
+	assert.equal(CMO_GOALS.length, 4);
+	for (const goalOption of CMO_GOALS) {
+		assert.ok(goalOption.microcopy.length > 20, `microcopy do objetivo ${goalOption.id}`);
+	}
+	// Fail-closed: sem escopos de insights, acesso negado
+	assert.match(withServices(VirtualCMO_Agent, []), /Acesso negado/);
+
+	// Motor simulado por objetivo: cada dor gera peças diferentes
+	const fidelizar = buildCampaign('fidelizar', 'tatuagem', 'jovens da região');
+	assert.match(fidelizar.pecasTitulo, /WhatsApp/);
+	assert.ok(fidelizar.pecas.every(peca => peca.includes('[nome]') || /indica/i.test(peca)));
+	const promocao = buildCampaign('promocao', 'marmitas fitness', 'quem treina');
+	assert.match(promocao.pecas.join(' '), /sexta/i, 'promoção tem prazo/urgência');
+	const conteudo = buildCampaign('conteudo', 'bolos decorados', 'noivas');
+	assert.match(conteudo.pecas.join(' '), /Segunda.*Quarta.*Sexta/s, 'cardápio semanal de posts');
+	const atrair = buildCampaign('atrair', 'consultoria', 'PMEs');
+	assert.match(atrair.diagnostico, /não te conhece|nunca ouviu falar/);
+
+	// MarketingPlanView: plano guiado dia a dia para leigo total
+	const { buildPlanoCampanha } = cmoMod;
+	const { MarketingPlanView } = await import('./modules-library/virtual-cmo/dist/MarketingPlanView.js');
+	const plano = buildPlanoCampanha('promocao', 'marmitas fitness', 'quem treina');
+	assert.equal(plano.titulo_campanha, 'Semana do Caixa Rápido');
+	assert.equal(plano.acoes.length, 4, '3 peças + texto principal viram 4 ações');
+	assert.deepEqual(plano.acoes.map(acao => acao.dia_postagem), ['Hoje', 'Amanhã', 'Sexta-feira', 'Sábado']);
+	assert.ok(plano.acoes.every(acao => acao.status === 'pendente'));
+	assert.ok(plano.acoes.every(acao => acao.direcao_visual.length > 20), 'toda ação tem direção visual para leigo');
+	assert.match(plano.acoes[0].direcao_visual, /mesa bem iluminada/, 'instrução de foto em linguagem de gente');
+	assert.equal(plano.acoes[1].formato, 'Mensagem de WhatsApp');
+
+	const planHtml = renderToStaticMarkup(createElement(MarketingPlanView, { plano }));
+	assert.match(planHtml, /Semana do Caixa Rápido/);
+	assert.match(planHtml, /0 de 4 feitas/, 'barra de progresso começa zerada');
+	assert.match(planHtml, /Hoje/);
+	assert.match(planHtml, /Sexta-feira/);
+	assert.match(planHtml, /O que fazer/i);
+	assert.match(planHtml, /Texto pronto — é só copiar/);
+	assert.match(planHtml, /Gostei do texto, aprovar/, 'primeiro passo do ciclo de status');
+	// Plano de fidelização é só WhatsApp — sem exigir produção de foto complexa
+	const planoFidelizar = buildPlanoCampanha('fidelizar', 'tatuagem', 'jovens');
+	assert.ok(planoFidelizar.acoes.slice(0, 3).every(acao => acao.formato === 'Mensagem de WhatsApp'));
 
 	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
 	assert.match(receipt, /Recibo de Prestação de Serviço/);
@@ -1425,44 +1508,50 @@ try {
 		await writeFile(compiled, outputFiles[0].text);
 		const { default: handler, parseSupplyPlan, runSupplyPlanner, readBody, PLANNER_SYSTEM_PROMPT } = await import(pathToFileURL(compiled).href);
 
-		// System prompt do Analista de Suprimentos: métricas por nicho, perda e consumo oculto
-		assert.match(PLANNER_SYSTEM_PROMPT, /motor de cálculo do Lidar Core/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /Precisão por Nicho/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /caixas de papelão/); // métrica de pizzaria
-		assert.match(PLANNER_SYSTEM_PROMPT, /tijolos por m²/); // métrica de obra
-		assert.match(PLANNER_SYSTEM_PROMPT, /gramas de descolorante/); // métrica de beleza
-		assert.match(PLANNER_SYSTEM_PROMPT, /Margem de Perda/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /Consumo Oculto/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /REGRA ESTRITA DE SAÍDA \(FORMATO JSON\)/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /NÃO DEVE retornar nenhum texto, saudação ou explicação em Markdown/);
-		assert.match(PLANNER_SYSTEM_PROMPT, /"dica_estrategica"/);
+		// System prompt do Motor de Cálculo e Planejamento Operacional
+		assert.match(PLANNER_SYSTEM_PROMPT, /Motor de Cálculo e Planejamento Operacional do Lidar Core/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /REGRA DE OURO DA MATEMÁTICA/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /Use Rendimento Real/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /sacos de cimento \(50kg\)/); // rendimento de obra
+		assert.match(PLANNER_SYSTEM_PROMPT, /gramas de farinha, queijo e ml de molho por pizza/); // rendimento de pizzaria
+		assert.match(PLANNER_SYSTEM_PROMPT, /Fator de Perda \(Quebra\)/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /10% a 15%/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /Adequação ao Perfil/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /Custo-Benefício/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /REGRA DE PRECIFICAÇÃO E TRIBUTAÇÃO \(CRÍTICO\)/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /Simples Nacional/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /FORMATO DE SAÍDA OBRIGATÓRIO \(JSON STRICT\)/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /"analise_contexto"/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /"motivo_margem_perda"/);
+		assert.match(PLANNER_SYSTEM_PROMPT, /"sugestao_qualidade"/);
 
-		// parseSupplyPlan: contrato { materiais[], dica_estrategica } fail-closed
-		const goodJson = '{"materiais":[{"nome":"Farinha de Trigo","quantidade":15,"unidade":"kg","observacao":"Inclui 5% de margem de perda. Suficiente para 50 massas."},{"nome":"Caixa de Pizza 35cm","quantidade":50,"unidade":"unidades","observacao":"Embalagem para entrega."}],"dica_estrategica":"Comprar farinha em sacos de 25kg no atacado reduz o custo em ~15%."}';
+		// parseSupplyPlan: contrato { analise_contexto, lista_insumos[], dica_estrategica }
+		const goodJson = '{"analise_contexto":"Entendi: produção mensal de 100 pizzas em operação Custo-Benefício.","lista_insumos":[{"item":"Farinha de Trigo Tipo 1","quantidade_calculada":"30 kg","motivo_margem_perda":"Inclui 10% de margem para perda na sova.","sugestao_qualidade":"Farinha de saco de 25kg rende mais por real no perfil Custo-Benefício."},{"item":"Caixa de Pizza 35cm","quantidade_calculada":"105 unidades","motivo_margem_perda":"Inclui 5% para avarias no transporte.","sugestao_qualidade":"Compre pacote fechado com 50 unidades."}],"dica_estrategica":"Embuta o custo dos insumos + 12% de perdas no preço final e provisione a faixa do Simples Nacional para não corroer a margem."}';
 		const parsed = parseSupplyPlan('claro! ' + goodJson + ' pronto');
-		assert.equal(parsed.materiais.length, 2);
-		assert.equal(parsed.materiais[0].quantidade, 15);
-		assert.equal(parsed.materiais[0].unidade, 'kg');
-		assert.match(parsed.dica_estrategica, /atacado/);
+		assert.match(parsed.analise_contexto, /100 pizzas/);
+		assert.equal(parsed.lista_insumos.length, 2);
+		assert.equal(parsed.lista_insumos[0].quantidade_calculada, '30 kg');
+		assert.match(parsed.lista_insumos[0].sugestao_qualidade, /Custo-Benefício/);
+		assert.match(parsed.dica_estrategica, /Simples Nacional/);
 		assert.throws(() => parseSupplyPlan('sem json'), /sem JSON/);
-		assert.throws(() => parseSupplyPlan('{"materiais":[],"dica_estrategica":"x"}'), /materiais vazia/);
-		assert.throws(() => parseSupplyPlan('{"materiais":[{"nome":"a","quantidade":5,"unidade":"kg","observacao":"b"}]}'), /dica estratégica/);
+		assert.throws(() => parseSupplyPlan('{"analise_contexto":"x","lista_insumos":[],"dica_estrategica":"y"}'), /insumos vazia/);
+		assert.throws(() => parseSupplyPlan('{"lista_insumos":[{"item":"a","quantidade_calculada":"b","motivo_margem_perda":"c","sugestao_qualidade":"d"}],"dica_estrategica":"y"}'), /contexto ausente/);
 
-		// readBody: { nicho, subcategoria, descricao_usuario } + contexto opcional
-		const fullBody = { nicho: 'Alimentação & Gastronomia', subcategoria: 'Pizzaria', descricao_usuario: '50 pizzas de mussarela' };
+		// readBody: { nicho, servico_selecionado, detalhes_volume, perfil_operacional } + contexto
+		const fullBody = { nicho: 'Alimentação & Gastronomia', servico_selecionado: 'Pizzaria', detalhes_volume: '100 pizzas', perfil_operacional: 'Custo-Benefício' };
 		assert.deepEqual(readBody(fullBody), fullBody);
-		const withContext = readBody({ ...fullBody, localizacao: 'Moema, SP', segmento_servico: 'Premium', marca_insumo_preferencial: 'Wella' });
+		const withContext = readBody({ ...fullBody, localizacao: 'Moema, SP', marca_insumo_preferencial: 'Wella' });
 		assert.equal(withContext.localizacao, 'Moema, SP');
 		assert.equal(withContext.marca_insumo_preferencial, 'Wella');
-		assert.equal(readBody({ nicho: 'Alimentação', subcategoria: 'Pizzaria' }), null); // faltou descricao_usuario
-		assert.equal(readBody({ nicho: 'A', subcategoria: 'Pizzaria', descricao_usuario: '50 pizzas' }), null); // nicho curto
+		assert.equal(readBody({ ...fullBody, perfil_operacional: 'Luxo' }), null); // perfil fora do domínio
+		assert.equal(readBody({ nicho: 'Alimentação', servico_selecionado: 'Pizzaria', perfil_operacional: 'Especializado' }), null); // faltou volume
 		assert.equal(readBody('lixo'), null);
 
 		// runSupplyPlanner: núcleo com modelo fake (sem rede) -> resultado tipado
 		const fakeModel = text => ({ generateContent: async () => ({ response: { text: () => text } }) });
 		const result = await runSupplyPlanner(fakeModel(goodJson), fullBody);
-		assert.equal(result.materiais[1].nome, 'Caixa de Pizza 35cm');
-		assert.equal(result.materiais[1].quantidade, 50);
+		assert.equal(result.lista_insumos[1].item, 'Caixa de Pizza 35cm');
+		assert.match(result.lista_insumos[1].motivo_margem_perda, /avarias/);
 
 		// Handler: método, corpo e chave — fail-closed com JSON
 		const mockRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
@@ -1475,7 +1564,7 @@ try {
 		res = mockRes();
 		await handler({ method: 'POST', body: { nicho: 'Alimentação' } }, res); // corpo incompleto
 		assert.equal(res.code, 400);
-		assert.match(res.payload.error, /nicho, subcategoria e descricao_usuario/);
+		assert.match(res.payload.error, /perfil_operacional/);
 
 		res = mockRes();
 		await handler({ method: 'POST', body: fullBody }, res);

@@ -2,36 +2,36 @@ import { useEffect, useRef, useState } from 'react';
 import { hasScopes, useCoreService, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
-import { AlertTriangle, ArrowLeft, ArrowRight, Boxes, Check, ClipboardList, Info, Lightbulb, MapPin, Package, RefreshCw, Search, ShieldAlert, Sparkles, Wand2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, Boxes, Check, ClipboardList, Copy, Info, Lightbulb, MapPin, Package, RefreshCw, Search, ShieldAlert, Sparkles, Wand2 } from 'lucide-react';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['ui:render'];
 const MODULE_ID = 'construction-calculator-v1';
 const PLANNER_ENDPOINT = '/api/supply-planner';
 
-const qty = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 });
+export type OperationalProfile = 'Custo-Benefício' | 'Especializado';
 
-export type ServiceSegment = 'Popular' | 'Intermediário' | 'Premium';
-
-export const SEGMENTS: readonly { readonly id: ServiceSegment; readonly label: string; readonly hint: string }[] = [
-	{ id: 'Popular', label: 'Popular', hint: 'Preço acessível, alto volume' },
-	{ id: 'Intermediário', label: 'Intermediário', hint: 'Custo-benefício equilibrado' },
-	{ id: 'Premium', label: 'Premium', hint: 'Marca profissional, ticket alto' }
+export const PROFILES: readonly { readonly id: OperationalProfile; readonly label: string; readonly hint: string }[] = [
+	{ id: 'Custo-Benefício', label: 'Custo-Benefício', hint: 'Insumos focados em rendimento e economia' },
+	{ id: 'Especializado', label: 'Especializado', hint: 'Marcas profissionais/premium' }
 ];
 
-/** Um material calculado pelo Analista de Suprimentos (IA). */
-export interface PlannerMaterial {
-	readonly nome: string;
-	readonly quantidade: number;
-	readonly unidade: string;
-	readonly observacao: string;
+/** Um insumo calculado pelo Motor de Planejamento Operacional (IA). */
+export interface Insumo {
+	readonly item: string;
+	readonly quantidade_calculada: string;
+	readonly motivo_margem_perda: string;
+	readonly sugestao_qualidade: string;
 }
 
-/** Resposta da rota /api/supply-planner: lista exata + dica estratégica. */
-export interface PlannerReport {
-	readonly materiais: readonly PlannerMaterial[];
+/** Contrato de resultado devolvido pela IA (rota /api/supply-planner). */
+export interface ResultadoIA {
+	readonly analise_contexto: string;
+	readonly lista_insumos: readonly Insumo[];
 	readonly dica_estrategica: string;
-	readonly engine: 'gemini';
 }
+
+/** Resultado carimbado com a origem (nunca renderizamos dado sem origem). */
+export type PlannerReport = ResultadoIA & { readonly engine: 'gemini' };
 
 /** Campo numérico cirúrgico exibido no Passo 3 — texto claro e empático. */
 export interface TemplateField {
@@ -186,21 +186,22 @@ export const CUSTOM_TEMPLATES: readonly PlannerTemplate[] = [
 
 /** Contrato bruto da rota (a IA não devolve o campo engine — nós carimbamos). */
 interface PlannerApi {
-	readonly materiais: readonly PlannerMaterial[];
+	readonly analise_contexto: string;
+	readonly lista_insumos: readonly Insumo[];
 	readonly dica_estrategica: string;
 }
 
 /**
- * Fonte ÚNICA de verdade: a rota real /api/supply-planner (Analista de
- * Suprimentos via Gemini). SEM fallback, SEM números inventados — falha vira
- * erro transparente na tela.
+ * Fonte ÚNICA de verdade: a rota real /api/supply-planner (Motor de Cálculo e
+ * Planejamento Operacional via Gemini). SEM fallback, SEM números inventados —
+ * falha vira erro transparente na tela.
  */
 async function askPlanner(payload: {
 	readonly nicho: string;
-	readonly subcategoria: string;
-	readonly descricao_usuario: string;
+	readonly servico_selecionado: string;
+	readonly detalhes_volume: string;
+	readonly perfil_operacional: OperationalProfile;
 	readonly localizacao?: string;
-	readonly segmento_servico?: ServiceSegment;
 	readonly marca_insumo_preferencial?: string;
 }): Promise<PlannerReport> {
 	const response = await fetch(PLANNER_ENDPOINT, {
@@ -215,10 +216,10 @@ async function askPlanner(payload: {
 	if (!response.ok) {
 		throw new Error(data.error ?? `Falha na análise (HTTP ${response.status}).`);
 	}
-	if (!Array.isArray(data.materiais) || data.materiais.length === 0 || typeof data.dica_estrategica !== 'string') {
+	if (typeof data.analise_contexto !== 'string' || !Array.isArray(data.lista_insumos) || data.lista_insumos.length === 0 || typeof data.dica_estrategica !== 'string') {
 		throw new Error('A resposta da API veio fora do formato esperado.');
 	}
-	return { materiais: data.materiais, dica_estrategica: data.dica_estrategica, engine: 'gemini' };
+	return { analise_contexto: data.analise_contexto, lista_insumos: data.lista_insumos, dica_estrategica: data.dica_estrategica, engine: 'gemini' };
 }
 
 type Phase = 'niche' | 'template' | 'inputs' | 'loading' | 'error' | 'result';
@@ -265,7 +266,7 @@ function Planner(): React.JSX.Element {
 	const [customService, setCustomService] = useState('');
 	const [volume, setVolume] = useState('');
 	const [location, setLocation] = useState('');
-	const [segment, setSegment] = useState<ServiceSegment | null>(null);
+	const [profile, setProfile] = useState<OperationalProfile | null>(null);
 	const [brand, setBrand] = useState('');
 	// Sem dados até a IA responder: null = aguardando (zero número inventado).
 	const [report, setReport] = useState<PlannerReport | null>(null);
@@ -292,7 +293,7 @@ function Planner(): React.JSX.Element {
 	const parsedVolume = Number(volume.replace(',', '.'));
 	const volumeOk = Number.isFinite(parsedVolume) && parsedVolume > 0;
 	const locationOk = location.trim().length >= 2;
-	const inputsOk = volumeOk && locationOk && segment !== null;
+	const inputsOk = volumeOk && locationOk && profile !== null;
 
 	const pickNiche = (option: PlannerNiche): void => {
 		setNiche(option);
@@ -336,7 +337,7 @@ function Planner(): React.JSX.Element {
 
 	/** Único gatilho do fetch real; limpa o estado anterior antes de buscar. */
 	const generate = (): void => {
-		if (!template || !inputsOk || segment === null) return;
+		if (!template || !inputsOk || profile === null) return;
 		setReport(null);
 		setErrorMessage(null);
 		setPhase('loading');
@@ -348,17 +349,17 @@ function Planner(): React.JSX.Element {
 		Promise.all([
 			askPlanner({
 				nicho: nicheLabel,
-				subcategoria: template.label,
-				// Ex.: "800 pizzas — Pizzaria" / "30 m² — Paredes, Alvenaria e Muros"
-				descricao_usuario: `${parsedVolume} ${suffix} — ${template.label}`,
+				servico_selecionado: template.label,
+				// Ex.: "800 pizzas" / "75 m²" — a escala do projeto
+				detalhes_volume: `${parsedVolume} ${suffix}`,
+				perfil_operacional: profile,
 				localizacao: location.trim(),
-				segmento_servico: segment,
 				...(brandTrim ? { marca_insumo_preferencial: brandTrim } : {})
 			}),
 			minDelay
 		])
 			.then(([plannerReport]) => {
-				track('Lista de Compras Gerada', { moduleId: MODULE_ID, niche: niche?.id ?? CUSTOM_NICHE_ID, template: template.id, segmento: segment });
+				track('Lista de Compras Gerada', { moduleId: MODULE_ID, niche: niche?.id ?? CUSTOM_NICHE_ID, template: template.id, perfil: profile });
 				setReport(plannerReport);
 				setPhase('result');
 			})
@@ -381,7 +382,7 @@ function Planner(): React.JSX.Element {
 		setCustomService('');
 		setVolume('');
 		setLocation('');
-		setSegment(null);
+		setProfile(null);
 		setBrand('');
 		setReport(null);
 		setErrorMessage(null);
@@ -635,22 +636,22 @@ function Planner(): React.JSX.Element {
 							</label>
 
 							<div>
-								<span className="mb-1.5 block text-sm font-medium text-gray-700">Estamos falando de um serviço popular ou premium nesta região?</span>
-								<div className="grid grid-cols-3 gap-2">
-									{SEGMENTS.map(option => (
+								<span className="mb-1.5 block text-sm font-medium text-gray-700">Qual é o perfil da sua operação?</span>
+								<div className="grid grid-cols-2 gap-2">
+									{PROFILES.map(option => (
 										<button
 											key={option.id}
 											type="button"
-											onClick={() => setSegment(option.id)}
-											data-testid={`segment-${option.id}`}
-											aria-pressed={segment === option.id}
+											onClick={() => setProfile(option.id)}
+											data-testid={`profile-${option.id}`}
+											aria-pressed={profile === option.id}
 											className={`rounded-xl border p-3 text-left transition-all ${
-												segment === option.id
+												profile === option.id
 													? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-100'
 													: 'border-gray-200 bg-white hover:border-indigo-300'
 											}`}
 										>
-											<span className={`block text-sm font-semibold ${segment === option.id ? 'text-indigo-600' : 'text-gray-900'}`}>{option.label}</span>
+											<span className={`block text-sm font-semibold ${profile === option.id ? 'text-indigo-600' : 'text-gray-900'}`}>{option.label}</span>
 											<span className="mt-0.5 block text-[11px] leading-snug text-gray-400">{option.hint}</span>
 										</button>
 									))}
@@ -754,87 +755,163 @@ function Planner(): React.JSX.Element {
 				)}
 
 				{phase === 'result' && report && (
-					<motion.section
+					<PlannerResults
 						key="result"
-						initial={{ opacity: 0, scale: 0.97 }}
-						animate={{ opacity: 1, scale: 1 }}
-						exit={{ opacity: 0, scale: 0.98 }}
-						transition={{ duration: 0.3, ease: 'easeOut' }}
-						className="overflow-hidden rounded-2xl bg-white shadow-sm"
-						data-testid="planner-results"
-					>
-						<div className="border-b border-gray-100 bg-gradient-to-br from-indigo-50 to-white px-6 py-5">
-							<div className="flex items-center justify-between gap-2">
-								<span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-indigo-600 shadow-sm">
-									<ClipboardList className="h-3.5 w-3.5" aria-hidden /> Análise do Planejador
-								</span>
-								<span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200" data-testid="planner-live-badge">
-									Análise de IA em tempo real
-								</span>
-							</div>
-							<h2 className="mt-3 text-lg font-semibold tracking-tight text-gray-900">
-								{nicheLabel} · <span className="text-gray-500">{template?.label}</span>
-							</h2>
-						</div>
-
-						{/* 1. Lista de Materiais calculada pelo Analista de Suprimentos */}
-						<div className="px-6 pt-5">
-							<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-500">
-								<Package className="h-4 w-4 text-indigo-500" aria-hidden /> Lista de Materiais Calculada
-							</span>
-						</div>
-						<ul className="grid gap-3 p-6 pt-3">
-							{report.materiais.map(item => (
-								<li
-									key={item.nome}
-									className="flex items-start gap-4 rounded-2xl border border-gray-100 p-4 transition-shadow hover:shadow-sm"
-									data-testid="planner-item"
-								>
-									<span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-500">
-										<Package className="h-5 w-5" aria-hidden />
-									</span>
-									<div className="min-w-0">
-										<p className="text-sm font-semibold text-gray-900">{item.nome}</p>
-										<p className="mt-0.5 text-lg font-bold tracking-tight text-indigo-600">
-											{qty.format(item.quantidade)} <span className="text-sm font-semibold text-indigo-400">{item.unidade}</span>
-										</p>
-										<p className="mt-0.5 text-xs text-gray-400">{item.observacao}</p>
-									</div>
-								</li>
-							))}
-						</ul>
-
-						{/* 2. Dica Estratégica — o ouro consultivo da IA */}
-						<div className="mx-6 rounded-2xl bg-amber-50/60 p-5 ring-1 ring-inset ring-amber-100" data-testid="planner-insight">
-							<span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
-								<Lightbulb className="h-4 w-4" aria-hidden /> Dica Estratégica
-							</span>
-							<p className="mt-2 text-sm leading-relaxed text-amber-900">{report.dica_estrategica}</p>
-						</div>
-
-						<div className="mx-6 mt-4 flex items-start gap-2 rounded-xl bg-gray-50 p-4 text-xs leading-relaxed text-gray-500">
-							<Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" aria-hidden />
-							<span>
-								Estimativas de mercado para planejamento. Confirme preços e rendimentos com seus fornecedores antes de fechar o pedido.
-							</span>
-						</div>
-
-						<div className="flex flex-col gap-3 border-t border-gray-100 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-							<button type="button" onClick={restart} className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600">
-								<ArrowLeft className="h-4 w-4" aria-hidden /> Planejar outro projeto
-							</button>
-							<button
-								type="button"
-								onClick={() => setPhase('inputs')}
-								className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md"
-							>
-								<Wand2 className="h-4 w-4" aria-hidden /> Ajustar os números
-							</button>
-						</div>
-					</motion.section>
+						resultado={report}
+						titulo={nicheLabel}
+						subtitulo={template?.label ?? ''}
+						onRestart={restart}
+						onAdjust={() => setPhase('inputs')}
+					/>
 				)}
 			</AnimatePresence>
 		</div>
+	);
+}
+
+export interface PlannerResultsProps {
+	readonly resultado: ResultadoIA;
+	/** Contexto do cabeçalho (nicho escolhido no wizard). */
+	readonly titulo: string;
+	/** Serviço/subcategoria calculada. */
+	readonly subtitulo: string;
+	readonly onRestart: () => void;
+	readonly onAdjust: () => void;
+}
+
+/**
+ * Visualização premium do resultado da IA (mobile-first).
+ * Componente presentacional puro: recebe o ResultadoIA pronto e não conhece
+ * fetch nem estado do wizard — dá para plugar em qualquer tela.
+ */
+export function PlannerResults({ resultado, titulo, subtitulo, onRestart, onAdjust }: PlannerResultsProps): React.JSX.Element {
+	const [copied, setCopied] = useState(false);
+	const copyTimer = useRef<number | null>(null);
+
+	useEffect(() => () => {
+		if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+	}, []);
+
+	/** Lista pronta para colar no WhatsApp/fornecedor. */
+	const copyList = (): void => {
+		const text = [
+			`🛒 Lista de Compras — ${titulo} · ${subtitulo}`,
+			'',
+			...resultado.lista_insumos.map(entry => `• ${entry.item}: ${entry.quantidade_calculada} (${entry.motivo_margem_perda})`),
+			'',
+			`💡 ${resultado.dica_estrategica}`
+		].join('\n');
+		navigator.clipboard?.writeText(text).then(() => {
+			setCopied(true);
+			copyTimer.current = window.setTimeout(() => setCopied(false), 2000);
+		}).catch(() => {
+			// clipboard indisponível (http/permite negada): botão simplesmente não confirma
+		});
+	};
+
+	return (
+		<motion.section
+			initial={{ opacity: 0, scale: 0.97 }}
+			animate={{ opacity: 1, scale: 1 }}
+			exit={{ opacity: 0, scale: 0.98 }}
+			transition={{ duration: 0.3, ease: 'easeOut' }}
+			className="overflow-hidden rounded-2xl bg-white shadow-sm"
+			data-testid="planner-results"
+		>
+			<div className="border-b border-gray-100 bg-gradient-to-br from-indigo-50 to-white px-4 py-5 sm:px-6">
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-indigo-600 shadow-sm">
+						<ClipboardList className="h-3.5 w-3.5" aria-hidden /> Análise do Planejador
+					</span>
+					<span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200" data-testid="planner-live-badge">
+						Análise de IA em tempo real
+					</span>
+				</div>
+				<h2 className="mt-3 text-lg font-semibold tracking-tight text-gray-900">
+					{titulo} · <span className="text-gray-500">{subtitulo}</span>
+				</h2>
+			</div>
+
+			{/* 1. Análise de contexto: a IA mostra que entendeu a escala */}
+			<div className="mx-4 mt-5 flex items-start gap-2 rounded-xl bg-indigo-50/60 p-4 text-sm leading-relaxed text-indigo-900 sm:mx-6" data-testid="planner-context">
+				<ClipboardList className="mt-0.5 h-4 w-4 shrink-0 text-indigo-500" aria-hidden />
+				<span>{resultado.analise_contexto}</span>
+			</div>
+
+			{/* 2. Lista de compras calculada pelo Motor Operacional */}
+			<div className="flex items-center justify-between px-4 pt-5 sm:px-6">
+				<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-500">
+					<Package className="h-4 w-4 text-indigo-500" aria-hidden /> Lista de Compras Calculada
+				</span>
+				<button
+					type="button"
+					onClick={copyList}
+					data-testid="copy-list-button"
+					className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-all ${
+						copied ? 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200' : 'bg-gray-100 text-gray-600 hover:bg-indigo-50 hover:text-indigo-600'
+					}`}
+				>
+					{copied ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+					{copied ? 'Copiado!' : 'Copiar lista'}
+				</button>
+			</div>
+			<ul className="grid gap-3 p-4 pt-3 sm:p-6 sm:pt-3">
+				{resultado.lista_insumos.map((entry, index) => (
+					<motion.li
+						key={entry.item}
+						initial={{ opacity: 0, y: 8 }}
+						animate={{ opacity: 1, y: 0 }}
+						transition={{ duration: 0.25, delay: 0.05 * index, ease: 'easeOut' }}
+						className="flex items-start gap-3 rounded-2xl border border-gray-100 p-4 transition-shadow hover:shadow-sm sm:gap-4"
+						data-testid="planner-item"
+					>
+						<span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-500">
+							<Package className="h-5 w-5" aria-hidden />
+						</span>
+						<div className="min-w-0 flex-1">
+							<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+								<p className="text-sm font-semibold leading-snug text-gray-900">{entry.item}</p>
+								<p className="text-lg font-bold tracking-tight text-indigo-600">{entry.quantidade_calculada}</p>
+							</div>
+							<p className="mt-1 flex items-start gap-1 text-xs leading-relaxed text-amber-700">
+								<AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden /> {entry.motivo_margem_perda}
+							</p>
+							<p className="mt-1 flex items-start gap-1 text-xs leading-relaxed text-emerald-700">
+								<Sparkles className="mt-0.5 h-3 w-3 shrink-0" aria-hidden /> {entry.sugestao_qualidade}
+							</p>
+						</div>
+					</motion.li>
+				))}
+			</ul>
+
+			{/* 3. Dica Estratégica — proteção de caixa, ocultos e tributação */}
+			<div className="mx-4 rounded-2xl bg-amber-50/60 p-5 ring-1 ring-inset ring-amber-100 sm:mx-6" data-testid="planner-insight">
+				<span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-700">
+					<Lightbulb className="h-4 w-4" aria-hidden /> Dica Estratégica
+				</span>
+				<p className="mt-2 text-sm leading-relaxed text-amber-900">{resultado.dica_estrategica}</p>
+			</div>
+
+			<div className="mx-4 mt-4 flex items-start gap-2 rounded-xl bg-gray-50 p-4 text-xs leading-relaxed text-gray-500 sm:mx-6">
+				<Info className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" aria-hidden />
+				<span>
+					Estimativas de mercado para planejamento. Confirme preços e rendimentos com seus fornecedores antes de fechar o pedido.
+				</span>
+			</div>
+
+			<div className="flex flex-col gap-3 border-t border-gray-100 px-4 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+				<button type="button" onClick={onRestart} className="inline-flex items-center justify-center gap-1.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600 sm:justify-start">
+					<ArrowLeft className="h-4 w-4" aria-hidden /> Planejar outro projeto
+				</button>
+				<button
+					type="button"
+					onClick={onAdjust}
+					className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md"
+				>
+					<Wand2 className="h-4 w-4" aria-hidden /> Ajustar os números
+				</button>
+			</div>
+		</motion.section>
 	);
 }
 

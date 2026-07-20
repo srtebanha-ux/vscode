@@ -34,7 +34,16 @@ const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
 export function MainLayout({ registry, currentPath, onNavigate, children, session, showAdmin = false }: MainLayoutProps): ReactElement {
 	const [collapsed, setCollapsed] = useState(false);
 	const [paletteOpen, setPaletteOpen] = useState(false);
-	const plugins = registry.list();
+	// Dedupe defensivo por id: mesmo que uma fonte futura de módulos registre
+	// o mesmo plugin duas vezes, o menu lateral nunca mostra item repetido.
+	const plugins = useMemo(() => {
+		const seen = new Set<string>();
+		return registry.list().filter(plugin => {
+			if (seen.has(plugin.id)) return false;
+			seen.add(plugin.id);
+			return true;
+		});
+	}, [registry]);
 
 	const navigate = (event: MouseEvent<HTMLAnchorElement>, path: string): void => {
 		event.preventDefault();

@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { Building2, Check, Loader2, Lock, Receipt, Rocket } from 'lucide-react';
 import { Tooltip, useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import type { AiArchitectResponse } from '../../api/ai-orchestrator';
-import { AVAILABLE_MODULES, CORE_BASE_PRICE, modulesForTier, readUserTier, type AvailableModule, type UserTier } from './catalog';
+import { AVAILABLE_MODULES, CORE_BASE_PRICE, modulesForTier, persistUserTier, readUserTier, type AvailableModule, type UserTier } from './catalog';
 import { MagicPrompt } from './components/MagicPrompt';
 import { computeMonthlyTotal, createCheckoutSession } from './services/stripeService';
 import { subscriptionStore, useSubscription } from './store/subscriptionStore';
@@ -227,7 +227,7 @@ export function Storefront({ tenantId }: { readonly tenantId: string }): ReactEl
 
 	const changeTier = (next: UserTier): void => {
 		setTier(next);
-		window.localStorage.setItem('userTier', next);
+		persistUserTier(next); // salva + avisa a sidebar na mesma aba (sem F5)
 		track('Marketplace Filtrado', { tier: next });
 	};
 

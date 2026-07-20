@@ -12,3 +12,4 @@ dist/
 .smoke-guardlib-*/
 .smoke-oraclegemini-*/
 .smoke-supplyplanner-*/
+.smoke-sidebar-*/

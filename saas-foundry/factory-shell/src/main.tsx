@@ -16,7 +16,7 @@ import { RoleGuardDemo } from './security/RoleGuardDemo';
 import { createPluginRegistry } from './pluginCatalog';
 import { LandingPage } from './public/LandingPage';
 import { SegmentPresentation } from './public/SegmentPresentation';
-import { readUserTier } from './catalog';
+import { persistUserTier, readUserTier } from './catalog';
 import { EnterpriseContact, type EnterpriseLead } from './public/EnterpriseContact';
 import { LeadMagnetTool } from './public-tools/LeadMagnetTool';
 import { PublicReceiptMaker } from './public-tools/PublicReceiptMaker';
@@ -108,7 +108,7 @@ function Root(): ReactElement {
 		return (
 			<LandingPage
 				onSelectTier={tier => {
-					window.localStorage.setItem('userTier', tier);
+					persistUserTier(tier);
 					router.navigate('/apresentacao');
 				}}
 				onEnter={() => router.navigate('/app')}

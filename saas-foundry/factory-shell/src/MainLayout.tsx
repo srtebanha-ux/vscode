@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
+import { readUserTier, USER_TIER_EVENT } from './catalog';
 import { Boxes, BrainCircuit, CircleDollarSign, Eye, FileText, GraduationCap, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
 
@@ -63,9 +64,23 @@ const IS_DEV: boolean = Boolean((import.meta.env as { readonly DEV?: boolean }).
 export function MainLayout({ registry, currentPath, onNavigate, children, session, showAdmin = false }: MainLayoutProps): ReactElement {
 	const [collapsed, setCollapsed] = useState(false);
 	const [paletteOpen, setPaletteOpen] = useState(false);
-	// Perfil ativo na navegação. Sem login plugado, começa em Enterprise (vê
-	// tudo); o switch de dev troca para PME e demonstra a filtragem.
-	const [viewProfile, setViewProfile] = useState<AccessProfile>('enterprise');
+	// Perfil ativo na navegação. Lazy init a partir da escolha persistida na
+	// Landing/Marketplace — assim a sidebar já abre no porte certo (sem F5).
+	// Sem escolha, começa em PME (visão enxuta). O switch de dev sobrescreve.
+	const [viewProfile, setViewProfile] = useState<AccessProfile>(() => readUserTier() ?? 'pme');
+
+	// Sincronização em tempo real: reage à escolha do porte feita em outra
+	// parte da view. `storage` cobre outras abas; o CustomEvent cobre a MESMA
+	// aba no instante do clique (o `storage` nativo não dispara nela).
+	useEffect(() => {
+		const sync = (): void => setViewProfile(readUserTier() ?? 'pme');
+		window.addEventListener('storage', sync);
+		window.addEventListener(USER_TIER_EVENT, sync);
+		return () => {
+			window.removeEventListener('storage', sync);
+			window.removeEventListener(USER_TIER_EVENT, sync);
+		};
+	}, []);
 
 	// Versões dos módulos efetivamente registrados (entitlement do tenant).
 	const registered = useMemo(() => {

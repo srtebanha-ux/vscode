@@ -25,11 +25,27 @@ export interface AvailableModule {
 /** Plataforma base; os motores enterprise carregam o ticket. */
 export const CORE_BASE_PRICE = 29.9;
 
+/** Chave única do porte escolhido (fonte de verdade compartilhada). */
+export const USER_TIER_KEY = 'userTier';
+/** Evento disparado ao trocar o porte — sincroniza a sidebar na mesma aba. */
+export const USER_TIER_EVENT = 'lidar:profile-change';
+
 /** Lê o tier escolhido na Landing (localStorage). Inválido/ausente -> null. */
 export function readUserTier(): UserTier | null {
 	if (typeof window === 'undefined') return null;
-	const stored = window.localStorage.getItem('userTier');
+	const stored = window.localStorage.getItem(USER_TIER_KEY);
 	return stored === 'pme' || stored === 'enterprise' ? stored : null;
+}
+
+/**
+ * Persiste o porte e AVISA a mesma aba na hora. O evento nativo `storage`
+ * só dispara em OUTRAS abas; para a sidebar reagir sem F5 no mesmo instante
+ * do clique, emitimos também um CustomEvent que ela escuta.
+ */
+export function persistUserTier(tier: UserTier): void {
+	if (typeof window === 'undefined') return;
+	window.localStorage.setItem(USER_TIER_KEY, tier);
+	window.dispatchEvent(new CustomEvent(USER_TIER_EVENT, { detail: tier }));
 }
 
 /** Marketplace filtrado: só o universo do usuário. Sem tier definido -> tudo. */

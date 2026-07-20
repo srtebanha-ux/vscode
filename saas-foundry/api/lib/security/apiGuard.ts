@@ -49,6 +49,15 @@ export type AuthResult =
 	| { readonly ok: true; readonly principal: Principal }
 	| { readonly ok: false; readonly response: Response };
 
+/**
+ * Type guard explícito da falha. O `if (!auth.ok)` só estreita a união com
+ * strictNullChecks ligado; um guard nomeado narrowa em QUALQUER tsconfig — a
+ * Vercel compila a pasta api/ sem strict, então esta forma é à prova de config.
+ */
+export function isAuthDenied(result: AuthResult): result is { readonly ok: false; readonly response: Response } {
+	return !result.ok;
+}
+
 class ConfigError extends Error {}
 
 /** Resolve o segredo do ambiente e recusa configurações inseguras (fail-closed). */
@@ -173,7 +182,7 @@ export function withApiGuard(
 ): (request: Request) => Promise<Response> {
 	return async (request: Request): Promise<Response> => {
 		const auth = authenticate(request, allowedRoles, options);
-		if (!auth.ok) return auth.response;
+		if (isAuthDenied(auth)) return auth.response;
 		return handler(request, auth.principal);
 	};
 }

@@ -1,0 +1,16 @@
+{
+  "//": "tsconfig das Serverless Functions. A raiz do monorepo é um solution file (só references, sem compilerOptions), então sem este arquivo o compilador de funções da Vercel caía nos defaults (sem strict/esModuleInterop) e quebrava o narrowing de uniões discriminadas. @vercel/node sobe a árvore a partir de cada função e encontra este tsconfig.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.ts"]
+}

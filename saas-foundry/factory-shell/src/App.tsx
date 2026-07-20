@@ -11,6 +11,8 @@ import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } fro
 import { MasterDashboard } from './admin/MasterDashboard';
 import { BillingPage } from './billing/BillingPage';
 import { DashboardHome } from './DashboardHome';
+import OnboardingHub from './OnboardingHub';
+import { readUserTier } from './catalog';
 import { TaxSettings } from './settings/TaxSettings';
 import type { UserRole } from './auth/AuthProvider';
 import { MainLayout, type SessionInfo } from './MainLayout';
@@ -138,6 +140,9 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 			: <DashboardHome email={session?.email} navigate={navigate} />;
 	} else if (path === '/marketplace' || path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
+	} else if (path === '/onboarding') {
+		// Hub de setup gamificado: trilha e vídeo master mudam com o perfil.
+		content = <OnboardingHub userProfile={readUserTier() ?? 'pme'} navigate={navigate} />;
 	} else if (path === '/settings/fiscal') {
 		content = <TaxSettings />;
 	} else if (path === '/billing') {

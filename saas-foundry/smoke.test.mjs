@@ -1575,4 +1575,45 @@ try {
 	}
 }
 
+// 38. OnboardingHub: hub gamificado com trilha e vídeo master por perfil
+{
+	const esbuild = await import('esbuild');
+	const dir = await mkdtemp(new URL('./.smoke-onboarding-', import.meta.url).pathname);
+	await writeFile(join(dir, 'entry.tsx'), "export { default as OnboardingHub } from '../factory-shell/src/OnboardingHub';\n");
+	try {
+		const bundled = await esbuild.build({
+			entryPoints: [join(dir, 'entry.tsx')],
+			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', jsx: 'automatic',
+			external: ['react', 'react-dom', 'react/jsx-runtime', 'framer-motion', 'lucide-react'],
+			define: { 'import.meta.env': '{}' }
+		});
+		const compiled = join(dir, 'bundle.mjs');
+		await writeFile(compiled, bundled.outputFiles[0].text);
+		const { OnboardingHub } = await import(pathToFileURL(compiled).href);
+
+		// PME: 4 passos, vídeo master de lucro, progresso zerado
+		const pme = renderToStaticMarkup(createElement(OnboardingHub, { userProfile: 'pme', navigate: () => {} }));
+		assert.match(pme, /Setup da Conta: 0 de 4 passos concluídos — 0%/);
+		assert.match(pme, /dobrar seu lucro operando no automático/);
+		assert.match(pme, /Configurar Perfil Operacional/);
+		assert.match(pme, /Dominar o Oráculo de Preços/);
+		assert.match(pme, /Sua 1ª Campanha no Virtual CMO/);
+		assert.match(pme, /Primeira Lista no Planejador/);
+		assert.match(pme, /data-testid="onboarding-master-video"/);
+		assert.equal((pme.match(/data-testid="onboarding-step"/g) ?? []).length, 4);
+
+		// Enterprise: 3 passos de governança, vídeo master de compliance
+		const ent = renderToStaticMarkup(createElement(OnboardingHub, { userProfile: 'enterprise', navigate: () => {} }));
+		assert.match(ent, /Setup da Conta: 0 de 3 passos concluídos — 0%/);
+		assert.match(ent, /Orquestração e Compliance para Grandes Operações/);
+		assert.match(ent, /Mapeamento de Filiais e Permissões/);
+		assert.match(ent, /Controladoria Enterprise/);
+		assert.match(ent, /DRE Preditivo/);
+		assert.doesNotMatch(ent, /Dominar o Oráculo de Preços/, 'trilha enterprise não mistura passos PME');
+		assert.equal((ent.match(/data-testid="onboarding-step"/g) ?? []).length, 3);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
 console.log('ALL SMOKE TESTS PASSED');

@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
-import { Boxes, BrainCircuit, CircleDollarSign, FileText, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Puzzle, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
+import { Boxes, BrainCircuit, CircleDollarSign, Eye, FileText, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
+
+/** Porte da empresa do usuário — define o que aparece na navegação. */
+export type AccessProfile = 'pme' | 'enterprise';
 
 export interface SessionInfo {
 	readonly email: string | null;
@@ -19,31 +22,72 @@ export interface MainLayoutProps {
 	readonly showAdmin?: boolean;
 }
 
-/** Visual metadata stays in the shell — the registry keeps exposing security-relevant fields only. */
-const MODULE_ICONS: Readonly<Record<string, LucideIcon>> = {
-	'lidar-orchestrator-v1': Workflow,
-	'predictive-bi-v1': BrainCircuit,
-	'virtual-cfo-v1': CircleDollarSign,
-	'virtual-cmo-v1': Megaphone,
-	'enterprise-controllership-v1': Landmark,
-	'construction-calculator-v1': Boxes,
-	'quick-receipt-maker-v1': FileText,
-	'margin-calculator-v1': TrendingUp
-};
+const BOTH_PROFILES: readonly AccessProfile[] = ['pme', 'enterprise'];
+const ENTERPRISE_ONLY: readonly AccessProfile[] = ['enterprise'];
+
+/** Item da barra lateral com a trava de perfis (RBAC visual). */
+export interface SidebarModule {
+	readonly name: string;
+	/** Id do plugin no registry (null = item especial, ex.: Master Admin). */
+	readonly pluginId: string | null;
+	/** Rota real do app (o router usa /plugins/<id> e /admin). */
+	readonly path: string;
+	readonly allowedProfiles: readonly AccessProfile[];
+	readonly icon: LucideIcon;
+}
+
+/**
+ * Fonte declarativa da navegação com a trava de perfis. Essenciais são para
+ * PME e Enterprise; os motores pesados e o Master Admin só para Enterprise.
+ * O filtro é visual (limpa a visão) — a autorização real continua no
+ * RoleGuard/apiGuard, então esconder o botão não é a única barreira.
+ */
+export const SIDEBAR_MODULES: readonly SidebarModule[] = [
+	// --- Módulos PME (visíveis para todos) ---
+	{ name: 'Virtual CMO', pluginId: 'virtual-cmo-v1', path: '/plugins/virtual-cmo-v1', allowedProfiles: BOTH_PROFILES, icon: Megaphone },
+	{ name: 'Planejador Preditivo', pluginId: 'construction-calculator-v1', path: '/plugins/construction-calculator-v1', allowedProfiles: BOTH_PROFILES, icon: Boxes },
+	{ name: 'Oráculo de Preços', pluginId: 'margin-calculator-v1', path: '/plugins/margin-calculator-v1', allowedProfiles: BOTH_PROFILES, icon: TrendingUp },
+	{ name: 'Recibo Rápido', pluginId: 'quick-receipt-maker-v1', path: '/plugins/quick-receipt-maker-v1', allowedProfiles: BOTH_PROFILES, icon: FileText },
+	{ name: 'Assistente Fiscal', pluginId: 'smart-invoice-helper-v1', path: '/plugins/smart-invoice-helper-v1', allowedProfiles: BOTH_PROFILES, icon: Receipt },
+	// --- Módulos Enterprise (só grandes empresas) ---
+	{ name: 'Lidar Orchestrator', pluginId: 'lidar-orchestrator-v1', path: '/plugins/lidar-orchestrator-v1', allowedProfiles: ENTERPRISE_ONLY, icon: Workflow },
+	{ name: 'Predictive BI Agent', pluginId: 'predictive-bi-v1', path: '/plugins/predictive-bi-v1', allowedProfiles: ENTERPRISE_ONLY, icon: BrainCircuit },
+	{ name: 'Virtual CFO', pluginId: 'virtual-cfo-v1', path: '/plugins/virtual-cfo-v1', allowedProfiles: ENTERPRISE_ONLY, icon: CircleDollarSign },
+	{ name: 'Controladoria Enterprise', pluginId: 'enterprise-controllership-v1', path: '/plugins/enterprise-controllership-v1', allowedProfiles: ENTERPRISE_ONLY, icon: Landmark },
+	{ name: 'Master Admin', pluginId: null, path: '/admin', allowedProfiles: ENTERPRISE_ONLY, icon: ShieldCheck }
+];
+
+/** Só liga o switch de simulação em ambiente de desenvolvimento. */
+const IS_DEV: boolean = Boolean((import.meta.env as { readonly DEV?: boolean }).DEV);
 
 export function MainLayout({ registry, currentPath, onNavigate, children, session, showAdmin = false }: MainLayoutProps): ReactElement {
 	const [collapsed, setCollapsed] = useState(false);
 	const [paletteOpen, setPaletteOpen] = useState(false);
-	// Dedupe defensivo por id: mesmo que uma fonte futura de módulos registre
-	// o mesmo plugin duas vezes, o menu lateral nunca mostra item repetido.
-	const plugins = useMemo(() => {
-		const seen = new Set<string>();
-		return registry.list().filter(plugin => {
-			if (seen.has(plugin.id)) return false;
-			seen.add(plugin.id);
-			return true;
-		});
+	// Perfil ativo na navegação. Sem login plugado, começa em Enterprise (vê
+	// tudo); o switch de dev troca para PME e demonstra a filtragem.
+	const [viewProfile, setViewProfile] = useState<AccessProfile>('enterprise');
+
+	// Versões dos módulos efetivamente registrados (entitlement do tenant).
+	const registered = useMemo(() => {
+		const versions = new Map<string, string>();
+		for (const plugin of registry.list()) {
+			if (!versions.has(plugin.id)) versions.set(plugin.id, plugin.version);
+		}
+		return versions;
 	}, [registry]);
+
+	// Trava de perfis + entitlement: o item só aparece se (a) o perfil ativo
+	// está nos allowedProfiles E (b) o módulo está registrado (ou, no caso do
+	// Master Admin, se o host liberou showAdmin).
+	const visibleModules = useMemo(
+		() => SIDEBAR_MODULES.filter(mod => {
+			if (!mod.allowedProfiles.includes(viewProfile)) return false;
+			return mod.pluginId === null ? showAdmin : registered.has(mod.pluginId);
+		}),
+		[registered, viewProfile, showAdmin]
+	);
+	const adminModule = visibleModules.find(mod => mod.pluginId === null) ?? null;
+	const pluginModules = visibleModules.filter(mod => mod.pluginId !== null);
 
 	const navigate = (event: MouseEvent<HTMLAnchorElement>, path: string): void => {
 		event.preventDefault();
@@ -56,23 +100,23 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 			{ id: 'nav-store', label: 'Marketplace', hint: 'Ativar módulos e assinatura', icon: Store, keywords: 'loja store módulos assinatura', run: () => onNavigate('/marketplace') },
 			{ id: 'nav-billing', label: 'Faturamento', hint: 'Consumo de IA, plano e faturas', icon: Receipt, keywords: 'faturamento billing assinatura fatura tokens cota plano stripe', run: () => onNavigate('/billing') },
 			{ id: 'nav-tax-settings', label: 'Configurações Fiscais', hint: 'Certificado A1 e emissão automática', icon: Lock, keywords: 'certificado a1 fiscal emissão nota configurações segurança pfx p12', run: () => onNavigate('/settings/fiscal') },
-			...plugins.map(plugin => ({
-				id: `mod-${plugin.id}`,
-				label: plugin.displayName ?? plugin.id,
-				hint: `Abrir módulo v${plugin.version}`,
-				icon: MODULE_ICONS[plugin.id] ?? Puzzle,
-				keywords: `módulo plugin ${plugin.id}`,
-				run: () => onNavigate(`/plugins/${plugin.id}`)
+			...pluginModules.map(mod => ({
+				id: `mod-${mod.pluginId}`,
+				label: mod.name,
+				hint: mod.pluginId && registered.has(mod.pluginId) ? `Abrir módulo v${registered.get(mod.pluginId)}` : 'Abrir módulo',
+				icon: mod.icon,
+				keywords: `módulo plugin ${mod.pluginId}`,
+				run: () => onNavigate(mod.path)
 			}))
 		];
-		if (showAdmin) {
-			items.push({ id: 'nav-admin', label: 'Master Admin', hint: 'KPIs e tenants da plataforma', icon: ShieldCheck, keywords: 'admin mrr tenants gestão', run: () => onNavigate('/admin') });
+		if (adminModule) {
+			items.push({ id: 'nav-admin', label: adminModule.name, hint: 'KPIs e tenants da plataforma', icon: adminModule.icon, keywords: 'admin mrr tenants gestão', run: () => onNavigate(adminModule.path) });
 		}
 		if (session) {
 			items.push({ id: 'act-signout', label: 'Sair da conta', hint: 'Encerrar a sessão atual', icon: LogOut, keywords: 'logout sair sessão configurações', run: session.onSignOut });
 		}
 		return items;
-	}, [plugins, showAdmin, session, onNavigate]);
+	}, [pluginModules, adminModule, registered, session, onNavigate]);
 
 	return (
 		<ToastProvider>
@@ -132,36 +176,36 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 						<Store className="h-5 w-5 shrink-0" aria-hidden />
 						{!collapsed && <span className="truncate">Marketplace</span>}
 					</a>
-					{showAdmin && (
+					{adminModule && (
 						<a
-							href="/admin"
-							title="Master Admin"
-							aria-current={currentPath === '/admin' ? 'page' : undefined}
-							onClick={event => navigate(event, '/admin')}
+							href={adminModule.path}
+							title={adminModule.name}
+							aria-current={currentPath === adminModule.path ? 'page' : undefined}
+							onClick={event => navigate(event, adminModule.path)}
 							className={`group mb-3 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
-								currentPath === '/admin'
+								currentPath === adminModule.path
 									? 'bg-gray-900 text-white shadow-sm'
 									: 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
 							}`}
 						>
-							<ShieldCheck className="h-5 w-5 shrink-0" aria-hidden />
-							{!collapsed && <span className="truncate">Master Admin</span>}
+							<adminModule.icon className="h-5 w-5 shrink-0" aria-hidden />
+							{!collapsed && <span className="truncate">{adminModule.name}</span>}
 						</a>
 					)}
 					{!collapsed && (
 						<p className="px-2 pb-2 text-xs font-medium uppercase tracking-wider text-gray-400">Módulos</p>
 					)}
-					{plugins.map(plugin => {
-						const path = `/plugins/${plugin.id}`;
-						const active = currentPath === path;
-						const Icon = MODULE_ICONS[plugin.id] ?? Puzzle;
+					{pluginModules.map(mod => {
+						const active = currentPath === mod.path;
+						const Icon = mod.icon;
+						const version = mod.pluginId ? registered.get(mod.pluginId) : undefined;
 						return (
 							<a
-								key={plugin.id}
-								href={path}
-								title={plugin.displayName ?? plugin.id}
+								key={mod.pluginId ?? mod.path}
+								href={mod.path}
+								title={mod.name}
 								aria-current={active ? 'page' : undefined}
-								onClick={event => navigate(event, path)}
+								onClick={event => navigate(event, mod.path)}
 								className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
 									active
 										? 'bg-gray-900 text-white shadow-sm'
@@ -169,16 +213,41 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 								}`}
 							>
 								<Icon className="h-5 w-5 shrink-0" aria-hidden />
-								{!collapsed && <span className="truncate">{plugin.displayName ?? plugin.id}</span>}
-								{!collapsed && (
+								{!collapsed && <span className="truncate">{mod.name}</span>}
+								{!collapsed && version && (
 									<span className={`ml-auto text-[10px] font-normal ${active ? 'text-gray-300' : 'text-gray-400'}`}>
-										v{plugin.version}
+										v{version}
 									</span>
 								)}
 							</a>
 						);
 					})}
 				</nav>
+
+				{/* Switch de simulação de perfil — só em desenvolvimento (login ainda não plugado) */}
+				{IS_DEV && !collapsed && (
+					<div className="mx-3 mb-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/70 p-2.5" data-testid="profile-switch">
+						<p className="flex items-center gap-1.5 px-1 text-[11px] font-medium text-gray-400">
+							<Eye className="h-3.5 w-3.5" aria-hidden /> Simular Visão
+						</p>
+						<div className="mt-1.5 grid grid-cols-2 gap-1 rounded-lg bg-gray-200/70 p-0.5">
+							{(['pme', 'enterprise'] as const).map(profile => (
+								<button
+									key={profile}
+									type="button"
+									onClick={() => setViewProfile(profile)}
+									aria-pressed={viewProfile === profile}
+									data-testid={`profile-${profile}`}
+									className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-all ${
+										viewProfile === profile ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+									}`}
+								>
+									{profile === 'pme' ? 'PME' : 'Enterprise'}
+								</button>
+							))}
+						</div>
+					</div>
+				)}
 
 				{session && (
 					<div className="border-t border-gray-200/70 p-3">

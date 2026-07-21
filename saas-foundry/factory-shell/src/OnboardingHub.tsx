@@ -103,10 +103,27 @@ const MASTER_VIDEO_TITLE: Readonly<Record<UserTier, string>> = {
 	enterprise: 'Guia de Orquestração e Compliance para Grandes Operações'
 };
 
+/** Chave do gate: enquanto false/ausente, o guard prende o usuário aqui. */
+export const ONBOARDING_DONE_KEY = 'lidar_onboarding_completed';
+
+/** Onboarding já concluído? (fonte do OnboardingGuard). */
+export function isOnboardingComplete(): boolean {
+	if (typeof window === 'undefined') return true; // SSR/testes não bloqueiam
+	return window.localStorage.getItem(ONBOARDING_DONE_KEY) === 'true';
+}
+
+/** Marca o onboarding como concluído (libera o acesso ao painel). */
+export function markOnboardingComplete(): void {
+	if (typeof window === 'undefined') return;
+	window.localStorage.setItem(ONBOARDING_DONE_KEY, 'true');
+}
+
 export interface OnboardingHubProps {
 	/** Porte da conta — define trilha e vídeo master. */
 	readonly userProfile: UserTier;
 	readonly navigate: (to: string) => void;
+	/** Liberação final: salva a flag e leva ao painel (a Sidebar volta). */
+	readonly onComplete?: () => void;
 }
 
 /** Player de vídeo premium simulado (thumb escura + play central). */
@@ -131,7 +148,7 @@ function VideoPlayer({ title, compact = false }: { readonly title: string; reado
 	);
 }
 
-export default function OnboardingHub({ userProfile, navigate }: OnboardingHubProps): ReactElement {
+export default function OnboardingHub({ userProfile, navigate, onComplete }: OnboardingHubProps): ReactElement {
 	const steps = STEPS_BY_PROFILE[userProfile];
 	const [done, setDone] = useState<readonly string[]>([]);
 	const [openId, setOpenId] = useState<string | null>(steps[0]?.id ?? null);
@@ -149,6 +166,16 @@ export default function OnboardingHub({ userProfile, navigate }: OnboardingHubPr
 	const execute = (step: OnboardingStep): void => {
 		markDone(step.id);
 		navigate(step.route);
+	};
+
+	/** Liberação: salva a flag e volta ao painel (default) ou usa o onComplete do host. */
+	const finish = (): void => {
+		if (onComplete) {
+			onComplete();
+			return;
+		}
+		markOnboardingComplete();
+		navigate('/app');
 	};
 
 	return (
@@ -200,6 +227,7 @@ export default function OnboardingHub({ userProfile, navigate }: OnboardingHubPr
 					{steps.map((step, index) => {
 						const isDone = done.includes(step.id);
 						const isOpen = openId === step.id;
+						const isLast = index === steps.length - 1;
 						return (
 							<li
 								key={step.id}
@@ -264,7 +292,18 @@ export default function OnboardingHub({ userProfile, navigate }: OnboardingHubPr
 														<Sparkles className="h-4 w-4" aria-hidden /> {step.ctaLabel}
 														<ArrowRight className="h-4 w-4" aria-hidden />
 													</button>
-													{!isDone ? (
+													{isLast ? (
+														// Passo final: a chave de liberação. Salva a flag e vai ao painel.
+														<button
+															type="button"
+															onClick={finish}
+															data-testid="onboarding-finish"
+															className="ml-auto inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-indigo-600 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-500/30 transition-all hover:scale-[1.02] sm:w-auto"
+														>
+															<Rocket className="h-4 w-4" aria-hidden /> Acessar o Lidar Core
+															<ArrowRight className="h-4 w-4" aria-hidden />
+														</button>
+													) : !isDone ? (
 														<button
 															type="button"
 															onClick={() => markDone(step.id)}

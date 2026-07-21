@@ -1579,7 +1579,7 @@ try {
 {
 	const esbuild = await import('esbuild');
 	const dir = await mkdtemp(new URL('./.smoke-onboarding-', import.meta.url).pathname);
-	await writeFile(join(dir, 'entry.tsx'), "export { default as OnboardingHub } from '../factory-shell/src/OnboardingHub';\n");
+	await writeFile(join(dir, 'entry.tsx'), "export { default as OnboardingHub, isOnboardingComplete, markOnboardingComplete, ONBOARDING_DONE_KEY } from '../factory-shell/src/OnboardingHub';\n");
 	try {
 		const bundled = await esbuild.build({
 			entryPoints: [join(dir, 'entry.tsx')],
@@ -1589,7 +1589,7 @@ try {
 		});
 		const compiled = join(dir, 'bundle.mjs');
 		await writeFile(compiled, bundled.outputFiles[0].text);
-		const { OnboardingHub } = await import(pathToFileURL(compiled).href);
+		const { OnboardingHub, isOnboardingComplete, markOnboardingComplete, ONBOARDING_DONE_KEY } = await import(pathToFileURL(compiled).href);
 
 		// PME: 4 passos, vídeo master de lucro, progresso zerado
 		const pme = renderToStaticMarkup(createElement(OnboardingHub, { userProfile: 'pme', navigate: () => {} }));
@@ -1611,6 +1611,35 @@ try {
 		assert.match(ent, /DRE Preditivo/);
 		assert.doesNotMatch(ent, /Dominar o Oráculo de Preços/, 'trilha enterprise não mistura passos PME');
 		assert.equal((ent.match(/data-testid="onboarding-step"/g) ?? []).length, 3);
+
+		// OnboardingGuard: helpers de localStorage governam o bloqueio da primeira jornada.
+		globalThis.window.localStorage.removeItem(ONBOARDING_DONE_KEY);
+		assert.equal(isOnboardingComplete(), false, 'chave ausente => onboarding pendente (rota interna bloqueada)');
+		markOnboardingComplete();
+		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), 'true');
+		assert.equal(isOnboardingComplete(), true, 'após liberação => rotas internas liberadas');
+
+		// Clique no CTA final: marca a conclusão e devolve o usuário ao painel via onComplete.
+		globalThis.window.localStorage.removeItem(ONBOARDING_DONE_KEY);
+		let releasedTo = null;
+		const { createRoot: createRoot38 } = await import('react-dom/client');
+		const container = globalThis.document.createElement('div');
+		createRoot38(container).render(createElement(OnboardingHub, {
+			userProfile: 'pme',
+			navigate: to => { releasedTo = to; },
+			onComplete: () => { markOnboardingComplete(); releasedTo = '/app'; }
+		}));
+		await new Promise(resolve => setTimeout(resolve, 50));
+		// Só o último passo troca "Marcar como concluído" pelo CTA final; abre o acordeão do fim da trilha.
+		container.querySelector('[data-testid="onboarding-toggle-planejador"]').click();
+		await new Promise(resolve => setTimeout(resolve, 50));
+		const finishBtn = container.querySelector('[data-testid="onboarding-finish"]');
+		assert.ok(finishBtn, 'último passo expõe o CTA "Acessar o Lidar Core"');
+		assert.match(finishBtn.textContent, /Acessar o Lidar Core/);
+		assert.equal(container.querySelectorAll('[data-testid="onboarding-finish"]').length, 1, 'CTA de liberação aparece uma única vez (no último passo)');
+		finishBtn.click();
+		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), 'true', 'clicar em "Acessar o Lidar Core" grava a flag');
+		assert.equal(releasedTo, '/app', 'clique redireciona para o painel');
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

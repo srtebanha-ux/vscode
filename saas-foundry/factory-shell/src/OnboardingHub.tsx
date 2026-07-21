@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactElement } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, Check, ChevronDown, Compass, GraduationCap, Play, Rocket, Sparkles } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, Compass, GraduationCap, Lock, Play, Rocket, Sparkles } from 'lucide-react';
 import type { UserTier } from './catalog';
 
 export interface OnboardingStep {
@@ -103,10 +103,62 @@ const MASTER_VIDEO_TITLE: Readonly<Record<UserTier, string>> = {
 	enterprise: 'Guia de Orquestração e Compliance para Grandes Operações'
 };
 
+/** Chave do gate: enquanto false/ausente, o guard prende o usuário aqui. */
+export const ONBOARDING_DONE_KEY = 'lidar_onboarding_completed';
+
+/** Onboarding já concluído? (fonte do OnboardingGuard). */
+export function isOnboardingComplete(): boolean {
+	if (typeof window === 'undefined') return true; // SSR/testes não bloqueiam
+	return window.localStorage.getItem(ONBOARDING_DONE_KEY) === 'true';
+}
+
+/** Marca o onboarding como concluído (libera o acesso ao painel). */
+export function markOnboardingComplete(): void {
+	if (typeof window === 'undefined') return;
+	window.localStorage.setItem(ONBOARDING_DONE_KEY, 'true');
+}
+
+/**
+ * Rotas dos módulos que os CTAs dos passos abrem ("aprenda fazendo"). O
+ * OnboardingGuard as libera mesmo com a trilha em andamento — do contrário, o
+ * botão "Abrir o Oráculo" ricochetearia de volta para /onboarding.
+ */
+export const ONBOARDING_STEP_ROUTES: readonly string[] = Object.freeze(
+	Array.from(new Set(Object.values(STEPS_BY_PROFILE).flatMap(steps => steps.map(step => step.route))))
+);
+
+/** A rota faz parte da trilha de onboarding? (allow-list consultada pelo guard). */
+export function isOnboardingStepRoute(path: string): boolean {
+	return ONBOARDING_STEP_ROUTES.includes(path);
+}
+
+/**
+ * Progresso da trilha (ids concluídos) persistido em localStorage: como abrir um
+ * módulo remonta o Hub ao voltar, sem isto o usuário perderia o que já marcou.
+ */
+const ONBOARDING_PROGRESS_KEY = 'lidar_onboarding_progress';
+
+function readProgress(): readonly string[] {
+	if (typeof window === 'undefined') return [];
+	try {
+		const parsed: unknown = JSON.parse(window.localStorage.getItem(ONBOARDING_PROGRESS_KEY) ?? '[]');
+		return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+	} catch {
+		return [];
+	}
+}
+
+function writeProgress(ids: readonly string[]): void {
+	if (typeof window === 'undefined') return;
+	window.localStorage.setItem(ONBOARDING_PROGRESS_KEY, JSON.stringify(ids));
+}
+
 export interface OnboardingHubProps {
 	/** Porte da conta — define trilha e vídeo master. */
 	readonly userProfile: UserTier;
 	readonly navigate: (to: string) => void;
+	/** Liberação final: salva a flag e leva ao painel (a Sidebar volta). */
+	readonly onComplete?: () => void;
 }
 
 /** Player de vídeo premium simulado (thumb escura + play central). */
@@ -131,24 +183,41 @@ function VideoPlayer({ title, compact = false }: { readonly title: string; reado
 	);
 }
 
-export default function OnboardingHub({ userProfile, navigate }: OnboardingHubProps): ReactElement {
+export default function OnboardingHub({ userProfile, navigate, onComplete }: OnboardingHubProps): ReactElement {
 	const steps = STEPS_BY_PROFILE[userProfile];
-	const [done, setDone] = useState<readonly string[]>([]);
+	const [done, setDone] = useState<readonly string[]>(() => readProgress());
 	const [openId, setOpenId] = useState<string | null>(steps[0]?.id ?? null);
 
 	const completed = useMemo(() => done.filter(id => steps.some(step => step.id === id)).length, [done, steps]);
 	const total = steps.length;
 	const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+	const allDone = total > 0 && completed === total;
 
 	const toggleOpen = (id: string): void => setOpenId(current => (current === id ? null : id));
 
 	const markDone = (id: string): void => {
-		setDone(current => (current.includes(id) ? current : [...current, id]));
+		setDone(current => {
+			if (current.includes(id)) return current;
+			const next = [...current, id];
+			writeProgress(next);
+			return next;
+		});
 	};
 
 	const execute = (step: OnboardingStep): void => {
 		markDone(step.id);
 		navigate(step.route);
+	};
+
+	/** Liberação: só com 100% da trilha; salva a flag e volta ao painel (ou usa onComplete). */
+	const finish = (): void => {
+		if (!allDone) return; // jornada obrigatória: sem burlar antes de concluir tudo
+		if (onComplete) {
+			onComplete();
+			return;
+		}
+		markOnboardingComplete();
+		navigate('/app');
 	};
 
 	return (
@@ -200,6 +269,7 @@ export default function OnboardingHub({ userProfile, navigate }: OnboardingHubPr
 					{steps.map((step, index) => {
 						const isDone = done.includes(step.id);
 						const isOpen = openId === step.id;
+						const isLast = index === steps.length - 1;
 						return (
 							<li
 								key={step.id}
@@ -264,7 +334,43 @@ export default function OnboardingHub({ userProfile, navigate }: OnboardingHubPr
 														<Sparkles className="h-4 w-4" aria-hidden /> {step.ctaLabel}
 														<ArrowRight className="h-4 w-4" aria-hidden />
 													</button>
-													{!isDone ? (
+													{isLast ? (
+														// Passo final: a chave de liberação só acende com 100% da trilha.
+														// Enquanto falta algo, o passo ainda pode ser marcado como concluído
+														// e o CTA fica travado (jornada obrigatória, sem pular etapas).
+														<>
+															{!allDone && (isDone ? (
+																<span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-600">
+																	<Check className="h-4 w-4" aria-hidden /> Concluído
+																</span>
+															) : (
+																<button
+																	type="button"
+																	onClick={() => markDone(step.id)}
+																	data-testid={`onboarding-done-${step.id}`}
+																	className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-medium text-gray-400 transition-colors hover:text-gray-600"
+																>
+																	<Check className="h-4 w-4" aria-hidden /> Marcar como concluído
+																</button>
+															))}
+															<button
+																type="button"
+																onClick={finish}
+																disabled={!allDone}
+																aria-disabled={!allDone}
+																data-testid="onboarding-finish"
+																title={allDone ? undefined : 'Conclua todos os passos para liberar o acesso'}
+																className={`ml-auto inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white shadow-lg transition-all sm:w-auto ${
+																	allDone
+																		? 'bg-gradient-to-r from-emerald-500 to-indigo-600 shadow-emerald-500/30 hover:scale-[1.02]'
+																		: 'cursor-not-allowed bg-gray-300 shadow-none'
+																}`}
+															>
+																{allDone ? <Rocket className="h-4 w-4" aria-hidden /> : <Lock className="h-4 w-4" aria-hidden />} Acessar o Lidar Core
+																<ArrowRight className="h-4 w-4" aria-hidden />
+															</button>
+														</>
+													) : !isDone ? (
 														<button
 															type="button"
 															onClick={() => markDone(step.id)}

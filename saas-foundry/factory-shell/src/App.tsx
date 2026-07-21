@@ -11,7 +11,7 @@ import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } fro
 import { MasterDashboard } from './admin/MasterDashboard';
 import { BillingPage } from './billing/BillingPage';
 import { DashboardHome } from './DashboardHome';
-import OnboardingHub from './OnboardingHub';
+import OnboardingHub, { isOnboardingComplete, isOnboardingStepRoute, markOnboardingComplete } from './OnboardingHub';
 import { readUserTier } from './catalog';
 import { TaxSettings } from './settings/TaxSettings';
 import type { UserRole } from './auth/AuthProvider';
@@ -35,9 +35,9 @@ export interface AppProps {
 	readonly session?: SessionInfo;
 }
 
-/** Rota privilegiada acessada sem role: volta para o sistema logado sem renderizar nada. */
-function RedirectHome({ navigate }: { readonly navigate: (to: string) => void }): null {
-	useEffect(() => navigate('/app'), [navigate]);
+/** Redireciona imperativamente para `to` sem renderizar nada (usado por guards de rota). */
+function RedirectTo({ to, navigate }: { readonly to: string; readonly navigate: (to: string) => void }): null {
+	useEffect(() => navigate(to), [to, navigate]);
 	return null;
 }
 
@@ -128,6 +128,34 @@ function NotFound({ path }: { readonly path: string }): ReactElement {
  * plugin — a global provider would hand services to unvalidated code.
  */
 export function App({ registry, principal, api, role, path, navigate, session }: AppProps): ReactElement {
+	// ── Onboarding em tela cheia ──────────────────────────────────────────────
+	// A primeira jornada é obrigatória e sem distrações: a rota /onboarding é
+	// renderizada FORA do MainLayout — sem Sidebar, sem Header — ocupando 100vw/100vh.
+	// O botão final marca a conclusão em localStorage e devolve o usuário ao Painel.
+	if (path === '/onboarding') {
+		return (
+			<div className="min-h-screen w-full overflow-y-auto bg-gray-50 px-4 py-8 sm:px-6 lg:px-8">
+				<OnboardingHub
+					userProfile={readUserTier() ?? 'pme'}
+					navigate={navigate}
+					onComplete={() => {
+						markOnboardingComplete();
+						navigate('/app');
+					}}
+				/>
+			</div>
+		);
+	}
+
+	// ── OnboardingGuard ───────────────────────────────────────────────────────
+	// Enquanto a chave `lidar_onboarding_completed` não for `true`, as rotas internas
+	// são bloqueadas e o usuário é reconduzido à trilha. Exceção: as rotas dos módulos
+	// que os próprios passos abrem ("aprenda fazendo") passam — senão o CTA "Abrir o
+	// Oráculo" ricochetearia de volta e a trilha nunca deixaria testar nada.
+	if (!isOnboardingComplete() && !isOnboardingStepRoute(path)) {
+		return <RedirectTo to="/onboarding" navigate={navigate} />;
+	}
+
 	const match = PLUGIN_ROUTE.exec(path);
 	let content: ReactElement;
 	if (match?.[1] !== undefined) {
@@ -140,16 +168,13 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 			: <DashboardHome email={session?.email} navigate={navigate} />;
 	} else if (path === '/marketplace' || path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
-	} else if (path === '/onboarding') {
-		// Hub de setup gamificado: trilha e vídeo master mudam com o perfil.
-		content = <OnboardingHub userProfile={readUserTier() ?? 'pme'} navigate={navigate} />;
 	} else if (path === '/settings/fiscal') {
 		content = <TaxSettings />;
 	} else if (path === '/billing') {
 		content = <BillingPage tenantId={principal.tenantId} />;
 	} else if (path === '/admin') {
 		// RBAC: só SUPER_ADMIN renderiza; qualquer outro nível volta para a Home.
-		content = role === 'SUPER_ADMIN' ? <MasterDashboard /> : <RedirectHome navigate={navigate} />;
+		content = role === 'SUPER_ADMIN' ? <MasterDashboard /> : <RedirectTo to="/app" navigate={navigate} />;
 	} else {
 		content = <NotFound path={path} />;
 	}

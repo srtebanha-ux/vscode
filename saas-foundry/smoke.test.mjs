@@ -1579,7 +1579,7 @@ try {
 {
 	const esbuild = await import('esbuild');
 	const dir = await mkdtemp(new URL('./.smoke-onboarding-', import.meta.url).pathname);
-	await writeFile(join(dir, 'entry.tsx'), "export { default as OnboardingHub, isOnboardingComplete, markOnboardingComplete, ONBOARDING_DONE_KEY } from '../factory-shell/src/OnboardingHub';\n");
+	await writeFile(join(dir, 'entry.tsx'), "export { default as OnboardingHub, isOnboardingComplete, markOnboardingComplete, isOnboardingStepRoute, ONBOARDING_STEP_ROUTES, ONBOARDING_DONE_KEY } from '../factory-shell/src/OnboardingHub';\n");
 	try {
 		const bundled = await esbuild.build({
 			entryPoints: [join(dir, 'entry.tsx')],
@@ -1589,7 +1589,7 @@ try {
 		});
 		const compiled = join(dir, 'bundle.mjs');
 		await writeFile(compiled, bundled.outputFiles[0].text);
-		const { OnboardingHub, isOnboardingComplete, markOnboardingComplete, ONBOARDING_DONE_KEY } = await import(pathToFileURL(compiled).href);
+		const { OnboardingHub, isOnboardingComplete, markOnboardingComplete, isOnboardingStepRoute, ONBOARDING_STEP_ROUTES, ONBOARDING_DONE_KEY } = await import(pathToFileURL(compiled).href);
 
 		// PME: 4 passos, vídeo master de lucro, progresso zerado
 		const pme = renderToStaticMarkup(createElement(OnboardingHub, { userProfile: 'pme', navigate: () => {} }));
@@ -1619,8 +1619,14 @@ try {
 		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), 'true');
 		assert.equal(isOnboardingComplete(), true, 'após liberação => rotas internas liberadas');
 
-		// Clique no CTA final: marca a conclusão e devolve o usuário ao painel via onComplete.
+		// Allow-list do guard: as rotas dos CTAs dos passos passam mesmo com a trilha em aberto.
+		assert.ok(ONBOARDING_STEP_ROUTES.length >= 1, 'há rotas de passo na allow-list');
+		assert.equal(isOnboardingStepRoute('/plugins/margin-calculator-v1'), true, 'rota do Oráculo é liberada durante o onboarding');
+		assert.equal(isOnboardingStepRoute('/billing'), false, 'rota não-onboarding continua bloqueada');
+
+		// Interação: o CTA de liberação fica TRAVADO até 100% e, ao concluir tudo, libera.
 		globalThis.window.localStorage.removeItem(ONBOARDING_DONE_KEY);
+		globalThis.window.localStorage.removeItem('lidar_onboarding_progress');
 		let releasedTo = null;
 		const { createRoot: createRoot38 } = await import('react-dom/client');
 		const container = globalThis.document.createElement('div');
@@ -1630,16 +1636,36 @@ try {
 			onComplete: () => { markOnboardingComplete(); releasedTo = '/app'; }
 		}));
 		await new Promise(resolve => setTimeout(resolve, 50));
-		// Só o último passo troca "Marcar como concluído" pelo CTA final; abre o acordeão do fim da trilha.
+
+		// Abre o último passo antes de concluir a trilha: o CTA existe, mas está desabilitado.
 		container.querySelector('[data-testid="onboarding-toggle-planejador"]').click();
 		await new Promise(resolve => setTimeout(resolve, 50));
-		const finishBtn = container.querySelector('[data-testid="onboarding-finish"]');
-		assert.ok(finishBtn, 'último passo expõe o CTA "Acessar o Lidar Core"');
-		assert.match(finishBtn.textContent, /Acessar o Lidar Core/);
+		const lockedBtn = container.querySelector('[data-testid="onboarding-finish"]');
+		assert.ok(lockedBtn, 'último passo expõe o CTA "Acessar o Lidar Core"');
+		assert.match(lockedBtn.textContent, /Acessar o Lidar Core/);
 		assert.equal(container.querySelectorAll('[data-testid="onboarding-finish"]').length, 1, 'CTA de liberação aparece uma única vez (no último passo)');
+		assert.ok(lockedBtn.disabled, 'sem 100% da trilha o CTA fica travado (jornada obrigatória)');
+		lockedBtn.click();
+		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), null, 'clicar travado NÃO libera o onboarding');
+		assert.equal(releasedTo, null, 'clicar travado não redireciona');
+
+		// Conclui cada passo (marca concluído); o progresso é persistido em localStorage.
+		for (const stepId of ['perfil-operacional', 'oraculo', 'cmo', 'planejador']) {
+			container.querySelector(`[data-testid="onboarding-toggle-${stepId}"]`).click();
+			await new Promise(resolve => setTimeout(resolve, 20));
+			const doneBtn = container.querySelector(`[data-testid="onboarding-done-${stepId}"]`);
+			if (doneBtn) doneBtn.click();
+			await new Promise(resolve => setTimeout(resolve, 20));
+		}
+		const persisted = JSON.parse(globalThis.window.localStorage.getItem('lidar_onboarding_progress') ?? '[]');
+		assert.equal(persisted.length, 4, 'progresso da trilha persiste no localStorage (sobrevive à ida/volta dos módulos)');
+
+		// Agora com 100%, o CTA acende e libera de fato.
+		const finishBtn = container.querySelector('[data-testid="onboarding-finish"]');
+		assert.ok(!finishBtn.disabled, 'trilha 100% concluída => CTA de liberação acende');
 		finishBtn.click();
-		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), 'true', 'clicar em "Acessar o Lidar Core" grava a flag');
-		assert.equal(releasedTo, '/app', 'clique redireciona para o painel');
+		assert.equal(releasedTo, '/app', 'clique libera e redireciona para o painel');
+		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), 'true', 'liberação grava a flag do gate');
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

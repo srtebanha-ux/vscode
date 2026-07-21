@@ -11,7 +11,7 @@ import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } fro
 import { MasterDashboard } from './admin/MasterDashboard';
 import { BillingPage } from './billing/BillingPage';
 import { DashboardHome } from './DashboardHome';
-import OnboardingHub, { isOnboardingComplete, markOnboardingComplete } from './OnboardingHub';
+import OnboardingHub, { isOnboardingComplete, isOnboardingStepRoute, markOnboardingComplete } from './OnboardingHub';
 import { readUserTier } from './catalog';
 import { TaxSettings } from './settings/TaxSettings';
 import type { UserRole } from './auth/AuthProvider';
@@ -148,9 +148,11 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 	}
 
 	// ── OnboardingGuard ───────────────────────────────────────────────────────
-	// Enquanto a chave `lidar_onboarding_completed` não for `true`, QUALQUER rota
-	// interna é bloqueada e o usuário é reconduzido à trilha de onboarding.
-	if (!isOnboardingComplete()) {
+	// Enquanto a chave `lidar_onboarding_completed` não for `true`, as rotas internas
+	// são bloqueadas e o usuário é reconduzido à trilha. Exceção: as rotas dos módulos
+	// que os próprios passos abrem ("aprenda fazendo") passam — senão o CTA "Abrir o
+	// Oráculo" ricochetearia de volta e a trilha nunca deixaria testar nada.
+	if (!isOnboardingComplete() && !isOnboardingStepRoute(path)) {
 		return <RedirectTo to="/onboarding" navigate={navigate} />;
 	}
 

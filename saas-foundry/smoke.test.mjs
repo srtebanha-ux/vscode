@@ -1575,107 +1575,11 @@ try {
 	}
 }
 
-// 38. OnboardingHub: hub gamificado com trilha e vídeo master por perfil
+// 38. OnboardingHub: o onboarding agora é um TOUR GUIADO (react-joyride) sobre o Painel real
 {
 	const esbuild = await import('esbuild');
 	const dir = await mkdtemp(new URL('./.smoke-onboarding-', import.meta.url).pathname);
-	await writeFile(join(dir, 'entry.tsx'), "export { default as OnboardingHub, isOnboardingComplete, markOnboardingComplete, isOnboardingStepRoute, ONBOARDING_STEP_ROUTES, ONBOARDING_DONE_KEY } from '../factory-shell/src/OnboardingHub';\n");
-	try {
-		const bundled = await esbuild.build({
-			entryPoints: [join(dir, 'entry.tsx')],
-			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', jsx: 'automatic',
-			external: ['react', 'react-dom', 'react/jsx-runtime', 'framer-motion', 'lucide-react'],
-			define: { 'import.meta.env': '{}' }
-		});
-		const compiled = join(dir, 'bundle.mjs');
-		await writeFile(compiled, bundled.outputFiles[0].text);
-		const { OnboardingHub, isOnboardingComplete, markOnboardingComplete, isOnboardingStepRoute, ONBOARDING_STEP_ROUTES, ONBOARDING_DONE_KEY } = await import(pathToFileURL(compiled).href);
-
-		// PME: 4 passos, vídeo master de lucro, progresso zerado
-		const pme = renderToStaticMarkup(createElement(OnboardingHub, { userProfile: 'pme', navigate: () => {} }));
-		assert.match(pme, /Setup da Conta: 0 de 4 passos concluídos — 0%/);
-		assert.match(pme, /dobrar seu lucro operando no automático/);
-		assert.match(pme, /Configurar Perfil Operacional/);
-		assert.match(pme, /Dominar o Oráculo de Preços/);
-		assert.match(pme, /Sua 1ª Campanha no Virtual CMO/);
-		assert.match(pme, /Primeira Lista no Planejador/);
-		assert.match(pme, /data-testid="onboarding-master-video"/);
-		assert.equal((pme.match(/data-testid="onboarding-step"/g) ?? []).length, 4);
-
-		// Enterprise: 3 passos de governança, vídeo master de compliance
-		const ent = renderToStaticMarkup(createElement(OnboardingHub, { userProfile: 'enterprise', navigate: () => {} }));
-		assert.match(ent, /Setup da Conta: 0 de 3 passos concluídos — 0%/);
-		assert.match(ent, /Orquestração e Compliance para Grandes Operações/);
-		assert.match(ent, /Mapeamento de Filiais e Permissões/);
-		assert.match(ent, /Controladoria Enterprise/);
-		assert.match(ent, /DRE Preditivo/);
-		assert.doesNotMatch(ent, /Dominar o Oráculo de Preços/, 'trilha enterprise não mistura passos PME');
-		assert.equal((ent.match(/data-testid="onboarding-step"/g) ?? []).length, 3);
-
-		// OnboardingGuard: helpers de localStorage governam o bloqueio da primeira jornada.
-		globalThis.window.localStorage.removeItem(ONBOARDING_DONE_KEY);
-		assert.equal(isOnboardingComplete(), false, 'chave ausente => onboarding pendente (rota interna bloqueada)');
-		markOnboardingComplete();
-		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), 'true');
-		assert.equal(isOnboardingComplete(), true, 'após liberação => rotas internas liberadas');
-
-		// Allow-list do guard: as rotas dos CTAs dos passos passam mesmo com a trilha em aberto.
-		assert.ok(ONBOARDING_STEP_ROUTES.length >= 1, 'há rotas de passo na allow-list');
-		assert.equal(isOnboardingStepRoute('/plugins/margin-calculator-v1'), true, 'rota do Oráculo é liberada durante o onboarding');
-		assert.equal(isOnboardingStepRoute('/billing'), false, 'rota não-onboarding continua bloqueada');
-
-		// Interação: o CTA de liberação fica TRAVADO até 100% e, ao concluir tudo, libera.
-		globalThis.window.localStorage.removeItem(ONBOARDING_DONE_KEY);
-		globalThis.window.localStorage.removeItem('lidar_onboarding_progress');
-		let releasedTo = null;
-		const { createRoot: createRoot38 } = await import('react-dom/client');
-		const container = globalThis.document.createElement('div');
-		createRoot38(container).render(createElement(OnboardingHub, {
-			userProfile: 'pme',
-			navigate: to => { releasedTo = to; },
-			onComplete: () => { markOnboardingComplete(); releasedTo = '/app'; }
-		}));
-		await new Promise(resolve => setTimeout(resolve, 50));
-
-		// Abre o último passo antes de concluir a trilha: o CTA existe, mas está desabilitado.
-		container.querySelector('[data-testid="onboarding-toggle-planejador"]').click();
-		await new Promise(resolve => setTimeout(resolve, 50));
-		const lockedBtn = container.querySelector('[data-testid="onboarding-finish"]');
-		assert.ok(lockedBtn, 'último passo expõe o CTA "Acessar o Lidar Core"');
-		assert.match(lockedBtn.textContent, /Acessar o Lidar Core/);
-		assert.equal(container.querySelectorAll('[data-testid="onboarding-finish"]').length, 1, 'CTA de liberação aparece uma única vez (no último passo)');
-		assert.ok(lockedBtn.disabled, 'sem 100% da trilha o CTA fica travado (jornada obrigatória)');
-		lockedBtn.click();
-		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), null, 'clicar travado NÃO libera o onboarding');
-		assert.equal(releasedTo, null, 'clicar travado não redireciona');
-
-		// Conclui cada passo (marca concluído); o progresso é persistido em localStorage.
-		for (const stepId of ['perfil-operacional', 'oraculo', 'cmo', 'planejador']) {
-			container.querySelector(`[data-testid="onboarding-toggle-${stepId}"]`).click();
-			await new Promise(resolve => setTimeout(resolve, 20));
-			const doneBtn = container.querySelector(`[data-testid="onboarding-done-${stepId}"]`);
-			if (doneBtn) doneBtn.click();
-			await new Promise(resolve => setTimeout(resolve, 20));
-		}
-		const persisted = JSON.parse(globalThis.window.localStorage.getItem('lidar_onboarding_progress') ?? '[]');
-		assert.equal(persisted.length, 4, 'progresso da trilha persiste no localStorage (sobrevive à ida/volta dos módulos)');
-
-		// Agora com 100%, o CTA acende e libera de fato.
-		const finishBtn = container.querySelector('[data-testid="onboarding-finish"]');
-		assert.ok(!finishBtn.disabled, 'trilha 100% concluída => CTA de liberação acende');
-		finishBtn.click();
-		assert.equal(releasedTo, '/app', 'clique libera e redireciona para o painel');
-		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), 'true', 'liberação grava a flag do gate');
-	} finally {
-		await rm(dir, { recursive: true, force: true });
-	}
-}
-
-// 39. GuidedTour: tour guiado (react-joyride) com roteiro mastigado e gate por localStorage
-{
-	const esbuild = await import('esbuild');
-	const dir = await mkdtemp(new URL('./.smoke-tour-', import.meta.url).pathname);
-	await writeFile(join(dir, 'entry.tsx'), "export { GuidedTour, TOUR_STEPS, TOUR_ANCHORS, TOUR_DONE_KEY, isTourDone, markTourDone } from '../factory-shell/src/GuidedTour';\n");
+	await writeFile(join(dir, 'entry.tsx'), "export { default as OnboardingHub, isOnboardingComplete, markOnboardingComplete, isTerminalTourStatus, TOUR_STEPS, TOUR_ANCHORS, ONBOARDING_DONE_KEY } from '../factory-shell/src/OnboardingHub';\n");
 	try {
 		const bundled = await esbuild.build({
 			entryPoints: [join(dir, 'entry.tsx')],
@@ -1685,44 +1589,47 @@ try {
 		});
 		const compiled = join(dir, 'bundle.mjs');
 		await writeFile(compiled, bundled.outputFiles[0].text);
-		const { GuidedTour, TOUR_STEPS, TOUR_ANCHORS, TOUR_DONE_KEY, isTourDone, markTourDone } = await import(pathToFileURL(compiled).href);
+		const { OnboardingHub, isOnboardingComplete, markOnboardingComplete, isTerminalTourStatus, TOUR_STEPS, TOUR_ANCHORS, ONBOARDING_DONE_KEY } = await import(pathToFileURL(compiled).href);
 
-		// Roteiro: 5 passos, exatamente na comunicação e ordem do briefing.
-		assert.equal(TOUR_STEPS.length, 5, 'o tour tem 5 passos');
+		// Roteiro do tour: 4 passos, comunicação e ordem exatas do briefing.
+		assert.equal(TOUR_STEPS.length, 4, 'o tour tem 4 passos');
 		assert.equal(TOUR_STEPS[0].target, 'body');
 		assert.equal(TOUR_STEPS[0].placement, 'center');
 		assert.ok(TOUR_STEPS[0].disableBeacon, 'passo 1 começa direto (sem beacon)');
 		assert.match(TOUR_STEPS[0].title, /Bem-vindo ao Lidar Core/);
-		assert.match(TOUR_STEPS[0].content, /superpoderes/);
+		assert.match(TOUR_STEPS[0].content, /lucrar mais e operar no automático/);
 
 		// Passos 2-4 apontam para as classes-âncora do menu (o holofote precisa achá-las).
 		assert.equal(TOUR_STEPS[1].target, `.${TOUR_ANCHORS.sidebar}`);
 		assert.match(TOUR_STEPS[1].title, /Painel de Controle/);
 		assert.equal(TOUR_STEPS[2].target, `.${TOUR_ANCHORS.virtualCmo}`);
-		assert.match(TOUR_STEPS[2].content, /Diretor de Marketing/);
+		assert.match(TOUR_STEPS[2].title, /Virtual CMO/);
+		assert.match(TOUR_STEPS[2].content, /agência de marketing de bolso/);
 		assert.equal(TOUR_STEPS[3].target, `.${TOUR_ANCHORS.oraculo}`);
-		assert.match(TOUR_STEPS[3].title, /Pare de adivinhar preços/);
-
-		// Passo final volta ao centro e chama à ação.
-		assert.equal(TOUR_STEPS[4].target, 'body');
-		assert.equal(TOUR_STEPS[4].placement, 'center');
-		assert.match(TOUR_STEPS[4].content, /Virtual CMO/);
+		assert.match(TOUR_STEPS[3].title, /Oráculo de Preços/);
+		assert.match(TOUR_STEPS[3].content, /margem exata/);
 
 		// Âncoras batem com as classes que a MainLayout injeta no DOM.
 		assert.equal(TOUR_ANCHORS.sidebar, 'sidebar-menu-container');
 		assert.equal(TOUR_ANCHORS.virtualCmo, 'tour-virtual-cmo');
 		assert.equal(TOUR_ANCHORS.oraculo, 'tour-oraculo');
 
-		// Gate por localStorage: roda só até ser concluído/pulado uma vez.
-		assert.equal(TOUR_DONE_KEY, 'lidar_tour_done');
-		globalThis.window.localStorage.removeItem(TOUR_DONE_KEY);
-		assert.equal(isTourDone(), false, 'sem a flag => tour ainda deve rodar');
-		markTourDone();
-		assert.equal(globalThis.window.localStorage.getItem(TOUR_DONE_KEY), 'true');
-		assert.equal(isTourDone(), true, 'após ver => nunca mais dispara');
+		// Route Guard: helpers de localStorage governam o gate da primeira experiência.
+		assert.equal(ONBOARDING_DONE_KEY, 'lidar_onboarding_completed');
+		globalThis.window.localStorage.removeItem(ONBOARDING_DONE_KEY);
+		assert.equal(isOnboardingComplete(), false, 'sem a flag => guard prende o usuário no tour');
+		markOnboardingComplete();
+		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), 'true');
+		assert.equal(isOnboardingComplete(), true, 'após terminar/pular => Painel liberado');
 
-		// Não intromete no render inicial do painel: sem run, o componente é nulo.
-		assert.equal(renderToStaticMarkup(createElement(GuidedTour, { autoStart: false })), '', 'GuidedTour não polui o SSR/render inicial');
+		// Gatilho de liberação: só 'finished'/'skipped' encerram o tour e liberam o Painel.
+		assert.equal(isTerminalTourStatus('finished'), true, 'concluir encerra o tour');
+		assert.equal(isTerminalTourStatus('skipped'), true, 'pular também encerra o tour');
+		assert.equal(isTerminalTourStatus('running'), false, 'tour em andamento não libera');
+		assert.equal(isTerminalTourStatus('paused'), false, 'tour pausado não libera');
+
+		// Não intromete no SSR/render inicial: antes de montar (run=false) o componente é nulo.
+		assert.equal(renderToStaticMarkup(createElement(OnboardingHub, { navigate: () => {} })), '', 'OnboardingHub não polui o SSR/render inicial');
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

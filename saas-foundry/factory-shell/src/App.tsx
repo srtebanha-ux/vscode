@@ -11,8 +11,7 @@ import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } fro
 import { MasterDashboard } from './admin/MasterDashboard';
 import { BillingPage } from './billing/BillingPage';
 import { DashboardHome } from './DashboardHome';
-import OnboardingHub, { isOnboardingComplete, isOnboardingStepRoute, markOnboardingComplete } from './OnboardingHub';
-import { readUserTier } from './catalog';
+import OnboardingHub, { isOnboardingComplete } from './OnboardingHub';
 import { TaxSettings } from './settings/TaxSettings';
 import type { UserRole } from './auth/AuthProvider';
 import { MainLayout, type SessionInfo } from './MainLayout';
@@ -128,31 +127,13 @@ function NotFound({ path }: { readonly path: string }): ReactElement {
  * plugin — a global provider would hand services to unvalidated code.
  */
 export function App({ registry, principal, api, role, path, navigate, session }: AppProps): ReactElement {
-	// ── Onboarding em tela cheia ──────────────────────────────────────────────
-	// A primeira jornada é obrigatória e sem distrações: a rota /onboarding é
-	// renderizada FORA do MainLayout — sem Sidebar, sem Header — ocupando 100vw/100vh.
-	// O botão final marca a conclusão em localStorage e devolve o usuário ao Painel.
-	if (path === '/onboarding') {
-		return (
-			<div className="min-h-screen w-full overflow-y-auto bg-gray-50 px-4 py-8 sm:px-6 lg:px-8">
-				<OnboardingHub
-					userProfile={readUserTier() ?? 'pme'}
-					navigate={navigate}
-					onComplete={() => {
-						markOnboardingComplete();
-						navigate('/app');
-					}}
-				/>
-			</div>
-		);
-	}
-
 	// ── OnboardingGuard ───────────────────────────────────────────────────────
-	// Enquanto a chave `lidar_onboarding_completed` não for `true`, as rotas internas
-	// são bloqueadas e o usuário é reconduzido à trilha. Exceção: as rotas dos módulos
-	// que os próprios passos abrem ("aprenda fazendo") passam — senão o CTA "Abrir o
-	// Oráculo" ricochetearia de volta e a trilha nunca deixaria testar nada.
-	if (!isOnboardingComplete() && !isOnboardingStepRoute(path)) {
+	// A primeira experiência é o TOUR GUIADO: enquanto `lidar_onboarding_completed`
+	// não for `true`, qualquer rota interna é reconduzida a /onboarding, onde o
+	// holofote (react-joyride) roda sobre o Painel real. O tour precisa do shell
+	// (Sidebar) montado para achar seus alvos, então /onboarding renderiza DENTRO
+	// do MainLayout — não é mais uma tela cheia à parte.
+	if (!isOnboardingComplete() && path !== '/onboarding') {
 		return <RedirectTo to="/onboarding" navigate={navigate} />;
 	}
 
@@ -168,6 +149,10 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 			: <DashboardHome email={session?.email} navigate={navigate} />;
 	} else if (path === '/marketplace' || path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
+	} else if (path === '/onboarding') {
+		// Tour guiado (spotlight) sobre o Painel real. O próprio componente marca a
+		// conclusão e navega para /app quando o usuário termina ou pula.
+		content = <OnboardingHub navigate={navigate} />;
 	} else if (path === '/settings/fiscal') {
 		content = <TaxSettings />;
 	} else if (path === '/billing') {

@@ -4,12 +4,12 @@ import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
 import { readUserTier, USER_TIER_EVENT } from './catalog';
 import { Boxes, BrainCircuit, CircleDollarSign, Eye, FileText, GraduationCap, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
-import { GuidedTour, TOUR_ANCHORS } from './GuidedTour';
+import { TOUR_ANCHORS } from './OnboardingHub';
 
 /**
- * Âncoras do tour guiado por pluginId: o Joyride procura estas classes no DOM
- * para colocar o holofote no botão certo do menu. Só os módulos citados no
- * roteiro precisam de âncora.
+ * Âncoras do tour guiado por pluginId: o Joyride (no OnboardingHub) procura estas
+ * classes no DOM para colocar o holofote no botão certo do menu. Só os módulos
+ * citados no roteiro precisam de âncora.
  */
 const SIDEBAR_TOUR_ANCHORS: Readonly<Record<string, string>> = {
 	'virtual-cmo-v1': TOUR_ANCHORS.virtualCmo,
@@ -341,8 +341,6 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 
 			<main className="min-w-0 flex-1 px-8 py-8">{children}</main>
 			<CommandPalette commands={commands} open={paletteOpen} onOpenChange={setPaletteOpen} />
-			{/* Tour guiado (spotlight) — auto-inicia só no painel, uma única vez. */}
-			<GuidedTour autoStart={currentPath === '/app'} />
 		</div>
 		</ToastProvider>
 	);

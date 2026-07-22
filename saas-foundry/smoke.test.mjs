@@ -343,6 +343,9 @@ try {
 	await writeFile(join(healLib, 'dead', 'manifest.json'), JSON.stringify({ id: 'block.dead', version: '1.0.0', permissions: [], entryPoint: 'index.js' }));
 	await writeFile(join(healLib, 'dead', 'index.js'),
 		'export function createPlugin() { return function Dead() { throw new Error("always boom"); }; }');
+		await mkdir(join(healLib, 'loadfail'), { recursive: true });
+		await writeFile(join(healLib, 'loadfail', 'manifest.json'), JSON.stringify({ id: 'block.loadfail', version: '1.0.0', permissions: [], entryPoint: 'index.js' }));
+		await writeFile(join(healLib, 'loadfail', 'index.js'), 'throw new Error("simulated chunk load failure");');
 
 	const { PluginRenderer } = await import('@foundry/engine-core');
 	const healRegistry = new PluginRegistry(healLib);
@@ -362,6 +365,12 @@ try {
 	await new Promise(resolve => setTimeout(resolve, 1800)); // 2 tentativas esgotadas
 	assert.match(deadContainer.innerHTML, /Plugin indisponível/);
 	assert.match(deadContainer.innerHTML, /Restaurar módulo/);
+		const failContainer = dom.window.document.createElement('div');
+		createRoot(failContainer).render(createElement(PluginRenderer, { pluginId: 'block.loadfail', registry: healRegistry, principal: anon, api: fakeApi }));
+		await new Promise(resolve => setTimeout(resolve, 500));
+		assert.match(failContainer.innerHTML, /Não foi possível carregar/, 'load-failed mostra mensagem amigável');
+		assert.match(failContainer.innerHTML, /Tentar novamente/, 'load-failed oferece um retry ao usuário');
+		assert.doesNotMatch(failContainer.innerHTML, /load-failed/, 'não expõe o código técnico ao usuário leigo');
 } finally {
 	await rm(healLib, { recursive: true, force: true });
 }
@@ -1599,7 +1608,7 @@ try {
 			cmo: { path: '/plugins/virtual-cmo-v1', steps: 5 },
 			oraculo: { path: '/plugins/margin-calculator-v1', steps: 7 },
 			planejador: { path: '/plugins/construction-calculator-v1', steps: 5 },
-			recibo: { path: '/plugins/quick-receipt-maker-v1', steps: 6 },
+			recibo: { path: '/plugins/quick-receipt-maker-v1', steps: 5 },
 			fiscal: { path: '/plugins/smart-invoice-helper-v1', steps: 4 }
 		};
 		for (const [key, meta] of Object.entries(expected)) {
@@ -1625,10 +1634,16 @@ try {
 		assert.equal(byKey.planejador.steps[1].target, '.tour-planejador-tipo');
 		assert.equal(byKey.planejador.steps[4].target, '.tour-planejador-gerar');
 		assert.equal(byKey.recibo.steps[1].target, '.tour-recibo-cliente');
-		assert.equal(byKey.recibo.steps[5].target, '.tour-recibo-gerar');
+		assert.equal(byKey.recibo.steps[4].target, '.tour-recibo-gerar');
 		assert.equal(byKey.fiscal.steps[1].target, '.tour-fiscal-faturamento');
 		assert.equal(byKey.fiscal.steps[3].target, '.tour-fiscal-alerta');
-		assert.match(byKey.fiscal.steps[3].content, /ficar vermelho/);
+
+		// Onboarding hiper-detalhado (passo a passo físico na tela).
+		assert.match(byKey.recibo.steps[1].content, /nome completo ou a razão social/, 'Recibo: cliente com detalhe legal');
+		assert.match(byKey.recibo.steps[3].content, /digite apenas números/, 'Recibo: valor só com números');
+		assert.match(byKey.recibo.steps[4].content, /Gerar PDF/, 'Recibo: gerar PDF pronto para WhatsApp');
+		assert.match(byKey.fiscal.steps[1].content, /faturamento bruto do mês anterior/, 'Fiscal: faturamento bruto do mês anterior');
+		assert.match(byKey.fiscal.steps[3].content, /amarelo ou vermelho/, 'Fiscal: semáforo de alertas verde/amarelo/vermelho');
 
 		// Diário de Bordo (TourState): 5 chaves, default false, uma flag por módulo.
 		assert.equal(TOUR_STATE_KEY, 'lidar_tour_state');

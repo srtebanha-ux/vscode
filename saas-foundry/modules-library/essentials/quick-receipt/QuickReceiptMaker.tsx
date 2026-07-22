@@ -96,7 +96,7 @@ function ReceiptMaker(): React.JSX.Element {
 			{/* Formulário coluna única */}
 			<div id="tour-receipt-form" className="overflow-hidden rounded-2xl bg-white shadow-sm">
 				<header className="border-b border-gray-100 px-6 py-4">
-					<h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
+					<h1 className="tour-recibo-intro flex items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
 						<FileText className="h-5 w-5 text-indigo-500" aria-hidden />
 						Recibo Rápido
 						<span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-semibold text-indigo-600">Essencial</span>
@@ -106,16 +106,16 @@ function ReceiptMaker(): React.JSX.Element {
 				<div className="flex flex-col gap-4 p-6">
 					<label className="block">
 						<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-700"><User className="h-4 w-4 text-gray-400" aria-hidden /> Nome do Cliente</span>
-						<input value={data.client} onChange={e => set({ client: e.target.value })} placeholder="Ex.: Marcos Andrade" className="w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm shadow-sm outline-none transition-all focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100" />
+						<input value={data.client} onChange={e => set({ client: e.target.value })} placeholder="Ex.: Marcos Andrade" className="tour-recibo-cliente w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm shadow-sm outline-none transition-all focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100" />
 					</label>
 					<label className="block">
 						<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-700"><Wrench className="h-4 w-4 text-gray-400" aria-hidden /> Descrição do Serviço</span>
-						<textarea value={data.service} onChange={e => set({ service: e.target.value })} rows={2} placeholder="Ex.: Instalação elétrica de 3 pontos" className="w-full resize-none rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm shadow-sm outline-none transition-all focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100" />
+						<textarea value={data.service} onChange={e => set({ service: e.target.value })} rows={2} placeholder="Ex.: Instalação elétrica de 3 pontos" className="tour-recibo-descricao w-full resize-none rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm shadow-sm outline-none transition-all focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100" />
 					</label>
 					<div className="grid grid-cols-2 gap-4">
 						<label className="block">
 							<span className="mb-1.5 block text-sm font-medium text-gray-700">Valor</span>
-							<div className="flex items-center rounded-xl border border-gray-200 bg-white shadow-sm transition-all focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
+							<div className="tour-recibo-valor flex items-center rounded-xl border border-gray-200 bg-white shadow-sm transition-all focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
 								<span className="pl-3.5 text-sm text-gray-400">R$</span>
 								<input type="number" inputMode="decimal" min={0} step="any" value={data.amount} onChange={e => set({ amount: e.target.value })} placeholder="850" className="w-full rounded-xl bg-transparent px-2 py-2.5 text-sm outline-none placeholder:text-gray-300" />
 							</div>
@@ -141,7 +141,7 @@ function ReceiptMaker(): React.JSX.Element {
 							type="button"
 							onClick={download}
 							disabled={!acknowledged}
-							className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+							className="tour-recibo-gerar inline-flex items-center justify-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:scale-[1.02] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
 						>
 							<Download className="h-4 w-4" aria-hidden />
 							Baixar PDF

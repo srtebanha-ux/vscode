@@ -404,10 +404,10 @@ function Planner(): React.JSX.Element {
 						<span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-white shadow-lg shadow-indigo-500/30">
 							<Boxes className="h-6 w-6" aria-hidden />
 						</span>
-						<h1 className="mt-5 text-2xl font-bold tracking-tight text-gray-900">Planejador Preditivo de Estoque</h1>
+						<h1 className="tour-planejador-intro mt-5 text-2xl font-bold tracking-tight text-gray-900">Planejador Preditivo de Estoque</h1>
 						<p className="mt-1.5 text-sm text-gray-500">Em qual área você trabalha? Toque no seu nicho — sem digitar nada.</p>
 
-						<div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+						<div className="tour-planejador-tipo mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
 							{NICHES.map(option => (
 								<button
 									key={option.id}
@@ -602,7 +602,7 @@ function Planner(): React.JSX.Element {
 
 						<div className="mt-6 grid gap-4">
 							{template.fields.map(inputField => (
-								<label key={inputField.id} className="block">
+								<label key={inputField.id} className="tour-planejador-medidas block">
 									<span className="mb-1.5 block text-sm font-medium text-gray-700">{inputField.label}</span>
 									<div className="flex items-center rounded-xl border border-gray-200 bg-white shadow-sm transition-all focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
 										<input
@@ -675,7 +675,7 @@ function Planner(): React.JSX.Element {
 							onClick={generate}
 							disabled={!inputsOk}
 							data-testid="generate-button"
-							className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
+							className="tour-planejador-gerar mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:scale-100"
 						>
 							<Sparkles className="h-4 w-4" aria-hidden /> Gerar Lista de Compras
 						</button>

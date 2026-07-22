@@ -25,6 +25,23 @@ import { getFirebase, isFirebaseConfigured } from './services/firebaseConfig';
 import { FirebaseApiService } from './services/FirebaseApiService';
 import './styles.css';
 
+/**
+ * Recuperação de deploy: cada build novo troca o hash dos chunks lazy (módulos).
+ * Um `index.html` ainda em cache pode apontar para um chunk que não existe mais,
+ * e a rota do plugin falha com `load-failed`. O Vite emite `vite:preloadError`
+ * exatamente nesse caso — recarregamos a página UMA vez para buscar o shell e os
+ * chunks atuais (guarda de 10s evita loop se o chunk estiver realmente quebrado).
+ */
+if (typeof window !== 'undefined') {
+	window.addEventListener('vite:preloadError', () => {
+		const now = Date.now();
+		const last = Number(window.sessionStorage.getItem('lidar:preload-reload') ?? '0');
+		if (now - last < 10_000) return;
+		window.sessionStorage.setItem('lidar:preload-reload', String(now));
+		window.location.reload();
+	});
+}
+
 const registry = createPluginRegistry();
 
 interface Router {

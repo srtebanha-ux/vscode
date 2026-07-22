@@ -4,6 +4,17 @@ import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
 import { readUserTier, USER_TIER_EVENT } from './catalog';
 import { Boxes, BrainCircuit, CircleDollarSign, Eye, FileText, GraduationCap, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
+import { GuidedTour, TOUR_ANCHORS } from './GuidedTour';
+
+/**
+ * Âncoras do tour guiado por pluginId: o Joyride procura estas classes no DOM
+ * para colocar o holofote no botão certo do menu. Só os módulos citados no
+ * roteiro precisam de âncora.
+ */
+const SIDEBAR_TOUR_ANCHORS: Readonly<Record<string, string>> = {
+	'virtual-cmo-v1': TOUR_ANCHORS.virtualCmo,
+	'margin-calculator-v1': TOUR_ANCHORS.oraculo
+};
 
 /** Porte da empresa do usuário — define o que aparece na navegação. */
 export type AccessProfile = 'pme' | 'enterprise';
@@ -177,7 +188,7 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 					</button>
 				</div>
 
-				<nav aria-label="Módulos" className="flex-1 space-y-1 px-3 py-2">
+				<nav aria-label="Módulos" className={`${TOUR_ANCHORS.sidebar} flex-1 space-y-1 px-3 py-2`}>
 					<a
 						href="/marketplace"
 						title="Marketplace"
@@ -229,6 +240,8 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 						const active = currentPath === mod.path;
 						const Icon = mod.icon;
 						const version = mod.pluginId ? registered.get(mod.pluginId) : undefined;
+						// Âncora do holofote (só nos módulos citados no roteiro do tour).
+						const tourAnchor = mod.pluginId ? SIDEBAR_TOUR_ANCHORS[mod.pluginId] : undefined;
 						return (
 							<a
 								key={mod.pluginId ?? mod.path}
@@ -237,6 +250,8 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 								aria-current={active ? 'page' : undefined}
 								onClick={event => navigate(event, mod.path)}
 								className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
+									tourAnchor ? `${tourAnchor} ` : ''
+								}${
 									active
 										? 'bg-gray-900 text-white shadow-sm'
 										: 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
@@ -326,6 +341,8 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 
 			<main className="min-w-0 flex-1 px-8 py-8">{children}</main>
 			<CommandPalette commands={commands} open={paletteOpen} onOpenChange={setPaletteOpen} />
+			{/* Tour guiado (spotlight) — auto-inicia só no painel, uma única vez. */}
+			<GuidedTour autoStart={currentPath === '/app'} />
 		</div>
 		</ToastProvider>
 	);

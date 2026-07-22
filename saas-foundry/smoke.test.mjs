@@ -1671,4 +1671,61 @@ try {
 	}
 }
 
+// 39. GuidedTour: tour guiado (react-joyride) com roteiro mastigado e gate por localStorage
+{
+	const esbuild = await import('esbuild');
+	const dir = await mkdtemp(new URL('./.smoke-tour-', import.meta.url).pathname);
+	await writeFile(join(dir, 'entry.tsx'), "export { GuidedTour, TOUR_STEPS, TOUR_ANCHORS, TOUR_DONE_KEY, isTourDone, markTourDone } from '../factory-shell/src/GuidedTour';\n");
+	try {
+		const bundled = await esbuild.build({
+			entryPoints: [join(dir, 'entry.tsx')],
+			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', jsx: 'automatic',
+			external: ['react', 'react-dom', 'react/jsx-runtime', 'react-joyride', 'framer-motion', 'lucide-react'],
+			define: { 'import.meta.env': '{}' }
+		});
+		const compiled = join(dir, 'bundle.mjs');
+		await writeFile(compiled, bundled.outputFiles[0].text);
+		const { GuidedTour, TOUR_STEPS, TOUR_ANCHORS, TOUR_DONE_KEY, isTourDone, markTourDone } = await import(pathToFileURL(compiled).href);
+
+		// Roteiro: 5 passos, exatamente na comunicação e ordem do briefing.
+		assert.equal(TOUR_STEPS.length, 5, 'o tour tem 5 passos');
+		assert.equal(TOUR_STEPS[0].target, 'body');
+		assert.equal(TOUR_STEPS[0].placement, 'center');
+		assert.ok(TOUR_STEPS[0].disableBeacon, 'passo 1 começa direto (sem beacon)');
+		assert.match(TOUR_STEPS[0].title, /Bem-vindo ao Lidar Core/);
+		assert.match(TOUR_STEPS[0].content, /superpoderes/);
+
+		// Passos 2-4 apontam para as classes-âncora do menu (o holofote precisa achá-las).
+		assert.equal(TOUR_STEPS[1].target, `.${TOUR_ANCHORS.sidebar}`);
+		assert.match(TOUR_STEPS[1].title, /Painel de Controle/);
+		assert.equal(TOUR_STEPS[2].target, `.${TOUR_ANCHORS.virtualCmo}`);
+		assert.match(TOUR_STEPS[2].content, /Diretor de Marketing/);
+		assert.equal(TOUR_STEPS[3].target, `.${TOUR_ANCHORS.oraculo}`);
+		assert.match(TOUR_STEPS[3].title, /Pare de adivinhar preços/);
+
+		// Passo final volta ao centro e chama à ação.
+		assert.equal(TOUR_STEPS[4].target, 'body');
+		assert.equal(TOUR_STEPS[4].placement, 'center');
+		assert.match(TOUR_STEPS[4].content, /Virtual CMO/);
+
+		// Âncoras batem com as classes que a MainLayout injeta no DOM.
+		assert.equal(TOUR_ANCHORS.sidebar, 'sidebar-menu-container');
+		assert.equal(TOUR_ANCHORS.virtualCmo, 'tour-virtual-cmo');
+		assert.equal(TOUR_ANCHORS.oraculo, 'tour-oraculo');
+
+		// Gate por localStorage: roda só até ser concluído/pulado uma vez.
+		assert.equal(TOUR_DONE_KEY, 'lidar_tour_done');
+		globalThis.window.localStorage.removeItem(TOUR_DONE_KEY);
+		assert.equal(isTourDone(), false, 'sem a flag => tour ainda deve rodar');
+		markTourDone();
+		assert.equal(globalThis.window.localStorage.getItem(TOUR_DONE_KEY), 'true');
+		assert.equal(isTourDone(), true, 'após ver => nunca mais dispara');
+
+		// Não intromete no render inicial do painel: sem run, o componente é nulo.
+		assert.equal(renderToStaticMarkup(createElement(GuidedTour, { autoStart: false })), '', 'GuidedTour não polui o SSR/render inicial');
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
 console.log('ALL SMOKE TESTS PASSED');

@@ -115,9 +115,12 @@ export interface OnboardingHubProps {
 export default function OnboardingHub({ navigate }: OnboardingHubProps): ReactElement | null {
 	const [run, setRun] = useState(false);
 
-	// Dispara o holofote assim que monta no cliente (garante que os alvos da
-	// Sidebar já existem no DOM). No SSR/testes, `run` fica falso e não intromete.
+	// Dispara o holofote só na PRIMEIRA vez: se o onboarding já foi concluído,
+	// não reabre o tour ao voltar para /onboarding (Back/link), evitando o
+	// replay em loop — o callback terminal navegaria para /app de novo. No
+	// SSR/testes, `run` fica falso e não intromete.
 	useEffect(() => {
+		if (isOnboardingComplete()) return undefined;
 		const timer = window.setTimeout(() => setRun(true), 400);
 		return () => window.clearTimeout(timer);
 	}, []);

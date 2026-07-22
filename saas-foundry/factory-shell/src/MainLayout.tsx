@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
 import { readUserTier, USER_TIER_EVENT } from './catalog';
-import { Boxes, BrainCircuit, CircleDollarSign, Eye, FileText, GraduationCap, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
+import { Boxes, BrainCircuit, CircleDollarSign, Eye, FileText, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
 import { TOUR_ANCHORS } from './OnboardingHub';
 
@@ -123,7 +123,6 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 	const commands = useMemo<readonly Command[]>(() => {
 		const items: Command[] = [
 			{ id: 'nav-home', label: 'Início', hint: 'Painel principal', icon: Home, keywords: 'home dashboard painel', run: () => onNavigate('/app') },
-			{ id: 'nav-onboarding', label: 'Central de Setup', hint: 'Onboarding guiado e treinamento', icon: GraduationCap, keywords: 'onboarding setup treinamento tutorial começar aprender', run: () => onNavigate('/onboarding') },
 			{ id: 'nav-store', label: 'Marketplace', hint: 'Ativar módulos e assinatura', icon: Store, keywords: 'loja store módulos assinatura', run: () => onNavigate('/marketplace') },
 			{ id: 'nav-billing', label: 'Faturamento', hint: 'Consumo de IA, plano e faturas', icon: Receipt, keywords: 'faturamento billing assinatura fatura tokens cota plano stripe', run: () => onNavigate('/billing') },
 			{ id: 'nav-tax-settings', label: 'Configurações Fiscais', hint: 'Certificado A1 e emissão automática', icon: Lock, keywords: 'certificado a1 fiscal emissão nota configurações segurança pfx p12', run: () => onNavigate('/settings/fiscal') },
@@ -202,20 +201,6 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 					>
 						<Store className="h-5 w-5 shrink-0" aria-hidden />
 						{!collapsed && <span className="truncate">Marketplace</span>}
-					</a>
-					<a
-						href="/onboarding"
-						title="Central de Setup"
-						aria-current={currentPath === '/onboarding' ? 'page' : undefined}
-						onClick={event => navigate(event, '/onboarding')}
-						className={`group mb-3 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
-							currentPath === '/onboarding'
-								? 'bg-gray-900 text-white shadow-sm'
-								: 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
-						}`}
-					>
-						<GraduationCap className="h-5 w-5 shrink-0" aria-hidden />
-						{!collapsed && <span className="truncate">Central de Setup</span>}
 					</a>
 					{adminModule && (
 						<a

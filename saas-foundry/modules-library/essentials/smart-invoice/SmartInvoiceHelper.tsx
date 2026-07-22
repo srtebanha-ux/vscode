@@ -588,7 +588,7 @@ function Helper(): React.JSX.Element {
 		<ToolOnboardingTour storageKey="lidar:tour:smart-invoice" steps={ONBOARDING_STEPS} />
 		<section className="mx-auto max-w-5xl overflow-hidden rounded-2xl bg-white shadow-sm">
 			<header className="border-b border-gray-100 px-6 py-4">
-				<h1 className="flex flex-wrap items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
+				<h1 className="tour-fiscal-intro flex flex-wrap items-center gap-2 text-lg font-semibold tracking-tight text-gray-900">
 					<ReceiptText className="h-5 w-5 text-indigo-500" aria-hidden />
 					Assistente Fiscal Inteligente
 					<span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-semibold text-indigo-600">Emissor de NF</span>
@@ -644,7 +644,7 @@ function Helper(): React.JSX.Element {
 							value={valor}
 							onChange={event => setValor(maskBRL(event.target.value))}
 							placeholder="R$ 0,00"
-							className={`${inputBase} border-gray-200 font-semibold tabular-nums focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100`}
+							className={`tour-fiscal-faturamento ${inputBase} border-gray-200 font-semibold tabular-nums focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100`}
 						/>
 					</Field>
 
@@ -687,7 +687,7 @@ function Helper(): React.JSX.Element {
 								initial={{ opacity: 0.6, y: 4 }}
 								animate={{ opacity: 1, y: 0 }}
 								data-testid="net-amount"
-								className="rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 p-5 text-white shadow-lg shadow-emerald-500/20"
+								className="tour-fiscal-alerta rounded-2xl bg-gradient-to-br from-emerald-500 to-emerald-600 p-5 text-white shadow-lg shadow-emerald-500/20"
 							>
 								<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-white/80">
 									<Wallet className="h-4 w-4" aria-hidden /> Valor Líquido a Receber
@@ -700,7 +700,7 @@ function Helper(): React.JSX.Element {
 							</motion.div>
 
 							{/* Impostos calculados (com o valor retido por linha) */}
-							<div data-testid="tax-summary" className="rounded-2xl bg-gray-900 p-4 text-white">
+							<div data-testid="tax-summary" className="tour-fiscal-aliquota rounded-2xl bg-gray-900 p-4 text-white">
 								<span className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-white/60">
 									<Scale className="h-4 w-4" aria-hidden /> Impostos calculados automaticamente
 								</span>

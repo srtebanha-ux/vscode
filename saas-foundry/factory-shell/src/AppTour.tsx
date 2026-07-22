@@ -8,53 +8,85 @@ import Joyride, { ACTIONS, STATUS, type CallBackProps, type Locale, type Step, t
  * seu próprio tour profundo, campo por campo, explicando o PORQUÊ de cada ação e
  * tirando o medo de errar. O <Joyride/> vive no MainLayout (shell persistente) e
  * escolhe o roteiro pela ROTA atual — é contextual. Roda uma vez por módulo
- * (flag por chave em localStorage) na primeira visita.
+ * (Diário de Bordo por módulo em localStorage) na primeira visita, e pode ser
+ * reaberto a qualquer momento pelo botão "Ver tutorial".
  *
  * Robustez: antes de rodar, filtramos os passos para os alvos que REALMENTE
- * existem no DOM. Assim, à medida que a interface de cada módulo recebe as
- * classes-âncora (`.tour-*`), os passos correspondentes acendem — e nenhum
- * alvo ausente quebra o tour (degradação graciosa).
+ * existem no DOM. E o auto-start SONDA o DOM até o módulo (chunk lazy) renderizar
+ * — nada de janela fixa de tempo. Assim, à medida que a interface de cada módulo
+ * recebe as classes-âncora (`.tour-*`), os passos correspondentes acendem, e
+ * nenhum alvo ausente quebra o tour (degradação graciosa).
  */
 
-// ── Estado "já viu" por módulo ───────────────────────────────────────────────
+// ── Diário de Bordo: estado "já viu" dos 5 módulos ───────────────────────────
 
-/** Conjunto (JSON) das chaves de tour já concluídas/puladas. */
-export const TOUR_SEEN_KEY = 'lidar_tours_seen';
+/** Rastreia, por módulo, se o Deep Tour já foi concluído/pulado. */
+export interface TourState {
+	cmo: boolean;
+	oraculo: boolean;
+	planejador: boolean;
+	recibo: boolean;
+	fiscal: boolean;
+}
 
-function readSeen(): readonly string[] {
-	if (typeof window === 'undefined') return [];
+/** Chave do Diário de Bordo em localStorage. */
+export const TOUR_STATE_KEY = 'lidar_tour_state';
+
+/** Estado inicial: nenhum tour visto (false para todos). */
+export const DEFAULT_TOUR_STATE: TourState = {
+	cmo: false,
+	oraculo: false,
+	planejador: false,
+	recibo: false,
+	fiscal: false
+};
+
+/** Identidade de um tour = a chave do módulo no Diário de Bordo. */
+export type TourKey = keyof TourState;
+
+/** Lê o Diário de Bordo (tolerante a JSON corrompido/ausente). */
+export function readTourState(): TourState {
+	if (typeof window === 'undefined') return { ...DEFAULT_TOUR_STATE };
 	try {
-		const parsed: unknown = JSON.parse(window.localStorage.getItem(TOUR_SEEN_KEY) ?? '[]');
-		return Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === 'string') : [];
+		const parsed: unknown = JSON.parse(window.localStorage.getItem(TOUR_STATE_KEY) ?? '{}');
+		if (parsed === null || typeof parsed !== 'object') return { ...DEFAULT_TOUR_STATE };
+		const record = parsed as Partial<Record<TourKey, unknown>>;
+		return {
+			cmo: record.cmo === true,
+			oraculo: record.oraculo === true,
+			planejador: record.planejador === true,
+			recibo: record.recibo === true,
+			fiscal: record.fiscal === true
+		};
 	} catch {
-		return [];
+		return { ...DEFAULT_TOUR_STATE };
 	}
 }
 
 /** O tour deste módulo já foi visto? (SSR/testes nunca disparam.) */
-export function isTourSeen(key: string): boolean {
+export function isTourSeen(key: TourKey): boolean {
 	if (typeof window === 'undefined') return true;
-	return readSeen().includes(key);
+	return readTourState()[key];
 }
 
-/** Marca o tour do módulo como visto (não repete). */
-export function markTourSeen(key: string): void {
+/** Marca o tour do módulo como visto no Diário de Bordo (não repete sozinho). */
+export function markTourSeen(key: TourKey): void {
 	if (typeof window === 'undefined') return;
-	const next = Array.from(new Set([...readSeen(), key]));
-	window.localStorage.setItem(TOUR_SEEN_KEY, JSON.stringify(next));
+	const next: TourState = { ...readTourState(), [key]: true };
+	window.localStorage.setItem(TOUR_STATE_KEY, JSON.stringify(next));
 }
 
 // ── O dicionário de Deep Tours (conteúdo por módulo) ─────────────────────────
 
 export interface ModuleTour {
-	/** Identidade do tour (chave da flag "já viu"). */
-	readonly key: string;
+	/** Identidade do tour (chave do Diário de Bordo). */
+	readonly key: TourKey;
 	/** Rota onde este tour roda (o controlador casa pela rota atual). */
 	readonly path: string;
 	readonly steps: readonly Step[];
 }
 
-/** Primeiro passo de cada tour começa direto (sem beacon) e sem seta pendente. */
+/** Primeiro passo de cada tour começa direto (sem beacon). */
 const intro = (target: string, title: string, content: string): Step => ({
 	target,
 	placement: 'auto',
@@ -67,11 +99,11 @@ const step = (target: string, title: string, content: string): Step => ({ target
 
 /**
  * Dicionário dos 5 módulos principais. Os `target` são as classes-âncora EXATAS
- * a mapear na interface de cada módulo (ver guia no PR). Ordem = ordem do tour.
+ * mapeadas na interface de cada módulo. Ordem = ordem do tour.
  */
 export const MODULE_TOURS: readonly ModuleTour[] = [
 	{
-		key: 'virtual-cmo',
+		key: 'cmo',
 		path: '/plugins/virtual-cmo-v1',
 		steps: [
 			intro('.tour-cmo-intro', 'Seu Diretor de Marketing', 'Bem-vindo ao seu Diretor de Marketing. Esqueça o bloqueio criativo, nós vamos criar suas campanhas por você. Clique em Próximo.'),
@@ -186,13 +218,12 @@ export interface AppTourProps {
 export function AppTour({ currentPath }: AppTourProps): ReactElement | null {
 	const [run, setRun] = useState(false);
 	const [steps, setSteps] = useState<readonly Step[]>([]);
-	const [activeKey, setActiveKey] = useState<string | null>(null);
+	const [activeKey, setActiveKey] = useState<TourKey | null>(null);
 
-	// Ao entrar num módulo com tour ainda não visto, ESPERA os alvos aparecerem no
-	// DOM antes de disparar. Cada módulo é um chunk lazy: na primeira visita ele
-	// baixa pela rede e renderiza DEPOIS de alguns ms — um único setTimeout curto
-	// erraria a janela e o tour nunca começaria. Por isso, sondamos até o alvo
-	// existir (com teto), tornando o auto-start robusto a carregamento lento.
+	// Auto-start (primeira visita): ESPERA os alvos aparecerem no DOM antes de
+	// disparar. Cada módulo é um chunk lazy — na primeira visita ele baixa pela
+	// rede e renderiza depois de alguns ms; um setTimeout fixo erraria a janela e
+	// o tour nunca começaria. Por isso sondamos (com teto) até o alvo existir.
 	useEffect(() => {
 		if (run) return undefined; // um tour de cada vez
 		const tour = tourForPath(currentPath);

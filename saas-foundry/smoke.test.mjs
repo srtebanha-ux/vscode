@@ -1579,7 +1579,7 @@ try {
 {
 	const esbuild = await import('esbuild');
 	const dir = await mkdtemp(new URL('./.smoke-tour-', import.meta.url).pathname);
-	await writeFile(join(dir, 'entry.tsx'), "export { default as AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, TOUR_SEEN_KEY, TOUR_START_EVENT } from '../factory-shell/src/AppTour';\n");
+	await writeFile(join(dir, 'entry.tsx'), "export { default as AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } from '../factory-shell/src/AppTour';\n");
 	try {
 		const bundled = await esbuild.build({
 			entryPoints: [join(dir, 'entry.tsx')],
@@ -1589,14 +1589,14 @@ try {
 		});
 		const compiled = join(dir, 'bundle.mjs');
 		await writeFile(compiled, bundled.outputFiles[0].text);
-		const { AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, TOUR_SEEN_KEY, TOUR_START_EVENT } = await import(pathToFileURL(compiled).href);
+		const { AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } = await import(pathToFileURL(compiled).href);
 		assert.equal(TOUR_START_EVENT, 'lidar:tour:start', 'evento do botão "Ver tutorial"');
 
 		// Dicionário: 5 módulos principais, cada um com o seu Deep Tour.
 		assert.equal(MODULE_TOURS.length, 5, 'há 5 Deep Tours (um por módulo principal)');
 		const byKey = Object.fromEntries(MODULE_TOURS.map(tour => [tour.key, tour]));
 		const expected = {
-			'virtual-cmo': { path: '/plugins/virtual-cmo-v1', steps: 5 },
+			cmo: { path: '/plugins/virtual-cmo-v1', steps: 5 },
 			oraculo: { path: '/plugins/margin-calculator-v1', steps: 7 },
 			planejador: { path: '/plugins/construction-calculator-v1', steps: 5 },
 			recibo: { path: '/plugins/quick-receipt-maker-v1', steps: 6 },
@@ -1614,29 +1614,33 @@ try {
 		assert.equal(tourForPath('/app'), undefined, 'rota sem tour não dispara nada');
 
 		// Alvos e comunicação exatos (amostra por módulo).
-		assert.equal(byKey['virtual-cmo'].steps[0].target, '.tour-cmo-intro');
-		assert.match(byKey['virtual-cmo'].steps[0].content, /Diretor de Marketing/);
-		assert.equal(byKey['virtual-cmo'].steps[2].target, '.tour-cmo-produto');
-		assert.equal(byKey['virtual-cmo'].steps[4].target, '.tour-cmo-gerar');
+		assert.equal(byKey.cmo.steps[0].target, '.tour-cmo-intro');
+		assert.match(byKey.cmo.steps[0].content, /Diretor de Marketing/);
+		assert.equal(byKey.cmo.steps[2].target, '.tour-cmo-produto');
+		assert.equal(byKey.cmo.steps[4].target, '.tour-cmo-gerar');
 		assert.equal(byKey.oraculo.steps[2].target, '.tour-oraculo-custo-direto');
 		assert.equal(byKey.oraculo.steps[3].target, '.tour-oraculo-custo-oculto');
 		assert.match(byKey.oraculo.steps[3].content, /gastos escondidos/);
 		assert.equal(byKey.oraculo.steps[6].target, '.tour-oraculo-calcular');
-		assert.equal(byKey.planejador.steps[3].target, '.tour-planejador-perda');
-		assert.match(byKey.planejador.steps[3].content, /margem de segurança/);
-		assert.equal(byKey.recibo.steps[4].target, '.tour-recibo-forma-pagamento');
+		assert.equal(byKey.planejador.steps[1].target, '.tour-planejador-tipo');
+		assert.equal(byKey.planejador.steps[4].target, '.tour-planejador-gerar');
+		assert.equal(byKey.recibo.steps[1].target, '.tour-recibo-cliente');
+		assert.equal(byKey.recibo.steps[5].target, '.tour-recibo-gerar');
+		assert.equal(byKey.fiscal.steps[1].target, '.tour-fiscal-faturamento');
 		assert.equal(byKey.fiscal.steps[3].target, '.tour-fiscal-alerta');
 		assert.match(byKey.fiscal.steps[3].content, /ficar vermelho/);
 
-		// "Já viu" por módulo: cada tour roda uma vez, independente dos outros.
-		assert.equal(TOUR_SEEN_KEY, 'lidar_tours_seen');
-		globalThis.window.localStorage.removeItem(TOUR_SEEN_KEY);
+		// Diário de Bordo (TourState): 5 chaves, default false, uma flag por módulo.
+		assert.equal(TOUR_STATE_KEY, 'lidar_tour_state');
+		assert.deepEqual(DEFAULT_TOUR_STATE, { cmo: false, oraculo: false, planejador: false, recibo: false, fiscal: false });
+		globalThis.window.localStorage.removeItem(TOUR_STATE_KEY);
+		assert.deepEqual(readTourState(), DEFAULT_TOUR_STATE, 'sem chave => todos false');
 		assert.equal(isTourSeen('oraculo'), false, 'tour inédito ainda deve rodar');
 		markTourSeen('oraculo');
 		assert.equal(isTourSeen('oraculo'), true, 'tour visto não repete');
 		assert.equal(isTourSeen('recibo'), false, 'ver um módulo não marca os outros');
 		markTourSeen('recibo');
-		assert.deepEqual(JSON.parse(globalThis.window.localStorage.getItem(TOUR_SEEN_KEY)).sort(), ['oraculo', 'recibo']);
+		assert.deepEqual(readTourState(), { cmo: false, oraculo: true, planejador: false, recibo: true, fiscal: false });
 
 		// Não intromete no SSR/render inicial: antes de montar (run=false) é nulo.
 		assert.equal(renderToStaticMarkup(createElement(AppTour, { currentPath: '/app' })), '', 'AppTour não polui o SSR/render inicial');
@@ -1645,10 +1649,13 @@ try {
 	}
 }
 
-// 39. Módulos expõem as âncoras internas dos Deep Tours (referências CMO + Oráculo)
+// 39. TODOS os 5 módulos expõem as âncoras internas dos Deep Tours no DOM
 {
 	const { default: VirtualCMO } = await import('./modules-library/virtual-cmo/dist/VirtualCMO_Agent.js');
 	const { default: Oracle } = await import('./modules-library/essentials/margin-calculator/dist/AIPricingOracle.js');
+	const { default: Planner } = await import('./modules-library/essentials/construction-calculator/dist/SupplyPlanner.js');
+	const { default: Receipt } = await import('./modules-library/essentials/quick-receipt/dist/QuickReceiptMaker.js');
+	const { default: Invoice } = await import('./modules-library/essentials/smart-invoice/dist/SmartInvoiceHelper.js');
 	const scoped = (Component, scopes) =>
 		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_tour', grantedScopes: scopes, api: fakeApi } }, createElement(Component)));
 
@@ -1660,6 +1667,20 @@ try {
 	assert.match(oracle, /tour-oraculo-intro/, 'Oráculo ancora a introdução');
 	assert.match(oracle, /tour-oraculo-servico/, 'Oráculo ancora o campo de serviço');
 	assert.match(oracle, /tour-oraculo-calcular/, 'Oráculo ancora o botão "Analisar Mercado"');
+
+	const planner = scoped(Planner, ['ui:render']);
+	assert.match(planner, /tour-planejador-intro/, 'Planejador ancora a introdução');
+	assert.match(planner, /tour-planejador-tipo/, 'Planejador ancora a escolha de tipo/nicho');
+
+	const receipt = scoped(Receipt, ['ui:render']);
+	assert.match(receipt, /tour-recibo-intro/, 'Recibo ancora a introdução');
+	assert.match(receipt, /tour-recibo-cliente/, 'Recibo ancora o cliente');
+	assert.match(receipt, /tour-recibo-valor/, 'Recibo ancora o valor');
+	assert.match(receipt, /tour-recibo-gerar/, 'Recibo ancora o botão de baixar');
+
+	const invoice = scoped(Invoice, ['ui:render']);
+	assert.match(invoice, /tour-fiscal-intro/, 'Fiscal ancora a introdução');
+	assert.match(invoice, /tour-fiscal-faturamento/, 'Fiscal ancora o campo de faturamento');
 }
 
 console.log('ALL SMOKE TESTS PASSED');

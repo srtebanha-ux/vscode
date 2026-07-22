@@ -287,7 +287,7 @@ function CmoAgent(): React.JSX.Element {
 						data-testid="cmo-welcome"
 					>
 						{/* 1. Header educativo: o que é e para que serve, sem jargão */}
-						<div className="bg-gradient-to-br from-fuchsia-600 to-indigo-600 px-6 py-8 text-white sm:px-8">
+						<div className="tour-cmo-intro bg-gradient-to-br from-fuchsia-600 to-indigo-600 px-6 py-8 text-white sm:px-8">
 							<span className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold">
 								<Megaphone className="h-3.5 w-3.5" aria-hidden /> Virtual CMO
 							</span>
@@ -318,14 +318,14 @@ function CmoAgent(): React.JSX.Element {
 						<div className="px-6 py-6 sm:px-8">
 							<h2 className="text-lg font-bold tracking-tight text-gray-900">O que vamos resolver hoje?</h2>
 							<p className="mt-1 text-sm text-gray-500">Toque no seu problema — o resto é com o seu CMO.</p>
-							<div className="mt-4 grid gap-3 sm:grid-cols-2">
+							<div className="tour-cmo-objetivo mt-4 grid gap-3 sm:grid-cols-2">
 								{CMO_GOALS.map(option => (
 									<button
 										key={option.id}
 										type="button"
 										onClick={() => pickGoal(option)}
 										data-testid={`cmo-goal-${option.id}`}
-										className={`${option.id === 'atrair' ? 'tour-cmo-objetivo ' : ''}group flex flex-col items-start gap-1.5 rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-fuchsia-300 hover:shadow-md hover:shadow-fuchsia-500/10`}
+										className="group flex flex-col items-start gap-1.5 rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-fuchsia-300 hover:shadow-md hover:shadow-fuchsia-500/10"
 									>
 										<span className="text-3xl" aria-hidden>{option.emoji}</span>
 										<span className="text-sm font-semibold leading-snug text-gray-900 group-hover:text-fuchsia-600">{option.title}</span>
@@ -361,7 +361,7 @@ function CmoAgent(): React.JSX.Element {
 							value={product}
 							onChange={event => setProduct(event.target.value)}
 							placeholder="ex.: marmitas fitness, corte de cabelo, tatuagem…"
-							className={inputClasses}
+							className={`tour-cmo-produto ${inputClasses}`}
 						/>
 						<p className="mt-1 text-sm text-gray-500">Pode ser simples: o nome do seu produto ou serviço, do seu jeito.</p>
 
@@ -372,7 +372,7 @@ function CmoAgent(): React.JSX.Element {
 							value={customer}
 							onChange={event => setCustomer(event.target.value)}
 							placeholder="ex.: mulheres que treinam, moradores do bairro…"
-							className={inputClasses}
+							className={`tour-cmo-publico ${inputClasses}`}
 						/>
 						<p className="mt-1 text-sm text-gray-500">Descreva seu cliente típico com as suas palavras — a IA entende.</p>
 

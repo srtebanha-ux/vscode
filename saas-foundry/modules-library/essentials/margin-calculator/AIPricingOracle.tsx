@@ -199,7 +199,7 @@ function Oracle(): React.JSX.Element {
 								<span className="h-1.5 w-1.5 rounded-full bg-gray-400" aria-hidden /> Aguardando análise...
 							</span>
 						</div>
-						<h1 className="mt-5 text-2xl font-bold tracking-tight text-gray-900">O que você vai precificar hoje?</h1>
+						<h1 className="tour-oraculo-intro mt-5 text-2xl font-bold tracking-tight text-gray-900">O que você vai precificar hoje?</h1>
 						<p className="mt-1.5 text-sm text-gray-500">Nos dê o máximo de detalhes. O Oráculo cruza o seu contexto com o mercado da sua região.</p>
 
 						<div className="mt-6">
@@ -211,7 +211,7 @@ function Oracle(): React.JSX.Element {
 								rows={4}
 								placeholder={placeholder}
 								aria-invalid={touched && !descriptionOk}
-								className={`tour-oraculo-custo w-full resize-none rounded-xl border bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-300 ${
+								className={`tour-oraculo-servico w-full resize-none rounded-xl border bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-300 ${
 									touched && !descriptionOk ? 'border-rose-300 ring-2 ring-rose-100' : 'border-gray-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'
 								}`}
 							/>

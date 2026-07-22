@@ -325,7 +325,7 @@ function CmoAgent(): React.JSX.Element {
 										type="button"
 										onClick={() => pickGoal(option)}
 										data-testid={`cmo-goal-${option.id}`}
-										className="group flex flex-col items-start gap-1.5 rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-fuchsia-300 hover:shadow-md hover:shadow-fuchsia-500/10"
+										className={`${option.id === 'atrair' ? 'tour-cmo-objetivo ' : ''}group flex flex-col items-start gap-1.5 rounded-2xl border border-gray-200 bg-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-fuchsia-300 hover:shadow-md hover:shadow-fuchsia-500/10`}
 									>
 										<span className="text-3xl" aria-hidden>{option.emoji}</span>
 										<span className="text-sm font-semibold leading-snug text-gray-900 group-hover:text-fuchsia-600">{option.title}</span>
@@ -381,7 +381,7 @@ function CmoAgent(): React.JSX.Element {
 							onClick={() => void run()}
 							disabled={thinking}
 							data-testid="cmo-generate"
-							className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 to-indigo-600 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/30 transition-all hover:scale-[1.01] disabled:pointer-events-none disabled:opacity-60"
+							className="tour-cmo-gerar mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 to-indigo-600 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-fuchsia-500/30 transition-all hover:scale-[1.01] disabled:pointer-events-none disabled:opacity-60"
 						>
 							{thinking ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Sparkles className="h-4 w-4" aria-hidden />}
 							{thinking ? 'Seu CMO está montando a campanha…' : 'Criar minha campanha'}

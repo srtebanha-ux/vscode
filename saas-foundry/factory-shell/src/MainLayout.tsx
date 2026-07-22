@@ -4,10 +4,10 @@ import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
 import { readUserTier, USER_TIER_EVENT } from './catalog';
 import { Boxes, BrainCircuit, CircleDollarSign, Eye, FileText, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
-import { TOUR_ANCHORS } from './OnboardingHub';
+import { AppTour, TOUR_ANCHORS } from './AppTour';
 
 /**
- * Âncoras do tour guiado por pluginId: o Joyride (no OnboardingHub) procura estas
+ * Âncoras do tour guiado por pluginId: o Joyride (no AppTour) procura estas
  * classes no DOM para colocar o holofote no botão certo do menu. Só os módulos
  * citados no roteiro precisam de âncora.
  */
@@ -326,6 +326,8 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 
 			<main className="min-w-0 flex-1 px-8 py-8">{children}</main>
 			<CommandPalette commands={commands} open={paletteOpen} onOpenChange={setPaletteOpen} />
+			{/* Deep Product Tour global: vive no shell, então sobrevive à troca de rotas. */}
+			<AppTour />
 		</div>
 		</ToastProvider>
 	);

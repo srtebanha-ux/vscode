@@ -211,7 +211,7 @@ function Oracle(): React.JSX.Element {
 								rows={4}
 								placeholder={placeholder}
 								aria-invalid={touched && !descriptionOk}
-								className={`w-full resize-none rounded-xl border bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-300 ${
+								className={`tour-oraculo-custo w-full resize-none rounded-xl border bg-white px-4 py-3 text-sm text-gray-900 shadow-sm outline-none transition-all placeholder:text-gray-300 ${
 									touched && !descriptionOk ? 'border-rose-300 ring-2 ring-rose-100' : 'border-gray-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'
 								}`}
 							/>
@@ -240,7 +240,7 @@ function Oracle(): React.JSX.Element {
 							type="button"
 							onClick={handleSubmit}
 							disabled={isLoading}
-							className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
+							className="tour-oraculo-calcular mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-4 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/30 transition-all hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-60"
 						>
 							<Sparkles className="h-4 w-4" aria-hidden /> {isLoading ? 'Calculando dados de mercado…' : 'Analisar Mercado'}
 						</button>

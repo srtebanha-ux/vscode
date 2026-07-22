@@ -11,7 +11,6 @@ import { ArrowRight, Receipt, SearchX, Settings, Sparkles, type LucideIcon } fro
 import { MasterDashboard } from './admin/MasterDashboard';
 import { BillingPage } from './billing/BillingPage';
 import { DashboardHome } from './DashboardHome';
-import OnboardingHub, { isOnboardingComplete } from './OnboardingHub';
 import { TaxSettings } from './settings/TaxSettings';
 import type { UserRole } from './auth/AuthProvider';
 import { MainLayout, type SessionInfo } from './MainLayout';
@@ -127,15 +126,9 @@ function NotFound({ path }: { readonly path: string }): ReactElement {
  * plugin — a global provider would hand services to unvalidated code.
  */
 export function App({ registry, principal, api, role, path, navigate, session }: AppProps): ReactElement {
-	// ── OnboardingGuard ───────────────────────────────────────────────────────
-	// A primeira experiência é o TOUR GUIADO: enquanto `lidar_onboarding_completed`
-	// não for `true`, qualquer rota interna é reconduzida a /onboarding, onde o
-	// holofote (react-joyride) roda sobre o Painel real. O tour precisa do shell
-	// (Sidebar) montado para achar seus alvos, então /onboarding renderiza DENTRO
-	// do MainLayout — não é mais uma tela cheia à parte.
-	if (!isOnboardingComplete() && path !== '/onboarding') {
-		return <RedirectTo to="/onboarding" navigate={navigate} />;
-	}
+	// A primeira experiência é o Deep Product Tour (AppTour, no MainLayout): o
+	// usuário novo cai no Painel e o holofote o guia pelas rotas reais. Não há mais
+	// guard que prenda em /onboarding; essa rota, se acessada, volta ao Painel.
 
 	const match = PLUGIN_ROUTE.exec(path);
 	let content: ReactElement;
@@ -150,9 +143,8 @@ export function App({ registry, principal, api, role, path, navigate, session }:
 	} else if (path === '/marketplace' || path === '/storefront') {
 		content = <Storefront tenantId={principal.tenantId} />;
 	} else if (path === '/onboarding') {
-		// Tour guiado (spotlight) sobre o Painel real. O próprio componente marca a
-		// conclusão e navega para /app quando o usuário termina ou pula.
-		content = <OnboardingHub navigate={navigate} />;
+		// Rota legada do onboarding em página: o tour agora é global. Volta ao Painel.
+		content = <RedirectTo to="/app" navigate={navigate} />;
 	} else if (path === '/settings/fiscal') {
 		content = <TaxSettings />;
 	} else if (path === '/billing') {

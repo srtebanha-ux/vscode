@@ -1575,11 +1575,11 @@ try {
 	}
 }
 
-// 38. OnboardingHub: o onboarding agora é um TOUR GUIADO (react-joyride) sobre o Painel real
+// 38. AppTour: Deep Product Tour global (react-joyride) multi-página e controlado
 {
 	const esbuild = await import('esbuild');
-	const dir = await mkdtemp(new URL('./.smoke-onboarding-', import.meta.url).pathname);
-	await writeFile(join(dir, 'entry.tsx'), "export { default as OnboardingHub, isOnboardingComplete, markOnboardingComplete, isTerminalTourStatus, TOUR_STEPS, TOUR_ANCHORS, ONBOARDING_DONE_KEY } from '../factory-shell/src/OnboardingHub';\n");
+	const dir = await mkdtemp(new URL('./.smoke-tour-', import.meta.url).pathname);
+	await writeFile(join(dir, 'entry.tsx'), "export { default as AppTour, isOnboardingComplete, markOnboardingComplete, TOUR_STEPS, TOUR_ANCHORS, TOUR_ADVANCE_ON, ONBOARDING_DONE_KEY } from '../factory-shell/src/AppTour';\n");
 	try {
 		const bundled = await esbuild.build({
 			entryPoints: [join(dir, 'entry.tsx')],
@@ -1589,50 +1589,84 @@ try {
 		});
 		const compiled = join(dir, 'bundle.mjs');
 		await writeFile(compiled, bundled.outputFiles[0].text);
-		const { OnboardingHub, isOnboardingComplete, markOnboardingComplete, isTerminalTourStatus, TOUR_STEPS, TOUR_ANCHORS, ONBOARDING_DONE_KEY } = await import(pathToFileURL(compiled).href);
+		const { AppTour, isOnboardingComplete, markOnboardingComplete, TOUR_STEPS, TOUR_ANCHORS, TOUR_ADVANCE_ON, ONBOARDING_DONE_KEY } = await import(pathToFileURL(compiled).href);
 
-		// Roteiro do tour: 4 passos, comunicação e ordem exatas do briefing.
-		assert.equal(TOUR_STEPS.length, 4, 'o tour tem 4 passos');
+		// Roteiro profundo: 8 passos que viajam por /app → Virtual CMO → Oráculo.
+		assert.equal(TOUR_STEPS.length, 8, 'o Deep Tour tem 8 passos');
 		assert.equal(TOUR_STEPS[0].target, 'body');
 		assert.equal(TOUR_STEPS[0].placement, 'center');
-		assert.ok(TOUR_STEPS[0].disableBeacon, 'passo 1 começa direto (sem beacon)');
-		assert.match(TOUR_STEPS[0].title, /Bem-vindo ao Lidar Core/);
-		assert.match(TOUR_STEPS[0].content, /lucrar mais e operar no automático/);
+		assert.match(TOUR_STEPS[0].content, /máquina de vendas/);
 
-		// Passos 2-4 apontam para as classes-âncora do menu (o holofote precisa achá-las).
-		assert.equal(TOUR_STEPS[1].target, `.${TOUR_ANCHORS.sidebar}`);
-		assert.match(TOUR_STEPS[1].title, /Painel de Controle/);
-		assert.equal(TOUR_STEPS[2].target, `.${TOUR_ANCHORS.virtualCmo}`);
-		assert.match(TOUR_STEPS[2].title, /Virtual CMO/);
-		assert.match(TOUR_STEPS[2].content, /agência de marketing de bolso/);
-		assert.equal(TOUR_STEPS[3].target, `.${TOUR_ANCHORS.oraculo}`);
-		assert.match(TOUR_STEPS[3].title, /Oráculo de Preços/);
-		assert.match(TOUR_STEPS[3].content, /margem exata/);
+		// Fase 1→2: clicar no menu abre o Virtual CMO (spotlightClicks, footer oculto).
+		assert.equal(TOUR_STEPS[1].target, `.${TOUR_ANCHORS.virtualCmo}`);
+		assert.ok(TOUR_STEPS[1].spotlightClicks, 'passo de ação libera o clique no elemento real');
+		assert.ok(TOUR_STEPS[1].hideFooter, 'passo de ação esconde o footer (força o clique)');
+		assert.match(TOUR_STEPS[1].content, /Clique neste botão AGORA/);
 
-		// Âncoras batem com as classes que a MainLayout injeta no DOM.
+		// Dentro do Virtual CMO: objetivo (spotlightClicks) e botão de gerar.
+		assert.equal(TOUR_STEPS[2].target, `.${TOUR_ANCHORS.cmoObjetivo}`);
+		assert.ok(TOUR_STEPS[2].spotlightClicks, 'clicar no objetivo avança a fase do módulo');
+		assert.match(TOUR_STEPS[2].content, /Quero atrair novos clientes/);
+		assert.equal(TOUR_STEPS[3].target, `.${TOUR_ANCHORS.cmoGerar}`);
+		assert.match(TOUR_STEPS[3].content, /Inteligência Artificial vai escrever/);
+
+		// Fase 3→4: clicar no menu abre o Oráculo, depois ensina custo e cálculo.
+		assert.equal(TOUR_STEPS[4].target, `.${TOUR_ANCHORS.oraculo}`);
+		assert.ok(TOUR_STEPS[4].spotlightClicks, 'clicar no menu do Oráculo troca a rota');
+		assert.equal(TOUR_STEPS[5].target, `.${TOUR_ANCHORS.oraculoCusto}`);
+		assert.match(TOUR_STEPS[5].content, /digita aqui todos os seus custos/);
+		assert.equal(TOUR_STEPS[6].target, `.${TOUR_ANCHORS.oraculoCalcular}`);
+		assert.match(TOUR_STEPS[6].content, /preço exato/);
+
+		// Conclusão volta ao centro.
+		assert.equal(TOUR_STEPS[7].target, 'body');
+		assert.equal(TOUR_STEPS[7].placement, 'center');
+		assert.match(TOUR_STEPS[7].content, /Mãos à obra/);
+
+		// Âncoras (fonte única): as classes que MainLayout e os módulos injetam no DOM.
 		assert.equal(TOUR_ANCHORS.sidebar, 'sidebar-menu-container');
 		assert.equal(TOUR_ANCHORS.virtualCmo, 'tour-virtual-cmo');
 		assert.equal(TOUR_ANCHORS.oraculo, 'tour-oraculo');
+		assert.equal(TOUR_ANCHORS.cmoObjetivo, 'tour-cmo-objetivo');
+		assert.equal(TOUR_ANCHORS.cmoGerar, 'tour-cmo-gerar');
+		assert.equal(TOUR_ANCHORS.oraculoCusto, 'tour-oraculo-custo');
+		assert.equal(TOUR_ANCHORS.oraculoCalcular, 'tour-oraculo-calcular');
 
-		// Route Guard: helpers de localStorage governam o gate da primeira experiência.
+		// Avanço assíncrono: cada passo de ação espera o PRÓXIMO alvo surgir no DOM.
+		assert.equal(TOUR_ADVANCE_ON[1], `.${TOUR_ANCHORS.cmoObjetivo}`, 'passo 1 avança quando o objetivo do CMO surge');
+		assert.equal(TOUR_ADVANCE_ON[2], `.${TOUR_ANCHORS.cmoGerar}`, 'passo 2 avança quando o botão de gerar surge');
+		assert.equal(TOUR_ADVANCE_ON[4], `.${TOUR_ANCHORS.oraculoCusto}`, 'passo 4 avança quando o campo de custo surge');
+		assert.equal(TOUR_ADVANCE_ON[0], undefined, 'passos informativos não dependem do DOM (avançam no botão)');
+		assert.equal(TOUR_ADVANCE_ON[3], undefined);
+
+		// Gate da primeira visita.
 		assert.equal(ONBOARDING_DONE_KEY, 'lidar_onboarding_completed');
 		globalThis.window.localStorage.removeItem(ONBOARDING_DONE_KEY);
-		assert.equal(isOnboardingComplete(), false, 'sem a flag => guard prende o usuário no tour');
+		assert.equal(isOnboardingComplete(), false, 'sem a flag => o tour dispara na primeira visita');
 		markOnboardingComplete();
 		assert.equal(globalThis.window.localStorage.getItem(ONBOARDING_DONE_KEY), 'true');
-		assert.equal(isOnboardingComplete(), true, 'após terminar/pular => Painel liberado');
+		assert.equal(isOnboardingComplete(), true, 'após concluir/pular => o tour não roda mais');
 
-		// Gatilho de liberação: só 'finished'/'skipped' encerram o tour e liberam o Painel.
-		assert.equal(isTerminalTourStatus('finished'), true, 'concluir encerra o tour');
-		assert.equal(isTerminalTourStatus('skipped'), true, 'pular também encerra o tour');
-		assert.equal(isTerminalTourStatus('running'), false, 'tour em andamento não libera');
-		assert.equal(isTerminalTourStatus('paused'), false, 'tour pausado não libera');
-
-		// Não intromete no SSR/render inicial: antes de montar (run=false) o componente é nulo.
-		assert.equal(renderToStaticMarkup(createElement(OnboardingHub, { navigate: () => {} })), '', 'OnboardingHub não polui o SSR/render inicial');
+		// Não intromete no SSR/render inicial: antes de montar (run=false) é nulo.
+		assert.equal(renderToStaticMarkup(createElement(AppTour, {})), '', 'AppTour não polui o SSR/render inicial');
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
+}
+
+// 39. Módulos expõem as âncoras internas do Deep Tour (holofote encontra os alvos)
+{
+	const { default: VirtualCMO } = await import('./modules-library/virtual-cmo/dist/VirtualCMO_Agent.js');
+	const { default: Oracle } = await import('./modules-library/essentials/margin-calculator/dist/AIPricingOracle.js');
+	const scoped = (Component, scopes) =>
+		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_tour', grantedScopes: scopes, api: fakeApi } }, createElement(Component)));
+
+	const cmo = scoped(VirtualCMO, ['read:insights', 'write:insights']);
+	assert.match(cmo, /tour-cmo-objetivo/, 'Virtual CMO ancora o objetivo "atrair" para o holofote');
+
+	const oracle = scoped(Oracle, ['ui:render']);
+	assert.match(oracle, /tour-oraculo-custo/, 'Oráculo ancora o campo de descrição/custos');
+	assert.match(oracle, /tour-oraculo-calcular/, 'Oráculo ancora o botão "Analisar Mercado"');
 }
 
 console.log('ALL SMOKE TESTS PASSED');

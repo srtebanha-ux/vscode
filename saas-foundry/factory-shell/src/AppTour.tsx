@@ -179,26 +179,36 @@ export function AppTour({ currentPath }: AppTourProps): ReactElement | null {
 	const [steps, setSteps] = useState<readonly Step[]>([]);
 	const [activeKey, setActiveKey] = useState<string | null>(null);
 
-	// Ao entrar num módulo com tour ainda não visto, aguarda o módulo montar,
-	// filtra para os alvos presentes e dispara — se houver ao menos um alvo real.
+	// Ao entrar num módulo com tour ainda não visto, ESPERA os alvos aparecerem no
+	// DOM antes de disparar. Cada módulo é um chunk lazy: na primeira visita ele
+	// baixa pela rede e renderiza DEPOIS de alguns ms — um único setTimeout curto
+	// erraria a janela e o tour nunca começaria. Por isso, sondamos até o alvo
+	// existir (com teto), tornando o auto-start robusto a carregamento lento.
 	useEffect(() => {
 		if (run) return undefined; // um tour de cada vez
 		const tour = tourForPath(currentPath);
 		if (!tour || isTourSeen(tour.key)) return undefined;
 
 		let cancelled = false;
-		const timer = window.setTimeout(() => {
+		let pending = 0;
+		let attempts = 0;
+		const MAX_ATTEMPTS = 30; // ~6s (200ms) — cobre download do chunk + render
+		const tryStart = (): void => {
 			if (cancelled) return;
 			const mapped = presentSteps(tour.steps);
-			// Não roda tour "vazio": exige ao menos um alvo real mapeado (além do body).
-			if (!mapped.some(item => item.target !== 'body')) return;
-			setSteps(mapped);
-			setActiveKey(tour.key);
-			setRun(true);
-		}, 600);
+			if (mapped.some(item => item.target !== 'body')) {
+				setSteps(mapped);
+				setActiveKey(tour.key);
+				setRun(true);
+				return;
+			}
+			attempts += 1;
+			if (attempts < MAX_ATTEMPTS) pending = window.setTimeout(tryStart, 200);
+		};
+		pending = window.setTimeout(tryStart, 300); // respiro inicial e começa a sondar
 		return () => {
 			cancelled = true;
-			window.clearTimeout(timer);
+			window.clearTimeout(pending);
 		};
 	}, [currentPath, run]);
 

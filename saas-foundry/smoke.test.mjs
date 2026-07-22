@@ -1579,7 +1579,7 @@ try {
 {
 	const esbuild = await import('esbuild');
 	const dir = await mkdtemp(new URL('./.smoke-tour-', import.meta.url).pathname);
-	await writeFile(join(dir, 'entry.tsx'), "export { default as AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, TOUR_SEEN_KEY } from '../factory-shell/src/AppTour';\n");
+	await writeFile(join(dir, 'entry.tsx'), "export { default as AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, TOUR_SEEN_KEY, TOUR_START_EVENT } from '../factory-shell/src/AppTour';\n");
 	try {
 		const bundled = await esbuild.build({
 			entryPoints: [join(dir, 'entry.tsx')],
@@ -1589,7 +1589,8 @@ try {
 		});
 		const compiled = join(dir, 'bundle.mjs');
 		await writeFile(compiled, bundled.outputFiles[0].text);
-		const { AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, TOUR_SEEN_KEY } = await import(pathToFileURL(compiled).href);
+		const { AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, TOUR_SEEN_KEY, TOUR_START_EVENT } = await import(pathToFileURL(compiled).href);
+		assert.equal(TOUR_START_EVENT, 'lidar:tour:start', 'evento do botão "Ver tutorial"');
 
 		// Dicionário: 5 módulos principais, cada um com o seu Deep Tour.
 		assert.equal(MODULE_TOURS.length, 5, 'há 5 Deep Tours (um por módulo principal)');

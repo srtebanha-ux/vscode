@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import { ToastProvider, type PluginRegistry } from '@foundry/engine-core/ui';
 import { readUserTier, USER_TIER_EVENT } from './catalog';
-import { Boxes, BrainCircuit, CircleDollarSign, Eye, FileText, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
+import { Boxes, BrainCircuit, CircleDollarSign, Eye, FileText, HelpCircle, Hexagon, Home, Landmark, Lock, LogOut, Megaphone, PanelLeftClose, PanelLeftOpen, Receipt, Search, ShieldCheck, Store, TrendingUp, UserRound, Workflow, type LucideIcon } from 'lucide-react';
 import { CommandPalette, type Command } from './components/CommandPalette';
-import { AppTour } from './AppTour';
+import { AppTour, startModuleTour, tourForPath } from './AppTour';
 
 /** Porte da empresa do usuário — define o que aparece na navegação. */
 export type AccessProfile = 'pme' | 'enterprise';
@@ -312,6 +312,17 @@ export function MainLayout({ registry, currentPath, onNavigate, children, sessio
 
 			<main className="min-w-0 flex-1 px-8 py-8">{children}</main>
 			<CommandPalette commands={commands} open={paletteOpen} onOpenChange={setPaletteOpen} />
+			{/* Botão "Ver tutorial": aparece nos módulos com Deep Tour e dispara o
+			    holofote na hora — sem depender do auto-start nem da flag "já viu". */}
+			{tourForPath(currentPath) && (
+				<button
+					type="button"
+					onClick={() => startModuleTour()}
+					className="fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 transition-all hover:scale-105 hover:bg-indigo-500"
+				>
+					<HelpCircle className="h-4 w-4" aria-hidden /> Ver tutorial
+				</button>
+			)}
 			{/* Deep Tours contextuais: vivem no shell e escolhem o roteiro pela rota atual. */}
 			<AppTour currentPath={currentPath} />
 		</div>

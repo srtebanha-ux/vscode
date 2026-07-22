@@ -134,6 +134,15 @@ export function tourForPath(path: string): ModuleTour | undefined {
 	return MODULE_TOURS.find(tour => tour.path === path);
 }
 
+/** Evento que dispara o tour da rota atual sob demanda (botão "Ver tutorial"). */
+export const TOUR_START_EVENT = 'lidar:tour:start';
+
+/** Inicia o tour do módulo atual manualmente (ignora a flag "já viu"). */
+export function startModuleTour(): void {
+	if (typeof window === 'undefined') return;
+	window.dispatchEvent(new CustomEvent(TOUR_START_EVENT));
+}
+
 // ── Configuração do react-joyride ────────────────────────────────────────────
 
 const TOUR_LOCALE: Locale = {
@@ -210,6 +219,23 @@ export function AppTour({ currentPath }: AppTourProps): ReactElement | null {
 			cancelled = true;
 			window.clearTimeout(pending);
 		};
+	}, [currentPath, run]);
+
+	// Disparo manual (botão "Ver tutorial"): roda o tour da rota atual na hora,
+	// sem depender do auto-start nem da flag "já viu" — determinístico.
+	useEffect(() => {
+		const onManualStart = (): void => {
+			if (run) return;
+			const tour = tourForPath(currentPath);
+			if (!tour) return;
+			const mapped = presentSteps(tour.steps);
+			if (!mapped.some(item => item.target !== 'body')) return;
+			setSteps(mapped);
+			setActiveKey(tour.key);
+			setRun(true);
+		};
+		window.addEventListener(TOUR_START_EVENT, onManualStart);
+		return () => window.removeEventListener(TOUR_START_EVENT, onManualStart);
 	}, [currentPath, run]);
 
 	const handleJoyrideCallback = (data: CallBackProps): void => {

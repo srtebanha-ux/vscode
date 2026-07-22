@@ -141,22 +141,21 @@ export const MODULE_TOURS: readonly ModuleTour[] = [
 		key: 'recibo',
 		path: '/plugins/quick-receipt-maker-v1',
 		steps: [
-			intro('.tour-recibo-intro', 'Recibo profissional em 30s', 'Agilidade e profissionalismo. Vamos gerar um recibo com a sua marca em 30 segundos.'),
-			step('.tour-recibo-cliente', 'O cliente', 'Digite o nome do seu cliente ou empresa.'),
-			step('.tour-recibo-descricao', 'O que foi feito', 'O que foi feito? Seja breve, ex: "Consultoria mensal" ou "Instalação de ar-condicionado".'),
-			step('.tour-recibo-valor', 'O valor', 'Qual foi o valor total pago?'),
-			step('.tour-recibo-forma-pagamento', 'Forma de pagamento', 'Como ele pagou? PIX, Cartão, Dinheiro? Selecione para ficar registrado.'),
-			step('.tour-recibo-gerar', 'Baixe o PDF', 'Clique aqui e baixe o PDF. O cliente vai receber um documento lindo e sua empresa passa muito mais credibilidade.')
+			intro('.tour-recibo-intro', 'Recibo profissional em 30s', 'Agilidade e profissionalismo. Vamos gerar, campo por campo, um recibo com a sua marca — pronto para enviar no WhatsApp.'),
+			step('.tour-recibo-cliente', '1. O cliente', 'No campo "Cliente", clique e digite o nome completo ou a razão social de quem pagou. É isso que deixa o recibo legalmente formalizado.'),
+			step('.tour-recibo-descricao', '2. A descrição', 'No campo "Descrição", seja direto: coloque exatamente o serviço prestado. Ex.: "Mão de obra referente à instalação elétrica".'),
+			step('.tour-recibo-valor', '3. O valor', 'No campo "Valor", digite apenas números (sem "R$" e sem pontos). Ex.: para R$ 850,00, digite 850.'),
+			step('.tour-recibo-gerar', '4. Gerar o PDF', 'Pronto! Clique em "Gerar PDF": o sistema cria um documento com a sua marca, no formato certo, pronto para você baixar e mandar no WhatsApp do cliente.')
 		]
 	},
 	{
 		key: 'fiscal',
 		path: '/plugins/smart-invoice-helper-v1',
 		steps: [
-			intro('.tour-fiscal-intro', 'Sua saúde fiscal', 'Imposto é chato, mas quebra empresas. Deixe a nossa IA monitorar a sua saúde fiscal por você.'),
-			step('.tour-fiscal-faturamento', 'Faturamento do mês', 'Insira aqui quanto você faturou este mês. É só o valor bruto, não precisa de notas fiscais ainda.'),
-			step('.tour-fiscal-aliquota', 'Sua alíquota', 'A nossa IA vai calcular aqui embaixo se você está perto de estourar o limite do Simples Nacional.'),
-			step('.tour-fiscal-alerta', 'O painel de alerta', 'Fique sempre de olho neste painel. Se ele ficar vermelho, é o sistema te avisando para segurar o faturamento ou mudar de regime tributário antes de levar uma multa!')
+			intro('.tour-fiscal-intro', 'Sua saúde fiscal', 'Imposto é chato, mas quebra empresas. Deixe a nossa IA monitorar a sua saúde fiscal por você — passo a passo.'),
+			step('.tour-fiscal-faturamento', '1. Seu faturamento', 'Neste campo, insira o faturamento bruto do mês anterior (o total que entrou, sem descontar nada). A IA cruza esse número com o limite do Simples Nacional automaticamente.'),
+			step('.tour-fiscal-aliquota', '2. Seus impostos calculados', 'Aqui embaixo a IA mostra a sua alíquota e o total de impostos, e avisa se você está chegando perto de estourar o teto do Simples Nacional.'),
+			step('.tour-fiscal-alerta', '3. O painel de alertas', 'Olhe o painel de alertas: se estiver verde, sua empresa está segura. Se ficar amarelo ou vermelho, siga a recomendação imediata da IA para segurar o faturamento ou trocar de regime — e evitar a multa.')
 		]
 	}
 ];

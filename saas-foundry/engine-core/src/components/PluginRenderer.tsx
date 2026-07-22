@@ -40,7 +40,12 @@ export function PluginRenderer({ pluginId, registry, principal, api, namespace }
 	// Auto-cura: `epoch` remonta a árvore do plugin a partir do módulo em
 	// cache do registry (último ponto seguro); `failures` limita o loop.
 	const [epoch, setEpoch] = useState(0);
+	// Recarga manual do módulo (ex.: falha de rede ao baixar o chunk lazy): o
+	// usuário clica "Tentar novamente" e refazemos o load, sem tela vermelha.
+	const [loadEpoch, setLoadEpoch] = useState(0);
 	const failures = useRef(0);
+
+	const retryLoad = useCallback((): void => setLoadEpoch(current => current + 1), []);
 
 	const handlePluginError = useCallback((error: Error): void => {
 		failures.current += 1;
@@ -78,7 +83,7 @@ export function PluginRenderer({ pluginId, registry, principal, api, namespace }
 			setState({ phase: 'ready', Plugin: Plugin as ComponentType });
 		});
 		return () => { cancelled = true; };
-	}, [pluginId, registry, principal]);
+	}, [pluginId, registry, principal, loadEpoch]);
 
 	// Everything the plugin will ever see, assembled once and frozen.
 	const services = useMemo<CoreServices>(
@@ -95,12 +100,28 @@ export function PluginRenderer({ pluginId, registry, principal, api, namespace }
 		case 'loading':
 			return <p>Carregando plugin…</p>;
 		case 'rejected':
-			return state.error.code === 'missing-scope' ? (
-				<div role="alert">
-					<h2>Acesso negado</h2>
-					<p>Permissão ausente para “{pluginId}”: {state.error.scope}</p>
-				</div>
-			) : (
+			if (state.error.code === 'missing-scope') {
+				return (
+					<div role="alert">
+						<h2>Acesso negado</h2>
+						<p>Permissão ausente para “{pluginId}”: {state.error.scope}</p>
+					</div>
+				);
+			}
+			// Falha ao BAIXAR o módulo (rede/chunk lazy): recuperável — oferece retry
+			// em linguagem de usuário, sem expor código técnico nem quebrar a tela.
+			if (state.error.code === 'load-failed') {
+				return (
+					<div role="alert">
+						<h2>Não foi possível carregar este módulo</h2>
+						<p>Pode ter sido a sua conexão. Verifique a internet e tente de novo.</p>
+						<button type="button" onClick={retryLoad}>Tentar novamente</button>
+					</div>
+				);
+			}
+			// unknown-plugin / invalid-export: erro de configuração, não recuperável
+			// pelo usuário — mantém a mensagem diagnóstica (visível também nos testes).
+			return (
 				<div role="alert">
 					<h2>Plugin não disponível</h2>
 					<p>“{pluginId}”: {state.error.code}</p>

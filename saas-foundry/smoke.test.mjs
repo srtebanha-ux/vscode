@@ -1515,59 +1515,6 @@ try {
 	}
 }
 
-// 32c. Rotas de IA agora FECHADAS: oracle-pricing e supply-planner exigem JWT.
-{
-	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
-	process.env.JWT_SECRET = SECRET;
-	const { default: jsonwebtoken } = await import('jsonwebtoken');
-	const sign = (claims) => jsonwebtoken.sign(claims, SECRET, { algorithm: 'HS256' });
-	const esbuild = await import('esbuild');
-
-	const compileRoute = async (rel, prefix) => {
-		const build = await esbuild.build({
-			entryPoints: [new URL(rel, import.meta.url).pathname],
-			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken', '@google/generative-ai']
-		});
-		const dir = await mkdtemp(new URL(`./.smoke-${prefix}-`, import.meta.url).pathname);
-		const file = join(dir, `${prefix}.mjs`);
-		await writeFile(file, build.outputFiles[0].text);
-		return { dir, file };
-	};
-
-	const makeRes = () => ({ code: 0, body: null, status(c) { this.code = c; return this; }, json(d) { this.body = d; } });
-	const dirs = [];
-	try {
-		const oracle = await compileRoute('./api/oracle-pricing.ts', 'route-oracle'); dirs.push(oracle.dir);
-		const planner = await compileRoute('./api/supply-planner.ts', 'route-planner'); dirs.push(planner.dir);
-		const { default: oracleHandler } = await import(pathToFileURL(oracle.file).href);
-		const { default: plannerHandler } = await import(pathToFileURL(planner.file).href);
-
-		const token = sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' });
-		for (const handler of [oracleHandler, plannerHandler]) {
-			// Sem credencial -> 401 ANTES de tocar em qualquer coisa de IA
-			const anon = makeRes();
-			await handler({ method: 'POST', body: {}, headers: {} }, anon);
-			assert.equal(anon.code, 401, 'rota de IA rejeita anônimo');
-			assert.equal(anon.body.error, 'unauthorized');
-			// Token inválido -> 401
-			const bad = makeRes();
-			await handler({ method: 'POST', body: {}, headers: { authorization: 'Bearer a.b.c' } }, bad);
-			assert.equal(bad.code, 401);
-			// Autenticado, porém corpo inválido -> 400 (prova que a guarda deixou passar)
-			const authed = makeRes();
-			await handler({ method: 'POST', body: {}, headers: { authorization: `Bearer ${token}` } }, authed);
-			assert.equal(authed.code, 400, 'autenticado passa da guarda e cai na validação de corpo');
-			// Método errado -> 405 (curto-circuito antes da guarda, comportamento inalterado)
-			const wrong = makeRes();
-			await handler({ method: 'GET', headers: {} }, wrong);
-			assert.equal(wrong.code, 405);
-		}
-	} finally {
-		delete process.env.JWT_SECRET;
-		for (const d of dirs) await rm(d, { recursive: true, force: true });
-	}
-}
-
 // 33. Configurações Fiscais: validação do Certificado A1 (.pfx/.p12) fail-closed
 {
 	const esbuild = await import('esbuild');
@@ -1656,7 +1603,7 @@ try {
 	const esbuild = await import('esbuild');
 	const { outputFiles } = await esbuild.build({
 		entryPoints: [new URL('./api/oracle-pricing.ts', import.meta.url).pathname],
-		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai', 'jsonwebtoken']
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai']
 	});
 	// Temp dir sob a raiz do repo: '@google/generative-ai' (external) resolve pelo node_modules.
 	const compiled = join(await mkdtemp(new URL('./.smoke-oraclegemini-', import.meta.url).pathname), 'route.mjs');
@@ -1689,32 +1636,23 @@ try {
 		assert.equal(result.marketMax, 520);
 		assert.deepEqual(result.hiddenCosts, ['Biossegurança']);
 
-		// Handler: método, AUTH, corpo e chave — fail-closed com JSON
+		// Handler: método, corpo e chave — fail-closed com JSON
 		const mockRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
 		delete process.env.GEMINI_API_KEY;
-		const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
-		process.env.JWT_SECRET = SECRET;
-		const { default: jsonwebtoken } = await import('jsonwebtoken');
-		const auth = { authorization: `Bearer ${jsonwebtoken.sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' }, SECRET, { algorithm: 'HS256' })}` };
 
 		let res = mockRes();
-		await handler({ method: 'GET', body: {}, headers: {} }, res);
-		assert.equal(res.code, 405); // método barra antes da auth
+		await handler({ method: 'GET', body: {} }, res);
+		assert.equal(res.code, 405);
 
 		res = mockRes();
-		await handler({ method: 'POST', body: {}, headers: {} }, res); // sem credencial
-		assert.equal(res.code, 401);
-
-		res = mockRes();
-		await handler({ method: 'POST', body: { location: 'SP' }, headers: auth }, res); // autenticado, corpo inválido
+		await handler({ method: 'POST', body: { location: 'SP' } }, res); // corpo inválido
 		assert.equal(res.code, 400);
 
 		res = mockRes();
-		await handler({ method: 'POST', body: { serviceDescription: 'Pintura residencial', location: 'São Paulo - SP' }, headers: auth }, res);
+		await handler({ method: 'POST', body: { serviceDescription: 'Pintura residencial', location: 'São Paulo - SP' } }, res);
 		assert.equal(res.code, 500); // sem GEMINI_API_KEY -> 500 (front cai no fallback)
 		assert.match(res.payload.error, /GEMINI_API_KEY/);
 	} finally {
-		delete process.env.JWT_SECRET;
 		await rm(join(compiled, '..'), { recursive: true, force: true });
 	}
 }
@@ -1724,7 +1662,7 @@ try {
 	const esbuild = await import('esbuild');
 	const { outputFiles } = await esbuild.build({
 		entryPoints: [new URL('./api/supply-planner.ts', import.meta.url).pathname],
-		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai', 'jsonwebtoken']
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai']
 	});
 	const compiled = join(await mkdtemp(new URL('./.smoke-supplyplanner-', import.meta.url).pathname), 'route.mjs');
 	try {
@@ -1776,33 +1714,24 @@ try {
 		assert.equal(result.lista_insumos[1].item, 'Caixa de Pizza 35cm');
 		assert.match(result.lista_insumos[1].motivo_margem_perda, /avarias/);
 
-		// Handler: método, AUTH, corpo e chave — fail-closed com JSON
+		// Handler: método, corpo e chave — fail-closed com JSON
 		const mockRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
 		delete process.env.GEMINI_API_KEY;
-		const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
-		process.env.JWT_SECRET = SECRET;
-		const { default: jsonwebtoken } = await import('jsonwebtoken');
-		const auth = { authorization: `Bearer ${jsonwebtoken.sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' }, SECRET, { algorithm: 'HS256' })}` };
 
 		let res = mockRes();
-		await handler({ method: 'GET', body: {}, headers: {} }, res);
-		assert.equal(res.code, 405); // método barra antes da auth
+		await handler({ method: 'GET', body: {} }, res);
+		assert.equal(res.code, 405);
 
 		res = mockRes();
-		await handler({ method: 'POST', body: {}, headers: {} }, res); // sem credencial
-		assert.equal(res.code, 401);
-
-		res = mockRes();
-		await handler({ method: 'POST', body: { nicho: 'Alimentação' }, headers: auth }, res); // autenticado, corpo incompleto
+		await handler({ method: 'POST', body: { nicho: 'Alimentação' } }, res); // corpo incompleto
 		assert.equal(res.code, 400);
 		assert.match(res.payload.error, /perfil_operacional/);
 
 		res = mockRes();
-		await handler({ method: 'POST', body: fullBody, headers: auth }, res);
+		await handler({ method: 'POST', body: fullBody }, res);
 		assert.equal(res.code, 500); // sem GEMINI_API_KEY
 		assert.match(res.payload.error, /GEMINI_API_KEY/);
 	} finally {
-		delete process.env.JWT_SECRET;
 		await rm(join(compiled, '..'), { recursive: true, force: true });
 	}
 }

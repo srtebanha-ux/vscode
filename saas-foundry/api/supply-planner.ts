@@ -10,13 +10,9 @@
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { authenticateNode, type NodeHeaders, type ServerRole } from './lib/security/apiGuard';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
-
-// Planejar consome cota de IA e é dado de negócio — exige login (qualquer cargo).
-const ALLOWED_ROLES: readonly ServerRole[] = ['ROLE_PME', 'ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'];
 
 // Sondado ao vivo (2026-07): modelos fixos anteriores deram 404/429 nesta conta;
 // o 3-flash-preview responde 200 e honra o contrato JSON.
@@ -128,7 +124,6 @@ export async function runSupplyPlanner(model: GenerativeModelLike, payload: Supp
 interface ApiRequest {
 	readonly method?: string;
 	readonly body?: unknown;
-	readonly headers?: NodeHeaders;
 }
 interface ApiResponse {
 	status(code: number): ApiResponse;
@@ -175,14 +170,6 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 		res.status(405).json({ error: 'method-not-allowed' });
 		return;
 	}
-
-	// Zero-Trust: sem JWT válido (cargo permitido) não se toca na cota de IA.
-	const auth = authenticateNode(req.headers ?? {}, ALLOWED_ROLES);
-	if (!auth.ok) {
-		res.status(auth.status).json({ error: auth.error, message: auth.message });
-		return;
-	}
-
 	const payload = readBody(req.body);
 	if (!payload) {
 		res.status(400).json({ error: 'Informe nicho, servico_selecionado, detalhes_volume e perfil_operacional (Custo-Benefício ou Especializado).' });

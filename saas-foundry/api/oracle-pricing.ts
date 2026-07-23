@@ -10,9 +10,14 @@
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { authenticateNodeWhenConfigured, type NodeHeaders, type ServerRole } from './lib/security/apiGuard';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
+
+// Precificar consome cota de IA — exige login (qualquer cargo) quando a ponte de
+// sessão está configurada (produção); no dev/preview passa aberto (sem quebrar).
+const ALLOWED_ROLES: readonly ServerRole[] = ['ROLE_PME', 'ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'];
 
 // Sondado ao vivo contra a conta do projeto (2026-07): gemini-1.5-flash foi
 // aposentado (404), gemini-2.5-flash está bloqueado para contas novas,
@@ -87,6 +92,7 @@ export async function runOraclePricing(model: GenerativeModelLike, payload: Orac
 interface ApiRequest {
 	readonly method?: string;
 	readonly body?: unknown;
+	readonly headers?: NodeHeaders;
 }
 interface ApiResponse {
 	status(code: number): ApiResponse;
@@ -117,6 +123,14 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 		res.status(405).json({ error: 'method-not-allowed' });
 		return;
 	}
+
+	// Zero-Trust em produção; aberto no dev/preview (sem a ponte de sessão).
+	const auth = await authenticateNodeWhenConfigured(req.headers ?? {}, ALLOWED_ROLES);
+	if (!auth.ok) {
+		res.status(auth.status).json({ error: auth.error, message: auth.message });
+		return;
+	}
+
 	const payload = readBody(req.body);
 	if (!payload) {
 		res.status(400).json({ error: 'Informe serviceDescription e location no corpo da requisição.' });

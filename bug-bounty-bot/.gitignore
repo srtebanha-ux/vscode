@@ -10,6 +10,9 @@ dist/
 .env.local
 .env.*.local
 
+# Cache de vazamentos já reportados
+.cache/
+
 # Logs
 logs/
 *.log

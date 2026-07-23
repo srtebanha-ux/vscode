@@ -147,6 +147,33 @@ export function handleMockGovernance(method: string, resource: string, body?: un
 		return { status: 200, body: { tenantId: 'tnt_demo', intact: true, count: 0, records: [] } };
 	}
 
+	if (resource === 'forecast' && verb === 'POST') {
+		const input = (typeof body === 'string' ? safeParse(body) : body) as { commodity?: unknown; horizonte?: unknown; delta_pct?: unknown; confianca?: unknown; drivers?: unknown } | null;
+		if (!input || typeof input.commodity !== 'string' || typeof input.delta_pct !== 'number' || !Array.isArray(input.drivers)) {
+			return { status: 422, body: { error: 'invalid_body', message: 'Informe a previsão da Fase 1.' } };
+		}
+		const delta = input.delta_pct;
+		const horizonte = typeof input.horizonte === 'string' ? input.horizonte : 'próximo trimestre';
+		const conf = typeof input.confianca === 'number' ? input.confianca : 0.6;
+		const drivers = input.drivers as { nome?: unknown; contribuicao_pp?: unknown }[];
+		const top = drivers.slice().sort((a, b) => Math.abs(Number(b.contribuicao_pp) || 0) - Math.abs(Number(a.contribuicao_pp) || 0))[0];
+		const topName = top && typeof top.nome === 'string' ? top.nome : 'fatores macro';
+		const dir = delta >= 0 ? 'alta' : 'queda';
+		return {
+			status: 200,
+			body: {
+				verdict: {
+					resumo: `Projeção de ${dir} de ${Math.abs(delta).toFixed(1)}% no custo de ${input.commodity} no ${horizonte} (confiança ${(conf * 100).toFixed(0)}%), puxada por "${topName}".`,
+					recomendacao:
+						delta >= 5
+							? `Alta relevante: antecipe a compra de ${input.commodity} e configure uma automação no Orchestrator para gerar a Ordem de Compra se o gatilho de +5% se confirmar.`
+							: `Variação dentro da normalidade: mantenha a política de compra atual e monitore "${topName}".`,
+					engine: 'simulated'
+				}
+			}
+		};
+	}
+
 	if (resource === 'radar' && verb === 'POST') {
 		// Mesma semântica do fallback determinístico do servidor (sem chave de IA).
 		const input = (typeof body === 'string' ? safeParse(body) : body) as { findings?: unknown } | null;

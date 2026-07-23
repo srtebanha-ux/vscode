@@ -12,7 +12,9 @@
  * tocar em dados. Zero confiança no cliente.
  */
 
-import jwt from 'jsonwebtoken';
+// jose é ESM-nativo e sem require() dinâmico — bundla e roda na Vercel em
+// qualquer formato (ao contrário do jsonwebtoken, que quebra em bundle ESM).
+import { SignJWT, jwtVerify, importX509, importSPKI, decodeProtectedHeader } from 'jose';
 import { z } from 'zod';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
@@ -23,8 +25,10 @@ declare const process: { readonly env: Record<string, string | undefined> };
 export const SERVER_ROLES = ['ROLE_PME', 'ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
 export type ServerRole = (typeof SERVER_ROLES)[number];
 
-/** Assinatura só com estes algoritmos: bloqueia `alg:none` e confusão RS/HS. */
-const ALLOWED_ALGORITHMS: readonly jwt.Algorithm[] = ['HS256'];
+/** Codifica o segredo HS256 no formato de chave que o jose espera. */
+function hsKey(secret: string): Uint8Array {
+	return new TextEncoder().encode(secret);
+}
 
 /** Segredo mínimo aceitável — barra segredos default/fracos em produção. */
 const MIN_SECRET_LENGTH = 16;
@@ -139,12 +143,12 @@ export function hasRequiredRole(role: ServerRole, allowedRoles: readonly ServerR
  * tanto pelo `authenticate` (App Router) quanto pelas rotas Node clássicas
  * (handler(req,res)) que não têm `Request.headers.get`.
  */
-export function authenticateHeaders(
+export async function authenticateHeaders(
 	authorization: string | null,
 	cookie: string | null,
 	allowedRoles: readonly ServerRole[],
 	options?: { readonly secret?: string }
-): NodeAuthResult {
+): Promise<NodeAuthResult> {
 	let secret: string;
 	try {
 		secret = resolveSecret(options?.secret);
@@ -161,7 +165,8 @@ export function authenticateHeaders(
 	let rawClaims: unknown;
 	try {
 		// Verify pinado: valida assinatura E expiração; `alg:none` e RS/HS-confusion barrados.
-		rawClaims = jwt.verify(token, secret, { algorithms: [...ALLOWED_ALGORITHMS] });
+		const { payload } = await jwtVerify(token, hsKey(secret), { algorithms: ['HS256'] });
+		rawClaims = payload;
 	} catch {
 		return { ok: false, status: 401, error: 'unauthorized', message: 'Token inválido ou expirado.' };
 	}
@@ -195,12 +200,12 @@ export function authenticateHeaders(
  *   cargo não permitido -> 403
  * Só devolve `principal` quando TUDO passa. Delega ao núcleo header-based.
  */
-export function authenticate(
+export async function authenticate(
 	request: Request,
 	allowedRoles: readonly ServerRole[],
 	options?: { readonly secret?: string }
-): AuthResult {
-	const result = authenticateHeaders(
+): Promise<AuthResult> {
+	const result = await authenticateHeaders(
 		request.headers.get('authorization'),
 		request.headers.get('cookie'),
 		allowedRoles,
@@ -229,7 +234,7 @@ export function authenticateNode(
 	headers: NodeHeaders,
 	allowedRoles: readonly ServerRole[],
 	options?: { readonly secret?: string }
-): NodeAuthResult {
+): Promise<NodeAuthResult> {
 	return authenticateHeaders(headerValue(headers['authorization']), headerValue(headers['cookie']), allowedRoles, options);
 }
 
@@ -245,7 +250,7 @@ export function withApiGuard(
 	options?: { readonly secret?: string }
 ): (request: Request) => Promise<Response> {
 	return async (request: Request): Promise<Response> => {
-		const auth = authenticate(request, allowedRoles, options);
+		const auth = await authenticate(request, allowedRoles, options);
 		if (isAuthDenied(auth)) return auth.response;
 		return handler(request, auth.principal);
 	};
@@ -369,11 +374,14 @@ export async function verifyFirebaseIdToken(
 	idToken: string,
 	options: { readonly projectId: string; readonly certs?: Readonly<Record<string, string>>; readonly now?: number }
 ): Promise<FirebaseClaims> {
-	const decoded = jwt.decode(idToken, { complete: true });
-	if (!decoded || typeof decoded === 'string' || decoded.header.alg !== 'RS256') {
+	let header: { readonly alg?: string; readonly kid?: string };
+	try {
+		header = decodeProtectedHeader(idToken);
+	} catch {
 		throw new Error('token Firebase malformado');
 	}
-	const kid = decoded.header.kid;
+	if (header.alg !== 'RS256') throw new Error('token Firebase com algoritmo inesperado');
+	const kid = header.kid;
 	if (!kid) throw new Error('token Firebase sem kid');
 
 	const nowMs = options.now ?? Date.now();
@@ -381,23 +389,36 @@ export async function verifyFirebaseIdToken(
 	const pem = certs[kid];
 	if (!pem) throw new Error('kid do token não corresponde a nenhum certificado');
 
-	const verified = jwt.verify(idToken, pem, {
+	const key = await importPublicKey(pem);
+	const { payload } = await jwtVerify(idToken, key, {
 		algorithms: ['RS256'],
 		issuer: `https://securetoken.google.com/${options.projectId}`,
 		audience: options.projectId,
-		clockTimestamp: Math.floor(nowMs / 1000)
-	}) as Record<string, unknown>;
+		currentDate: new Date(nowMs)
+	});
 
 	// Firebase usa `sub` (== `user_id`) como identidade do usuário.
-	const sub = typeof verified['sub'] === 'string' && verified['sub'] ? verified['sub'] : undefined;
+	const sub = typeof payload.sub === 'string' && payload.sub ? payload.sub : undefined;
 	if (!sub) throw new Error('token Firebase sem identidade');
 
 	return {
 		sub,
-		...(typeof verified['tenantId'] === 'string' ? { tenantId: verified['tenantId'] } : {}),
-		...(typeof verified['role'] === 'string' ? { role: verified['role'] } : {}),
-		...(typeof verified['branchId'] === 'string' ? { branchId: verified['branchId'] } : {})
+		...(typeof payload['tenantId'] === 'string' ? { tenantId: payload['tenantId'] } : {}),
+		...(typeof payload['role'] === 'string' ? { role: payload['role'] } : {}),
+		...(typeof payload['branchId'] === 'string' ? { branchId: payload['branchId'] } : {})
 	};
+}
+
+/**
+ * Importa a chave pública que verifica o token. Produção: certs X.509 do Google
+ * (importX509). Fallback para chave pública SPKI (usado nos testes sem cert).
+ */
+async function importPublicKey(pem: string) {
+	try {
+		return await importX509(pem, 'RS256');
+	} catch {
+		return await importSPKI(pem, 'RS256');
+	}
 }
 
 /** Normaliza um valor arbitrário para um ServerRole conhecido — ou null. */
@@ -420,18 +441,19 @@ export function principalFromFirebaseClaims(claims: FirebaseClaims): Principal {
 }
 
 /** Emite o JWT de sessão HS256 (assinado com JWT_SECRET) a partir do Principal. */
-export function mintSessionToken(principal: Principal, options?: { readonly secret?: string; readonly ttlSeconds?: number }): string {
+export function mintSessionToken(principal: Principal, options?: { readonly secret?: string; readonly ttlSeconds?: number }): Promise<string> {
 	const secret = resolveSecret(options?.secret);
-	return jwt.sign(
-		{
-			sub: principal.userId,
-			tenantId: principal.tenantId,
-			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
-			role: principal.role
-		},
-		secret,
-		{ algorithm: 'HS256', expiresIn: options?.ttlSeconds ?? SESSION_TTL_SECONDS }
-	);
+	const ttl = options?.ttlSeconds ?? SESSION_TTL_SECONDS;
+	return new SignJWT({
+		tenantId: principal.tenantId,
+		...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+		role: principal.role
+	})
+		.setProtectedHeader({ alg: 'HS256' })
+		.setSubject(principal.userId)
+		.setIssuedAt()
+		.setExpirationTime(`${ttl}s`)
+		.sign(hsKey(secret));
 }
 
 /** Set-Cookie do cookie de sessão (HttpOnly/Secure/SameSite=Strict). */

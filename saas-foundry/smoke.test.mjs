@@ -1464,14 +1464,14 @@ try {
 		assert.deepEqual(scopeCreate(branchPrincipal, { valor: 2 }), { valor: 2, branchId: 'fil_sp', tenantId: 'tnt_alpha' });
 
 		// authenticateHeaders: token com branchId popula o principal; sem branchId, ausente
-		const withBranch = authenticateHeaders(`Bearer ${sign({ uid: 'u2', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ENTERPRISE_CLIENT' })}`, null, ['ROLE_ENTERPRISE_CLIENT']);
+		const withBranch = await authenticateHeaders(`Bearer ${sign({ uid: 'u2', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ENTERPRISE_CLIENT' })}`, null, ['ROLE_ENTERPRISE_CLIENT']);
 		assert.equal(withBranch.ok, true);
 		assert.equal(withBranch.principal.branchId, 'fil_sp');
-		const noBranch = authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_PME']);
+		const noBranch = await authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_PME']);
 		assert.equal(noBranch.ok, true);
 		assert.equal('branchId' in noBranch.principal, false, 'conta PME não carrega filial');
 		// Cargo não permitido -> resultado neutro 403 (sem Response)
-		const wrongRole = authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_ADMIN_CONTROLLER']);
+		const wrongRole = await authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(wrongRole.ok, false);
 		assert.equal(wrongRole.status, 403);
 	} finally {
@@ -1555,8 +1555,8 @@ try {
 
 		// ── round-trip: a sessão emitida é aceita pelo próprio apiGuard ─────────
 		const principal = { userId: 'firebase_uid_123', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ADMIN_CONTROLLER' };
-		const session = mintSessionToken(principal);
-		const back = authenticateHeaders(`Bearer ${session}`, null, ['ROLE_ADMIN_CONTROLLER']);
+		const session = await mintSessionToken(principal);
+		const back = await authenticateHeaders(`Bearer ${session}`, null, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(back.ok, true);
 		assert.equal(back.principal.tenantId, 'tnt_alpha');
 		assert.equal(back.principal.branchId, 'fil_sp');
@@ -1565,7 +1565,7 @@ try {
 		const cookie = buildSessionCookie(session);
 		assert.match(cookie, /^__lidar_session=.+; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600$/);
 		assert.equal(SESSION_TTL_SECONDS, 3600);
-		const viaCookie = authenticateHeaders(null, `__lidar_session=${session}`, ['ROLE_ADMIN_CONTROLLER']);
+		const viaCookie = await authenticateHeaders(null, `__lidar_session=${session}`, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(viaCookie.ok, true);
 		// logout: cookie expira
 		assert.match(clearSessionCookie(), /^__lidar_session=; .*Max-Age=0$/);
@@ -1628,7 +1628,7 @@ try {
 		await writeFile(guardFile, guardBuild.outputFiles[0].text);
 		const { authenticateHeaders } = await import(pathToFileURL(guardFile).href);
 		const sessionToken = /^__lidar_session=([^;]+)/.exec(ok.cookie)[1];
-		const authed = authenticateHeaders(null, `__lidar_session=${sessionToken}`, ['ROLE_ADMIN_CONTROLLER']);
+		const authed = await authenticateHeaders(null, `__lidar_session=${sessionToken}`, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(authed.ok, true);
 		assert.equal(authed.principal.userId, 'uid_route');
 

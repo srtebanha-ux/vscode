@@ -153,7 +153,7 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 	}
 
 	// Zero-Trust: JWT de sessão (cookie) + cargo Enterprise antes de qualquer dado.
-	const auth = authenticateNode(req.headers ?? {}, ENTERPRISE_ACCESS);
+	const auth = await authenticateNode(req.headers ?? {}, ENTERPRISE_ACCESS);
 	if (!auth.ok) {
 		res.status(auth.status).json({ error: auth.error, message: auth.message });
 		return;

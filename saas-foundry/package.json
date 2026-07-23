@@ -33,6 +33,7 @@
     "@hookform/resolvers": "^5.4.0",
     "@react-email/components": "^1.0.12",
     "@react-email/render": "^2.1.0",
+    "jose": "^6.2.4",
     "jsonwebtoken": "^9.0.3",
     "jspdf": "^4.2.1",
     "nodemailer": "^9.0.3",

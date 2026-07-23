@@ -76,7 +76,7 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 	try {
 		const claims = await verifyFirebaseIdToken(idToken, { projectId });
 		const principal = principalFromFirebaseClaims(claims);
-		res.setHeader('Set-Cookie', buildSessionCookie(mintSessionToken(principal)));
+		res.setHeader('Set-Cookie', buildSessionCookie(await mintSessionToken(principal)));
 		// Devolve o mínimo (o cookie carrega a autoridade); útil para a UI espelhar o cargo.
 		res.status(200).json({ ok: true, role: principal.role, tenantId: principal.tenantId });
 	} catch {

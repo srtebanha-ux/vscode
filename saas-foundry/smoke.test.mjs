@@ -1588,7 +1588,7 @@ try {
 {
 	const esbuild = await import('esbuild');
 	const dir = await mkdtemp(new URL('./.smoke-tour-', import.meta.url).pathname);
-	await writeFile(join(dir, 'entry.tsx'), "export { default as AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } from '../factory-shell/src/AppTour';\n");
+	await writeFile(join(dir, 'entry.tsx'), "export { default as AppTour, MODULE_TOURS, ACTION_STEPS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } from '../factory-shell/src/AppTour';\n");
 	try {
 		const bundled = await esbuild.build({
 			entryPoints: [join(dir, 'entry.tsx')],
@@ -1598,16 +1598,16 @@ try {
 		});
 		const compiled = join(dir, 'bundle.mjs');
 		await writeFile(compiled, bundled.outputFiles[0].text);
-		const { AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } = await import(pathToFileURL(compiled).href);
+		const { AppTour, MODULE_TOURS, ACTION_STEPS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } = await import(pathToFileURL(compiled).href);
 		assert.equal(TOUR_START_EVENT, 'lidar:tour:start', 'evento do botão "Ver tutorial"');
 
-		// Dicionário: 5 módulos principais, cada um com o seu Deep Tour.
+		// Dicionário: 5 módulos principais, cada um com o seu Deep Tour (só passos percorríveis).
 		assert.equal(MODULE_TOURS.length, 5, 'há 5 Deep Tours (um por módulo principal)');
 		const byKey = Object.fromEntries(MODULE_TOURS.map(tour => [tour.key, tour]));
 		const expected = {
 			cmo: { path: '/plugins/virtual-cmo-v1', steps: 5 },
-			oraculo: { path: '/plugins/margin-calculator-v1', steps: 7 },
-			planejador: { path: '/plugins/construction-calculator-v1', steps: 5 },
+			oraculo: { path: '/plugins/margin-calculator-v1', steps: 3 },
+			planejador: { path: '/plugins/construction-calculator-v1', steps: 4 },
 			recibo: { path: '/plugins/quick-receipt-maker-v1', steps: 5 },
 			fiscal: { path: '/plugins/smart-invoice-helper-v1', steps: 4 }
 		};
@@ -1627,12 +1627,17 @@ try {
 		assert.match(byKey.cmo.steps[0].content, /Diretor de Marketing/);
 		assert.equal(byKey.cmo.steps[2].target, '.tour-cmo-produto');
 		assert.equal(byKey.cmo.steps[4].target, '.tour-cmo-gerar');
-		assert.equal(byKey.oraculo.steps[2].target, '.tour-oraculo-custo-direto');
-		assert.equal(byKey.oraculo.steps[3].target, '.tour-oraculo-custo-oculto');
-		assert.match(byKey.oraculo.steps[3].content, /gastos escondidos/);
-		assert.equal(byKey.oraculo.steps[6].target, '.tour-oraculo-calcular');
+		assert.equal(byKey.oraculo.steps[1].target, '.tour-oraculo-servico');
+		assert.equal(byKey.oraculo.steps[2].target, '.tour-oraculo-calcular');
 		assert.equal(byKey.planejador.steps[1].target, '.tour-planejador-tipo');
-		assert.equal(byKey.planejador.steps[4].target, '.tour-planejador-gerar');
+		assert.equal(byKey.planejador.steps[3].target, '.tour-planejador-gerar');
+
+		// Motor de avanço por fase: quais passos exigem interação (revelam a próxima fase).
+		assert.deepEqual(ACTION_STEPS.cmo, [1], 'CMO: escolher o objetivo é passo de ação');
+		assert.deepEqual(ACTION_STEPS.planejador, [1], 'Planejador: escolher o nicho é passo de ação');
+		assert.deepEqual(ACTION_STEPS.oraculo, [], 'Oráculo (discovery, tela única): sem passo de ação');
+		assert.deepEqual(ACTION_STEPS.fiscal, [], 'Fiscal (tela única): sem passo de ação');
+		assert.deepEqual(ACTION_STEPS.recibo, [], 'Recibo (tela única): sem passo de ação');
 		assert.equal(byKey.recibo.steps[1].target, '.tour-recibo-cliente');
 		assert.equal(byKey.recibo.steps[4].target, '.tour-recibo-gerar');
 		assert.equal(byKey.fiscal.steps[1].target, '.tour-fiscal-faturamento');

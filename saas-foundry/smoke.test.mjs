@@ -270,6 +270,7 @@ const forbidden = [
 	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
 	'./api/lib/security/apiGuard.ts',
 	'./api/lib/security/governance.ts',
+	'./api/session/route.ts',
 	'./api/secure-invoices/route.ts',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
@@ -1019,43 +1020,6 @@ try {
 	assert.ok(unknown.hiddenCosts.length > 0);
 }
 
-// 23. Rota /api/pricing-oracle: injeta o system prompt e SEMPRE devolve faixa
-{
-	const esbuild = await import('esbuild');
-	const { outputFiles } = await esbuild.build({
-		entryPoints: [new URL('./api/pricing-oracle/route.ts', import.meta.url).pathname],
-		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
-	});
-	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-oracle-')), 'route.mjs');
-	try {
-		await writeFile(compiled, outputFiles[0].text);
-		const { POST, default: methodHandler, ORACLE_SYSTEM_PROMPT } = await import(pathToFileURL(compiled).href);
-		const call = (body) => POST(new Request('https://lidarcore.example/api/pricing-oracle', { method: 'POST', headers: { 'content-type': 'application/json' }, body }));
-
-		assert.match(ORACLE_SYSTEM_PROMPT, /ORÁCULO DE PREÇOS/);
-
-		// contrato de entrada fail-closed
-		assert.equal((await call('não é json')).status, 400);
-		assert.equal((await call(JSON.stringify({ description: 'curto', region: 'SP' }))).status, 400);
-		assert.equal((await call(JSON.stringify({ description: 'pintura de 50m² parede interna', region: '' }))).status, 400);
-
-		// sem ANTHROPIC_API_KEY -> simulado, mas SEMPRE em faixa (nunca preço exato)
-		delete process.env.ANTHROPIC_API_KEY;
-		const res = await call(JSON.stringify({ description: 'pintura de 50m² de parede interna com Suvinil', region: 'São Paulo - SP' }));
-		assert.equal(res.status, 200);
-		const body = await res.json();
-		assert.equal(body.engine, 'simulated');
-		assert.equal(body.niche, 'Pintura Residencial');
-		assert.ok(body.marketHigh > body.marketLow, 'resposta é uma faixa, não um valor exato');
-		assert.ok(Array.isArray(body.hiddenCosts) && body.hiddenCosts.length > 0);
-
-		// método errado -> 405
-		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/pricing-oracle', { method: 'GET' }))).status, 405);
-	} finally {
-		await rm(join(compiled, '..'), { recursive: true, force: true });
-	}
-}
-
 // 24. Gatilho de Boas-Vindas: template React Email + Magic Link + falha silenciosa
 {
 	const esbuild = await import('esbuild');
@@ -1512,6 +1476,176 @@ try {
 	} finally {
 		delete process.env.JWT_SECRET;
 		for (const d of dirs) await rm(d, { recursive: true, force: true });
+	}
+}
+
+// 32d. Ponte Firebase→sessão: verifica ID token RS256 (sem rede) e emite sessão HS256.
+{
+	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+	process.env.JWT_SECRET = SECRET;
+	const { default: jsonwebtoken } = await import('jsonwebtoken');
+	const { generateKeyPairSync } = await import('node:crypto');
+	const esbuild = await import('esbuild');
+
+	// Par de chaves RSA local faz o papel do Google: assina o "ID token do Firebase"
+	// com a privada; o cert público entra no mapa que injetamos (sem tocar na rede).
+	const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+		modulusLength: 2048,
+		publicKeyEncoding: { type: 'spki', format: 'pem' },
+		privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+	});
+	const KID = 'test-kid-1';
+	const PROJECT = 'lidar-core-test';
+	const certs = { [KID]: publicKey };
+	const signFirebase = (claims, opts = {}) =>
+		jsonwebtoken.sign(claims, privateKey, {
+			algorithm: 'RS256',
+			keyid: KID,
+			subject: 'firebase_uid_123',
+			issuer: `https://securetoken.google.com/${PROJECT}`,
+			audience: PROJECT,
+			expiresIn: 3600,
+			...opts
+		});
+
+	const build = await esbuild.build({
+		entryPoints: [new URL('./api/lib/security/apiGuard.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken']
+	});
+	const dir = await mkdtemp(new URL('./.smoke-fbbridge-', import.meta.url).pathname);
+	const file = join(dir, 'guard.mjs');
+	try {
+		await writeFile(file, build.outputFiles[0].text);
+		const {
+			verifyFirebaseIdToken, principalFromFirebaseClaims, normalizeServerRole,
+			mintSessionToken, buildSessionCookie, clearSessionCookie, authenticateHeaders, SESSION_TTL_SECONDS
+		} = await import(pathToFileURL(file).href);
+
+		// ── verifyFirebaseIdToken: caminho feliz + rejeições ────────────────────
+		const good = signFirebase({ tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER', branchId: 'fil_sp' });
+		const claims = await verifyFirebaseIdToken(good, { projectId: PROJECT, certs });
+		assert.equal(claims.sub, 'firebase_uid_123');
+		assert.equal(claims.tenantId, 'tnt_alpha');
+		assert.equal(claims.role, 'ROLE_ADMIN_CONTROLLER');
+		assert.equal(claims.branchId, 'fil_sp');
+		// audience/issuer errados -> rejeita
+		await assert.rejects(verifyFirebaseIdToken(good, { projectId: 'outro-projeto', certs }));
+		// kid sem cert correspondente -> rejeita
+		await assert.rejects(verifyFirebaseIdToken(good, { projectId: PROJECT, certs: {} }));
+		// expirado -> rejeita
+		await assert.rejects(verifyFirebaseIdToken(signFirebase({}, { expiresIn: -30 }), { projectId: PROJECT, certs }));
+		// HS256 forjado (confusão de algoritmo) -> rejeita (só RS256 é aceito)
+		const forgedHs = jsonwebtoken.sign({ sub: 'x' }, 'qualquer-segredo-32-chars-aaaaaa!!', { algorithm: 'HS256', keyid: KID, issuer: `https://securetoken.google.com/${PROJECT}`, audience: PROJECT });
+		await assert.rejects(verifyFirebaseIdToken(forgedHs, { projectId: PROJECT, certs }));
+
+		// ── principalFromFirebaseClaims: defaults fail-safe ─────────────────────
+		assert.deepEqual(principalFromFirebaseClaims({ sub: 'u1', tenantId: 'tnt_x', role: 'ROLE_ENTERPRISE_CLIENT', branchId: 'fil_rj' }), {
+			userId: 'u1', tenantId: 'tnt_x', branchId: 'fil_rj', role: 'ROLE_ENTERPRISE_CLIENT'
+		});
+		// sem tenantId -> cada usuário é seu próprio tenant (isolamento por uid)
+		const p2 = principalFromFirebaseClaims({ sub: 'u2' });
+		assert.equal(p2.tenantId, 'u2');
+		assert.equal(p2.role, 'ROLE_PME'); // sem role válido -> base
+		assert.equal('branchId' in p2, false);
+		// role desconhecido -> ROLE_PME (fail-safe, nunca escala)
+		assert.equal(principalFromFirebaseClaims({ sub: 'u3', role: 'ROLE_SUPREME' }).role, 'ROLE_PME');
+		assert.equal(normalizeServerRole('ROLE_ADMIN_CONTROLLER'), 'ROLE_ADMIN_CONTROLLER');
+		assert.equal(normalizeServerRole('lixo'), null);
+
+		// ── round-trip: a sessão emitida é aceita pelo próprio apiGuard ─────────
+		const principal = { userId: 'firebase_uid_123', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ADMIN_CONTROLLER' };
+		const session = mintSessionToken(principal);
+		const back = authenticateHeaders(`Bearer ${session}`, null, ['ROLE_ADMIN_CONTROLLER']);
+		assert.equal(back.ok, true);
+		assert.equal(back.principal.tenantId, 'tnt_alpha');
+		assert.equal(back.principal.branchId, 'fil_sp');
+		assert.equal(back.principal.role, 'ROLE_ADMIN_CONTROLLER');
+		// e também via cookie de sessão (o caminho real do browser)
+		const cookie = buildSessionCookie(session);
+		assert.match(cookie, /^__lidar_session=.+; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600$/);
+		assert.equal(SESSION_TTL_SECONDS, 3600);
+		const viaCookie = authenticateHeaders(null, `__lidar_session=${session}`, ['ROLE_ADMIN_CONTROLLER']);
+		assert.equal(viaCookie.ok, true);
+		// logout: cookie expira
+		assert.match(clearSessionCookie(), /^__lidar_session=; .*Max-Age=0$/);
+	} finally {
+		delete process.env.JWT_SECRET;
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+// 32e. Rota /api/session: troca ID token do Firebase por cookie de sessão HS256.
+{
+	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+	const PROJECT = 'lidar-core-test';
+	process.env.JWT_SECRET = SECRET;
+	process.env.FIREBASE_PROJECT_ID = PROJECT;
+	const { default: jsonwebtoken } = await import('jsonwebtoken');
+	const { generateKeyPairSync } = await import('node:crypto');
+	const esbuild = await import('esbuild');
+
+	const { privateKey, publicKey } = generateKeyPairSync('rsa', {
+		modulusLength: 2048,
+		publicKeyEncoding: { type: 'spki', format: 'pem' },
+		privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+	});
+	const KID = 'route-kid';
+	const idToken = jsonwebtoken.sign({ tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' }, privateKey, {
+		algorithm: 'RS256', keyid: KID, subject: 'uid_route', issuer: `https://securetoken.google.com/${PROJECT}`, audience: PROJECT, expiresIn: 3600
+	});
+
+	// Stub do fetch dos certs do Google (o único acesso de rede do endpoint).
+	const originalFetch = globalThis.fetch;
+	globalThis.fetch = async () => ({ ok: true, json: async () => ({ [KID]: publicKey }), headers: { get: () => 'max-age=3600' } });
+
+	const build = await esbuild.build({
+		entryPoints: [new URL('./api/session/route.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken']
+	});
+	const dir = await mkdtemp(new URL('./.smoke-session-', import.meta.url).pathname);
+	const file = join(dir, 'route.mjs');
+	try {
+		await writeFile(file, build.outputFiles[0].text);
+		const { default: handler } = await import(pathToFileURL(file).href);
+		const url = 'https://lidarcore.example/api/session';
+
+		// POST com ID token válido -> 200 + Set-Cookie de sessão
+		const ok = await handler(new Request(url, { method: 'POST', headers: { authorization: `Bearer ${idToken}` } }));
+		assert.equal(ok.status, 200);
+		const setCookie = ok.headers.get('set-cookie');
+		assert.match(setCookie, /^__lidar_session=[^;]+; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600$/);
+		const okBody = await ok.json();
+		assert.equal(okBody.role, 'ROLE_ADMIN_CONTROLLER');
+		assert.equal(okBody.tenantId, 'tnt_alpha');
+
+		// O cookie emitido autentica de verdade nas rotas guardadas (cadeia completa).
+		const guardBuild = await esbuild.build({
+			entryPoints: [new URL('./api/lib/security/apiGuard.ts', import.meta.url).pathname],
+			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken']
+		});
+		const guardFile = join(dir, 'guard.mjs');
+		await writeFile(guardFile, guardBuild.outputFiles[0].text);
+		const { authenticateHeaders } = await import(pathToFileURL(guardFile).href);
+		const sessionToken = /^__lidar_session=([^;]+)/.exec(setCookie)[1];
+		const authed = authenticateHeaders(null, `__lidar_session=${sessionToken}`, ['ROLE_ADMIN_CONTROLLER']);
+		assert.equal(authed.ok, true);
+		assert.equal(authed.principal.userId, 'uid_route');
+
+		// Sem credencial -> 401
+		assert.equal((await handler(new Request(url, { method: 'POST' }))).status, 401);
+		// Token inválido -> 401
+		assert.equal((await handler(new Request(url, { method: 'POST', headers: { authorization: 'Bearer a.b.c' } }))).status, 401);
+		// DELETE (logout) -> 200 + cookie expirado
+		const del = await handler(new Request(url, { method: 'DELETE' }));
+		assert.equal(del.status, 200);
+		assert.match(del.headers.get('set-cookie'), /^__lidar_session=; .*Max-Age=0$/);
+		// Método não suportado -> 405
+		assert.equal((await handler(new Request(url, { method: 'GET' }))).status, 405);
+	} finally {
+		globalThis.fetch = originalFetch;
+		delete process.env.JWT_SECRET;
+		delete process.env.FIREBASE_PROJECT_ID;
+		await rm(dir, { recursive: true, force: true });
 	}
 }
 

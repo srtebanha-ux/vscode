@@ -318,3 +318,128 @@ export function forTenant<TRecord extends { readonly tenantId: string }>(delegat
 		deleteMany: where => delegate.deleteMany({ where: scopeWhere(principal, where) })
 	};
 }
+
+// ── 4) Ponte Firebase → sessão HS256 ─────────────────────────────────────────
+//
+// O login do app é Firebase (ID token RS256, assinado pelo Google). O apiGuard
+// só confia em HS256/JWT_SECRET. Esta ponte verifica o token do Firebase no
+// servidor e emite um cookie de sessão HS256 que o apiGuard entende — sem nunca
+// confiar no cliente e sem puxar o firebase-admin (dep pesada).
+
+// `fetch` é global no runtime Node da Vercel; o tsconfig da função não traz o tipo.
+declare const fetch: (input: string) => Promise<{
+	readonly ok: boolean;
+	json(): Promise<unknown>;
+	readonly headers: { get(name: string): string | null };
+}>;
+
+/** Certificados x509 públicos do Google que assinam os ID tokens do Firebase. */
+const FIREBASE_CERTS_URL = 'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
+
+/** TTL da sessão — alinhado ao ID token do Firebase (1h). */
+export const SESSION_TTL_SECONDS = 60 * 60;
+
+/** Claims que nos interessam do ID token do Firebase (o resto é ignorado). */
+export interface FirebaseClaims {
+	readonly sub: string;
+	readonly tenantId?: string;
+	readonly role?: string;
+	readonly branchId?: string;
+}
+
+/** Cache dos certs do Google (kid -> PEM) com validade vinda do Cache-Control. */
+let certsCache: { readonly certs: Readonly<Record<string, string>>; readonly expiresAt: number } | null = null;
+
+async function fetchGoogleCerts(nowMs: number): Promise<Readonly<Record<string, string>>> {
+	if (certsCache && certsCache.expiresAt > nowMs) return certsCache.certs;
+	const response = await fetch(FIREBASE_CERTS_URL);
+	if (!response.ok) throw new Error('falha ao obter certificados do Google');
+	const certs = (await response.json()) as Record<string, string>;
+	const maxAge = Number(/max-age=(\d+)/.exec(response.headers.get('cache-control') ?? '')?.[1] ?? '3600');
+	certsCache = { certs, expiresAt: nowMs + maxAge * 1000 };
+	return certs;
+}
+
+/**
+ * Verifica um ID token do Firebase (RS256): assinatura contra o cert do `kid`,
+ * `issuer`/`audience` do projeto e expiração. Devolve os claims ou lança.
+ * `certs` é injetável para testar sem rede.
+ */
+export async function verifyFirebaseIdToken(
+	idToken: string,
+	options: { readonly projectId: string; readonly certs?: Readonly<Record<string, string>>; readonly now?: number }
+): Promise<FirebaseClaims> {
+	const decoded = jwt.decode(idToken, { complete: true });
+	if (!decoded || typeof decoded === 'string' || decoded.header.alg !== 'RS256') {
+		throw new Error('token Firebase malformado');
+	}
+	const kid = decoded.header.kid;
+	if (!kid) throw new Error('token Firebase sem kid');
+
+	const nowMs = options.now ?? Date.now();
+	const certs = options.certs ?? (await fetchGoogleCerts(nowMs));
+	const pem = certs[kid];
+	if (!pem) throw new Error('kid do token não corresponde a nenhum certificado');
+
+	const verified = jwt.verify(idToken, pem, {
+		algorithms: ['RS256'],
+		issuer: `https://securetoken.google.com/${options.projectId}`,
+		audience: options.projectId,
+		clockTimestamp: Math.floor(nowMs / 1000)
+	}) as Record<string, unknown>;
+
+	// Firebase usa `sub` (== `user_id`) como identidade do usuário.
+	const sub = typeof verified['sub'] === 'string' && verified['sub'] ? verified['sub'] : undefined;
+	if (!sub) throw new Error('token Firebase sem identidade');
+
+	return {
+		sub,
+		...(typeof verified['tenantId'] === 'string' ? { tenantId: verified['tenantId'] } : {}),
+		...(typeof verified['role'] === 'string' ? { role: verified['role'] } : {}),
+		...(typeof verified['branchId'] === 'string' ? { branchId: verified['branchId'] } : {})
+	};
+}
+
+/** Normaliza um valor arbitrário para um ServerRole conhecido — ou null. */
+export function normalizeServerRole(value: unknown): ServerRole | null {
+	return typeof value === 'string' && (SERVER_ROLES as readonly string[]).includes(value) ? (value as ServerRole) : null;
+}
+
+/**
+ * Deriva o Principal da sessão a partir dos claims do Firebase, com defaults
+ * fail-safe: sem `tenantId` provisionado nos claims, cada usuário é seu próprio
+ * tenant (isolamento por uid); sem `role` válido, entra como ROLE_PME (base).
+ */
+export function principalFromFirebaseClaims(claims: FirebaseClaims): Principal {
+	return {
+		userId: claims.sub,
+		tenantId: claims.tenantId ?? claims.sub,
+		...(claims.branchId !== undefined ? { branchId: claims.branchId } : {}),
+		role: normalizeServerRole(claims.role) ?? 'ROLE_PME'
+	};
+}
+
+/** Emite o JWT de sessão HS256 (assinado com JWT_SECRET) a partir do Principal. */
+export function mintSessionToken(principal: Principal, options?: { readonly secret?: string; readonly ttlSeconds?: number }): string {
+	const secret = resolveSecret(options?.secret);
+	return jwt.sign(
+		{
+			sub: principal.userId,
+			tenantId: principal.tenantId,
+			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+			role: principal.role
+		},
+		secret,
+		{ algorithm: 'HS256', expiresIn: options?.ttlSeconds ?? SESSION_TTL_SECONDS }
+	);
+}
+
+/** Set-Cookie do cookie de sessão (HttpOnly/Secure/SameSite=Strict). */
+export function buildSessionCookie(token: string, ttlSeconds: number = SESSION_TTL_SECONDS): string {
+	return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${ttlSeconds}`;
+}
+
+/** Set-Cookie que expira o cookie de sessão (logout). */
+export function clearSessionCookie(): string {
+	return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+}

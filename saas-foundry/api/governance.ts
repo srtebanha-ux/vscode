@@ -515,7 +515,7 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 	try {
 		// TRAVA FINANCEIRA: escopo congelado -> 423 Locked ANTES do maker-checker.
 		// Rejeitar continua permitido (rejeição não gera despesa); aprovar não passa.
-		const target = await approvals.get(decision.id);
+		const target = await approvals.get(principal.tenantId, decision.id);
 		if (decision.approve && target) {
 			const freeze = await freezes.activeFor(target.tenantId, target.branchId);
 			if (freeze) {

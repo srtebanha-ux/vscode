@@ -1420,6 +1420,23 @@ try {
 		assert.equal(allowed.status, 200);
 		assert.equal(ran, true);
 
+		// ── PARIDADE front↔back: o mapa do front-end espelha o do servidor ──────
+		// O front (permissions.ts) só ESCONDE botões; a autoridade é o backend.
+		// Se os dois divergirem, um botão aparece sem o back liberar (ou some à toa).
+		const frontPerms = await compileLib('./factory-shell/src/security/permissions.ts', 'ent-frontperms'); dirs.push(frontPerms.dir);
+		const { PERMISSIONS_BY_ROLE, hasPermission: frontHasPermission } = await import(pathToFileURL(frontPerms.file).href);
+		for (const role of ['ROLE_PME', 'ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER']) {
+			assert.deepEqual(
+				[...PERMISSIONS_BY_ROLE[role]].sort(),
+				[...ROLE_PERMISSIONS[role]].sort(),
+				`permissões do front divergem do back em ${role}`
+			);
+		}
+		// hasPermission do front é fail-closed para cargo nulo/desconhecido
+		assert.equal(frontHasPermission(null, 'quote:create'), false);
+		assert.equal(frontHasPermission('ROLE_PME', 'quote:approve'), false);
+		assert.equal(frontHasPermission('ROLE_ADMIN_CONTROLLER', 'audit:view'), true);
+
 		// ── Auditoria encadeada por hash (append-only, à prova de adulteração) ──
 		const sink = new InMemoryAuditSink();
 		const fixedClock = () => new Date('2026-07-23T12:00:00.000Z');

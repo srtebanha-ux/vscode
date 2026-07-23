@@ -1244,6 +1244,55 @@ try {
 	assert.equal(typeof payload[0].perda_estimada_reais, 'number');
 }
 
+// 28d. BI Preditivo — Fase 1 (forecastEngine): parser NL + previsão explicável
+{
+	const { parseForecastCommand, computeForecast, toForecastPayload, saveForecast, loadForecast, MACRO_INDICATORS } =
+		await import('./modules-library/predictive-bi-agent/dist/forecastEngine.js');
+
+	// Parser NL (pt-BR): commodity, horizonte, flags de macro/histórico
+	const p = parseForecastCommand('Cruze o histórico de compras dos últimos 2 anos com as tendências macroeconômicas e preveja se o custo do m³ do concreto 35MPa vai subir no próximo trimestre');
+	assert.equal(p.commodity, 'concreto 35MPa');
+	assert.equal(p.horizonMonths, 3);
+	assert.equal(p.wantsMacro, true);
+	assert.equal(p.wantsHistory, true);
+	assert.equal(parseForecastCommand('preço do aço no próximo semestre').horizonMonths, 6);
+	assert.equal(parseForecastCommand('e o cimento?').commodity, 'cimento');
+	assert.equal(parseForecastCommand('qualquer coisa aleatória').commodity, 'insumos gerais'); // fail-safe
+
+	// Previsão determinística: soma das contribuições = delta; explicável e estável
+	const semCubo = computeForecast(p, null);
+	assert.equal(semCubo.commodity, 'concreto 35MPa');
+	assert.equal(semCubo.confidence, 0.55, 'sem histórico ingerido, confiança cai');
+	assert.equal(semCubo.basedOnRecords, 0);
+	const soma = semCubo.drivers.reduce((s, d) => s + d.contribution, 0);
+	assert.ok(Math.abs(soma - semCubo.deltaPct) < 1e-9, 'delta = soma das contribuições dos drivers');
+	assert.ok(semCubo.deltaPct > 0, 'com indicadores positivos, previsão de alta');
+	// Determinismo: mesma entrada -> mesma saída
+	assert.equal(computeForecast(p, null).deltaPct, semCubo.deltaPct);
+
+	// Com histórico (cubo com frete pressionado > 9%): confiança sobe e surge o driver de frete
+	const cube = { generatedAt: 'x', recordCount: 12000, cells: [{ branchId: 'b', supplier: 's', category: 'c', count: 12000, total: 1_000_000, freteTotal: 150_000, impostoTotal: 120_000 }] };
+	const comCubo = computeForecast(p, cube);
+	assert.equal(comCubo.confidence, 0.86);
+	assert.equal(comCubo.basedOnRecords, 12000);
+	assert.ok(comCubo.drivers.some(d => /Press[aã]o de frete/i.test(d.name)), 'frete alto no histórico vira driver');
+	assert.ok(comCubo.deltaPct > semCubo.deltaPct, 'pressão observada aumenta a previsão');
+
+	// Payload da Fase 2: compacto e formatado para a IA
+	const payload = toForecastPayload(comCubo);
+	assert.equal(payload.commodity, 'concreto 35MPa');
+	assert.equal(typeof payload.delta_pct, 'number');
+	assert.ok(Array.isArray(payload.drivers) && payload.drivers.length <= 8);
+
+	// Indicadores macro presentes e persistência round-trip
+	assert.ok(MACRO_INDICATORS.length >= 3);
+	const mem = new Map();
+	saveForecast(comCubo, { setItem: (k, v) => mem.set(k, v) });
+	const back = loadForecast({ getItem: k => mem.get(k) ?? null });
+	assert.equal(back.deltaPct, comCubo.deltaPct);
+	assert.equal(loadForecast({ getItem: () => 'lixo{' }), null, 'previsão corrompida -> null');
+}
+
 // 29. Central de Descoberta Fiscal: feed proativo (Push) + mineração ativa (Pull)
 {
 	const { FiscalDiscoveryHub, filterRecords, sortRecords, FISCAL_RECORDS } = await import(
@@ -1929,6 +1978,18 @@ try {
 		// A consulta ao Radar entra na trilha de auditoria.
 		const auditRadar = await call({ token: admin, resource: 'audit' });
 		assert.ok(auditRadar.body.records.some(r => r.action === 'radar:diagnose'), 'diagnóstico auditado');
+
+		// ── BI Preditivo (Fase 2) via rota: parecer sobre a previsão ───────────
+		const forecastPayload = { commodity: 'concreto 35MPa', horizonte: 'próximo trimestre', delta_pct: 6.2, confianca: 0.86, drivers: [{ nome: 'INCC', contribuicao_pp: 3.1 }, { nome: 'Diesel/logística', contribuicao_pp: 2.4 }] };
+		const fc = await call({ method: 'POST', token: admin, resource: 'forecast', body: forecastPayload });
+		assert.equal(fc.code, 200);
+		assert.equal(fc.body.verdict.engine, 'simulated');
+		assert.match(fc.body.verdict.resumo, /concreto 35MPa/);
+		assert.match(fc.body.verdict.recomendacao, /Orchestrator|antecipe/i, 'alta >= 5% sugere automação/antecipação');
+		// Corpo inválido -> 422; anônimo -> 401; consulta auditada.
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'forecast', body: { commodity: 'x' } })).code, 422);
+		assert.equal((await call({ method: 'POST', resource: 'forecast', body: forecastPayload })).code, 401);
+		assert.ok((await call({ token: admin, resource: 'audit' })).body.records.some(r => r.action === 'forecast:diagnose'), 'previsão auditada');
 	} finally {
 		delete process.env.JWT_SECRET;
 		await rm(dir, { recursive: true, force: true });
@@ -1997,6 +2058,13 @@ try {
 		assert.equal(mockDiag.body.diagnosis.engine, 'simulated');
 		assert.match(mockDiag.body.diagnosis.diagnostico, /filial-sul/);
 		assert.equal(handleMockGovernance('POST', 'radar', JSON.stringify({ findings: [] })).status, 422);
+
+		// BI Preditivo (Fase 2) no mock: parecer determinístico com a recomendação de automação.
+		const mockFc = handleMockGovernance('POST', 'forecast', JSON.stringify({ commodity: 'concreto 35MPa', horizonte: 'próximo trimestre', delta_pct: 6.2, confianca: 0.86, drivers: [{ nome: 'INCC', contribuicao_pp: 3.1 }] }));
+		assert.equal(mockFc.status, 200);
+		assert.match(mockFc.body.verdict.resumo, /concreto 35MPa/);
+		assert.match(mockFc.body.verdict.recomendacao, /Orchestrator/);
+		assert.equal(handleMockGovernance('POST', 'forecast', JSON.stringify({ commodity: 'x' })).status, 422);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

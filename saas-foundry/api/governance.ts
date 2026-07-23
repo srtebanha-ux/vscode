@@ -185,6 +185,88 @@ async function radarDiagnose(findings: readonly RadarFindingInput[]): Promise<Ra
 	}
 }
 
+// ── BI Preditivo — Fase 2 (parecer executivo sobre a previsão determinística) ─
+
+interface ForecastInput {
+	readonly commodity: string;
+	readonly horizonte: string;
+	readonly delta_pct: number;
+	readonly confianca: number;
+	readonly drivers: readonly { readonly nome: string; readonly contribuicao_pp: number }[];
+}
+
+export interface ForecastVerdict {
+	readonly resumo: string;
+	readonly recomendacao: string;
+	readonly engine: 'gemini' | 'simulated';
+}
+
+/** Valida o payload compacto da Fase 1 do BI (máx. 8 drivers). */
+export function parseForecastInput(source: unknown): ForecastInput | null {
+	if (typeof source !== 'object' || source === null) return null;
+	const f = source as Record<string, unknown>;
+	if (typeof f['commodity'] !== 'string' || typeof f['horizonte'] !== 'string') return null;
+	if (typeof f['delta_pct'] !== 'number' || typeof f['confianca'] !== 'number') return null;
+	if (!Array.isArray(f['drivers']) || f['drivers'].length > 8) return null;
+	const drivers: { nome: string; contribuicao_pp: number }[] = [];
+	for (const d of f['drivers']) {
+		if (typeof d !== 'object' || d === null) return null;
+		const dr = d as Record<string, unknown>;
+		if (typeof dr['nome'] !== 'string' || typeof dr['contribuicao_pp'] !== 'number') return null;
+		drivers.push({ nome: dr['nome'], contribuicao_pp: dr['contribuicao_pp'] });
+	}
+	return { commodity: f['commodity'], horizonte: f['horizonte'], delta_pct: f['delta_pct'], confianca: f['confianca'], drivers };
+}
+
+/** Parecer determinístico (fallback sem chave/IA — nunca 500, nunca tela vazia). */
+export function simulatedForecastVerdict(input: ForecastInput): ForecastVerdict {
+	const dir = input.delta_pct >= 0 ? 'alta' : 'queda';
+	const topDriver = [...input.drivers].sort((a, b) => Math.abs(b.contribuicao_pp) - Math.abs(a.contribuicao_pp))[0];
+	return {
+		resumo: `Projeção de ${dir} de ${Math.abs(input.delta_pct).toFixed(1)}% no custo de ${input.commodity} no ${input.horizonte} (confiança ${(input.confianca * 100).toFixed(0)}%), puxada por "${topDriver?.nome ?? 'fatores macro'}".`,
+		recomendacao:
+			input.delta_pct >= 5
+				? `Alta relevante: antecipe a compra de ${input.commodity} (trave preço/volume agora) e configure uma automação no Orchestrator para gerar a Ordem de Compra automaticamente se o gatilho de +5% se confirmar.`
+				: `Variação dentro da normalidade: mantenha a política de compra atual e monitore o driver "${topDriver?.nome ?? 'principal'}" no próximo ciclo.`,
+		engine: 'simulated'
+	};
+}
+
+const FORECAST_SYSTEM_PROMPT = [
+	'Você é o Predictive BI Agent do Lidar Core, analista de compras de uma construtora brasileira.',
+	'Receberá uma previsão JÁ CALCULADA (aritmética exata — não recalcule o delta).',
+	'Responda EXCLUSIVAMENTE com JSON válido nesta interface, sem markdown:',
+	'{ "resumo": string, "recomendacao": string }',
+	'resumo: 1-2 frases executivas citando commodity, horizonte, delta% e o principal driver.',
+	'recomendacao: 1 frase de ação de compras; se a alta for >= 5%, sugerir antecipar compra e automatizar a Ordem de Compra no Orchestrator.'
+].join('\n');
+
+/** Fase 2 do BI com Gemini; qualquer falha -> fallback determinístico. */
+async function forecastVerdict(input: ForecastInput): Promise<ForecastVerdict> {
+	const apiKey = process.env['GEMINI_API_KEY'];
+	if (!apiKey) return simulatedForecastVerdict(input);
+	try {
+		const { GoogleGenerativeAI } = await import('@google/generative-ai');
+		const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({
+			model: 'gemini-3-flash-preview',
+			systemInstruction: FORECAST_SYSTEM_PROMPT,
+			generationConfig: { responseMimeType: 'application/json' }
+		});
+		const result = await model.generateContent(`Previsão da Fase 1:\n${JSON.stringify(input)}`);
+		const text = result.response.text();
+		const start = text.indexOf('{');
+		const end = text.lastIndexOf('}');
+		if (start === -1 || end === -1) throw new Error('sem JSON');
+		const raw = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+		const resumo = typeof raw['resumo'] === 'string' ? raw['resumo'] : null;
+		const recomendacao = typeof raw['recomendacao'] === 'string' ? raw['recomendacao'] : null;
+		if (!resumo || !recomendacao) throw new Error('JSON fora do contrato');
+		return { resumo, recomendacao, engine: 'gemini' };
+	} catch {
+		return simulatedForecastVerdict(input);
+	}
+}
+
 /** Valida o corpo do decide (strict: campo extra -> rejeita, anti-injeção). Substitui o Zod. */
 export function parseDecideBody(source: unknown): { readonly id: string; readonly approve: boolean; readonly reason?: string } | null {
 	if (typeof source !== 'object' || source === null) return null;
@@ -255,6 +337,27 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 			return;
 		}
 		res.status(400).json({ error: 'unknown_resource', message: 'resource deve ser approvals, audit ou freezes.' });
+		return;
+	}
+
+	// ── POST resource=forecast: Fase 2 do BI (parecer sobre a previsão) ────────
+	if (resource === 'forecast') {
+		const input = parseForecastInput(typeof req.body === 'string' ? safeJson(req.body) : req.body);
+		if (!input) {
+			res.status(422).json({ error: 'invalid_body', message: 'Informe a previsão da Fase 1 { commodity, horizonte, delta_pct, confianca, drivers[] }.' });
+			return;
+		}
+		const verdict = await forecastVerdict(input);
+		await audit.append({
+			tenantId: principal.tenantId,
+			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+			actorUserId: principal.userId,
+			action: 'forecast:diagnose',
+			entityType: 'forecast',
+			entityId: input.commodity,
+			metadata: { deltaPct: input.delta_pct, engine: verdict.engine }
+		});
+		res.status(200).json({ verdict });
 		return;
 	}
 

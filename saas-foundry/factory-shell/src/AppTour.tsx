@@ -29,8 +29,13 @@ export interface TourState {
 	fiscal: boolean;
 }
 
-/** Chave do Diário de Bordo em localStorage. */
-export const TOUR_STATE_KEY = 'lidar_tour_state';
+/**
+ * Chave do Diário de Bordo em localStorage. O sufixo de versão faz um
+ * "re-onboarding": ao subir a versão, o estado antigo é ignorado e os Deep Tours
+ * voltam a disparar uma vez para quem já tinha visto — útil quando melhoramos os
+ * roteiros. (Bump: v1 → v2.)
+ */
+export const TOUR_STATE_KEY = 'lidar_tour_state_v2';
 
 /** Estado inicial: nenhum tour visto (false para todos). */
 export const DEFAULT_TOUR_STATE: TourState = {

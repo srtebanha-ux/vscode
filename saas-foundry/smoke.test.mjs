@@ -1646,7 +1646,7 @@ try {
 		assert.match(byKey.fiscal.steps[3].content, /amarelo ou vermelho/, 'Fiscal: semáforo de alertas verde/amarelo/vermelho');
 
 		// Diário de Bordo (TourState): 5 chaves, default false, uma flag por módulo.
-		assert.equal(TOUR_STATE_KEY, 'lidar_tour_state');
+		assert.equal(TOUR_STATE_KEY, 'lidar_tour_state_v2');
 		assert.deepEqual(DEFAULT_TOUR_STATE, { cmo: false, oraculo: false, planejador: false, recibo: false, fiscal: false });
 		globalThis.window.localStorage.removeItem(TOUR_STATE_KEY);
 		assert.deepEqual(readTourState(), DEFAULT_TOUR_STATE, 'sem chave => todos false');

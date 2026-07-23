@@ -136,6 +136,16 @@ export async function decideApproval(
 
 /** Handler: valida cargo (Enterprise) e roteia por método + ?resource=. */
 export default async function handler(req: ApiRequest, res: ApiResponse): Promise<void> {
+	try {
+		await route(req, res);
+	} catch (error) {
+		// Rede de segurança: qualquer erro inesperado vira JSON legível (nunca o
+		// envelope opaco de crash da Vercel), com a mensagem real para diagnóstico.
+		res.status(500).json({ error: 'internal_error', message: error instanceof Error ? error.message : String(error) });
+	}
+}
+
+async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 	const method = req.method ?? 'GET';
 	if (method !== 'GET' && method !== 'POST') {
 		res.status(405).json({ error: 'method_not_allowed' });

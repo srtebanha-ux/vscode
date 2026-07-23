@@ -57,8 +57,15 @@ export function ApprovalInbox(): React.JSX.Element {
 				return;
 			}
 			if (!response.ok) {
-				// Detalhe do servidor ajuda a distinguir config (500) de rota (404).
-				const detail = await response.json().then((b: { readonly error?: string }) => (b.error ? ` — ${b.error}` : '')).catch(() => '');
+				// Detalhe do servidor: prefere a mensagem real; ajuda a distinguir config de crash.
+				const detail = await response
+					.json()
+					.then((b: { readonly message?: string; readonly error?: unknown }) => {
+						if (typeof b.message === 'string' && b.message) return ` — ${b.message}`;
+						if (typeof b.error === 'string') return ` — ${b.error}`;
+						return b.error ? ` — ${JSON.stringify(b.error)}` : '';
+					})
+					.catch(() => '');
 				setState({ kind: 'error', message: `Não foi possível carregar as aprovações (HTTP ${response.status}${detail}).` });
 				return;
 			}

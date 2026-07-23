@@ -28,12 +28,25 @@ const ENTITY_LABELS: Readonly<Record<string, string>> = {
 interface ApprovalItem {
 	readonly id: string;
 	readonly entityType: string;
-	readonly entityId: string;
-	readonly amount: number;
-	readonly approvePermission: string;
+	readonly entityId?: string;
+	/** Módulo de origem (mock/enriquecido). Ausente na rota real enxuta. */
+	readonly module?: string;
 	readonly requestedBy: string;
-	readonly createdAt: string;
+	/** Valor em R$; `null` quando o pedido não é monetário (ex.: campanha). */
+	readonly amount: number | null;
+	readonly description?: string;
+	readonly date?: string;
+	readonly createdAt?: string;
+	readonly approvePermission?: string;
 	readonly canApprove: boolean;
+}
+
+/** Data amigável em pt-BR a partir de `date` (mock) ou `createdAt` (real). */
+function whenLabel(item: ApprovalItem): string | null {
+	const iso = item.date ?? item.createdAt;
+	if (!iso) return null;
+	const d = new Date(iso);
+	return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 interface InboxResponse {
@@ -155,15 +168,24 @@ export function ApprovalInbox(): React.JSX.Element {
 								className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4 sm:flex-row sm:items-center sm:justify-between"
 							>
 								<div className="min-w-0">
-									<div className="flex items-center gap-2">
+									<div className="flex flex-wrap items-center gap-2">
 										<span className="rounded-md bg-zinc-800 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-zinc-300">
 											{ENTITY_LABELS[item.entityType] ?? item.entityType}
 										</span>
-										<span className="truncate text-xs text-zinc-500">#{item.entityId}</span>
+										{item.module ? (
+											<span className="rounded-md bg-sky-500/10 px-2 py-0.5 text-[11px] font-semibold text-sky-300 ring-1 ring-inset ring-sky-500/25">{item.module}</span>
+										) : null}
+										<span className="truncate text-xs text-zinc-500">#{item.entityId ?? item.id}</span>
 									</div>
-									<p className="mt-1.5 text-lg font-bold tabular-nums text-white">{brl.format(item.amount)}</p>
-									<p className="mt-0.5 flex items-center gap-1 text-[11px] text-zinc-500">
-										<Clock className="h-3 w-3" aria-hidden /> Solicitado por <span className="font-medium text-zinc-400">{item.requestedBy}</span>
+									{item.description ? <p className="mt-1.5 truncate text-sm text-zinc-200" title={item.description}>{item.description}</p> : null}
+									<p className="mt-1.5 text-lg font-bold tabular-nums text-white">
+										{typeof item.amount === 'number' ? brl.format(item.amount) : <span className="text-sm font-medium text-zinc-500">Sem valor monetário</span>}
+									</p>
+									<p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-500">
+										<span className="inline-flex items-center gap-1">
+											<Clock className="h-3 w-3" aria-hidden /> Solicitado por <span className="font-medium text-zinc-400">{item.requestedBy}</span>
+										</span>
+										{whenLabel(item) ? <span className="text-zinc-600">· {whenLabel(item)}</span> : null}
 									</p>
 								</div>
 								<div className="flex shrink-0 items-center gap-2">

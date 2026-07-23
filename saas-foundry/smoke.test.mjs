@@ -1736,6 +1736,51 @@ try {
 	}
 }
 
+// 32g. Mock de /api/governance (modo dev sem Firebase): payload + decidir.
+{
+	const esbuild = await import('esbuild');
+	const build = await esbuild.build({
+		entryPoints: [new URL('./factory-shell/src/services/mockGovernanceApi.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const dir = await mkdtemp(new URL('./.smoke-mockgov-', import.meta.url).pathname);
+	const file = join(dir, 'mock.mjs');
+	try {
+		await writeFile(file, build.outputFiles[0].text);
+		const { handleMockGovernance, resetMockGovernance } = await import(pathToFileURL(file).href);
+		resetMockGovernance();
+
+		// GET approvals: envelope { count, items } com 3 pendências enriquecidas.
+		const list = handleMockGovernance('GET', 'approvals');
+		assert.equal(list.status, 200);
+		assert.equal(list.body.count, 3);
+		assert.ok(list.body.items.every(i => i.canApprove === true));
+		const campaign = list.body.items.find(i => i.entityType === 'marketing_campaign');
+		assert.equal(campaign.amount, null, 'campanha não tem valor monetário');
+		assert.equal(campaign.module, 'Virtual CMO');
+		assert.ok(list.body.items.every(i => typeof i.description === 'string' && typeof i.date === 'string' && typeof i.module === 'string'));
+
+		// POST decide: aprovar remove do inbox e devolve status approved.
+		const target = list.body.items[0].id;
+		const decided = handleMockGovernance('POST', 'approvals', JSON.stringify({ id: target, approve: true }));
+		assert.equal(decided.status, 200);
+		assert.equal(decided.body.request.status, 'approved');
+		assert.equal(handleMockGovernance('GET', 'approvals').body.count, 2, 'pedido decidido saiu do inbox');
+		// Rejeitar também sai; id inexistente -> 404; corpo sem id -> 422.
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ id: 'nao-existe', approve: true })).status, 404);
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ approve: true })).status, 422);
+
+		// audit: envelope íntegro; resource desconhecido -> 400.
+		assert.equal(handleMockGovernance('GET', 'audit').body.intact, true);
+		assert.equal(handleMockGovernance('GET', 'foo').status, 400);
+
+		resetMockGovernance();
+		assert.equal(handleMockGovernance('GET', 'approvals').body.count, 3, 'reset restaura as pendências');
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
 // 33. Configurações Fiscais: validação do Certificado A1 (.pfx/.p12) fail-closed
 {
 	const esbuild = await import('esbuild');

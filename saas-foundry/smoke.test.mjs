@@ -1359,7 +1359,8 @@ try {
 		const {
 			hasPermission, permissionsOf, ROLE_PERMISSIONS, requirePermission,
 			InMemoryAuditSink, hashAuditRecord, GENESIS_HASH,
-			InMemoryApprovalStore, requiresApproval, ApprovalError
+			InMemoryApprovalStore, requiresApproval, ApprovalError,
+			InMemoryFreezeStore, freezeCovers, FreezeError
 		} = await import(pathToFileURL(govL.file).href);
 
 		// ── RBAC fino ──────────────────────────────────────────────────────────
@@ -1452,6 +1453,35 @@ try {
 		assert.equal((await store.listPending('tnt_alpha')).length, 0, 'pedido decidido sai do inbox');
 		// Terminalidade: um pedido já decidido não muda de novo
 		await assert.rejects(store.decide(req.id, admin, false), ApprovalError);
+
+		// ── Trava Financeira (Freeze): cobertura de escopo + regras de levantar ──
+		// Cargo Enterprise NÃO trava nem destrava; Admin sim (permissões novas).
+		assert.equal(hasPermission({ role: 'ROLE_ENTERPRISE_CLIENT' }, 'freeze:create'), false);
+		assert.equal(hasPermission({ role: 'ROLE_ADMIN_CONTROLLER' }, 'freeze:create'), true);
+		assert.equal(hasPermission({ role: 'ROLE_ADMIN_CONTROLLER' }, 'freeze:lift'), true);
+		// Cobertura: trava sem branch congela o tenant inteiro; trava de filial só a filial.
+		assert.equal(freezeCovers({ status: 'active' }, 'fil_sul', 'cc9'), true, 'trava global cobre tudo');
+		assert.equal(freezeCovers({ status: 'active', branchId: 'fil_sul' }, 'fil_sul'), true);
+		assert.equal(freezeCovers({ status: 'active', branchId: 'fil_sul' }, 'fil_norte'), false, 'outra filial não é coberta');
+		assert.equal(freezeCovers({ status: 'active', branchId: 'fil_sul', costCenter: 'cc9' }, 'fil_sul', 'cc1'), false, 'centro de custo diferente escapa');
+		assert.equal(freezeCovers({ status: 'lifted', branchId: 'fil_sul' }, 'fil_sul'), false, 'trava levantada não cobre');
+		const fStore = new InMemoryFreezeStore();
+		await assert.rejects(fStore.create({ tenantId: 'tnt_alpha', reason: '   ', createdBy: { userId: 'u_ctrl' } }), FreezeError); // motivo obrigatório
+		const frz = await fStore.create({ tenantId: 'tnt_alpha', branchId: 'fil_sul', reason: 'custo invisível de 14% em frete', createdBy: { userId: 'u_ctrl' } });
+		assert.equal(frz.status, 'active');
+		assert.equal((await fStore.activeFor('tnt_alpha', 'fil_sul'))?.id, frz.id);
+		assert.equal(await fStore.activeFor('tnt_alpha', 'fil_norte'), null, 'filial não congelada segue livre');
+		assert.equal(await fStore.activeFor('tnt_beta', 'fil_sul'), null, 'outro tenant não vê a trava');
+		const ctrl2 = { userId: 'u_ctrl2', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' };
+		// Segregação: o criador não levanta; outro tenant não levanta; sem permissão não levanta.
+		await assert.rejects(fStore.lift(frz.id, { ...ctrl2, userId: 'u_ctrl' }), FreezeError);
+		await assert.rejects(fStore.lift(frz.id, { ...ctrl2, tenantId: 'tnt_beta' }), FreezeError);
+		await assert.rejects(fStore.lift(frz.id, { ...ctrl2, role: 'ROLE_ENTERPRISE_CLIENT' }), FreezeError);
+		const lifted = await fStore.lift(frz.id, ctrl2);
+		assert.equal(lifted.status, 'lifted');
+		assert.equal(lifted.liftedBy, 'u_ctrl2');
+		assert.equal(await fStore.activeFor('tnt_alpha', 'fil_sul'), null, 'depois de levantada, o escopo volta a aprovar');
+		await assert.rejects(fStore.lift(frz.id, ctrl2), FreezeError); // terminal
 
 		// ── Escopo de filial (branchId) no isolamento ──────────────────────────
 		const pmePrincipal = { userId: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' };
@@ -1730,6 +1760,45 @@ try {
 		const del = makeRes();
 		await handler({ method: 'DELETE', headers: { authorization: `Bearer ${admin}` }, query: { resource: 'approvals' } }, del);
 		assert.equal(del.code, 405);
+
+		// ── Trava Financeira via rota: congela -> 423 -> levanta -> libera ──────
+		// Enterprise não tem freeze:create -> 403; sem motivo -> 422.
+		assert.equal((await call({ method: 'POST', token: enterprise, resource: 'freezes', body: { action: 'create', reason: 'x' } })).code, 403);
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'freezes', body: { action: 'create', reason: '  ' } })).code, 422);
+		// Admin congela o tenant inteiro (sem branch) -> 201.
+		const frozen = await call({ method: 'POST', token: admin, resource: 'freezes', body: { action: 'create', reason: 'custo invisível de 14% na Filial Sul — aguarda justificativa' } });
+		assert.equal(frozen.code, 201);
+		const freezeId = frozen.body.freeze.id;
+		// Listagem: a trava aparece e cobre o escopo do usuário.
+		const fList = await call({ token: admin, resource: 'freezes' });
+		assert.equal(fList.code, 200);
+		assert.equal(fList.body.activeForMe.id, freezeId);
+		// APROVAR sob trava -> 423 Locked (e o pedido continua pendente).
+		const pendingNow = (await call({ token: admin })).body.items;
+		assert.ok(pendingNow.length >= 2, 'restam pendências para o teste da trava');
+		const blocked = await call({ method: 'POST', token: admin, body: { id: pendingNow[0].id, approve: true } });
+		assert.equal(blocked.code, 423, 'aprovação em escopo congelado é travada');
+		assert.match(blocked.body.message, /Trava Financeira/);
+		assert.equal((await call({ token: admin })).body.items.length, pendingNow.length, 'pedido segue pendente após o 423');
+		// REJEITAR sob trava é permitido (rejeição não gera despesa).
+		const rejected = await call({ method: 'POST', token: admin, body: { id: pendingNow[0].id, approve: false } });
+		assert.equal(rejected.code, 200);
+		assert.equal(rejected.body.request.status, 'rejected');
+		// A tentativa bloqueada entrou na trilha de auditoria.
+		const auditAfterFreeze = await call({ token: admin, resource: 'audit' });
+		assert.ok(auditAfterFreeze.body.records.some(r => r.action === 'freeze:blocked_attempt'), 'tentativa sob trava é auditada');
+		assert.ok(auditAfterFreeze.body.records.some(r => r.action === 'freeze:create'), 'criação da trava é auditada');
+		// Levantar: o criador não pode (403); outro admin pode (200).
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'freezes', body: { action: 'lift', id: freezeId } })).code, 403);
+		const admin2 = sign({ uid: 'u_admin2', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
+		assert.equal((await call({ method: 'POST', token: admin2, resource: 'freezes', body: { action: 'lift', id: freezeId } })).code, 200);
+		// Com a trava levantada, aprovar volta a funcionar.
+		const nowPending = (await call({ token: admin })).body.items;
+		const unblocked = await call({ method: 'POST', token: admin, body: { id: nowPending[0].id, approve: true } });
+		assert.equal(unblocked.code, 200, 'trava levantada libera a aprovação');
+		// Levantar de novo -> 409 (terminal); id inexistente -> 404.
+		assert.equal((await call({ method: 'POST', token: admin2, resource: 'freezes', body: { action: 'lift', id: freezeId } })).code, 409);
+		assert.equal((await call({ method: 'POST', token: admin2, resource: 'freezes', body: { action: 'lift', id: 'frz_ghost' } })).code, 404);
 	} finally {
 		delete process.env.JWT_SECRET;
 		await rm(dir, { recursive: true, force: true });
@@ -1776,6 +1845,20 @@ try {
 
 		resetMockGovernance();
 		assert.equal(handleMockGovernance('GET', 'approvals').body.count, 3, 'reset restaura as pendências');
+
+		// Trava Financeira no mock: congela -> aprovar 423 -> rejeitar ok -> levanta -> libera.
+		const mkFrz = handleMockGovernance('POST', 'freezes', JSON.stringify({ action: 'create', reason: 'auditoria em curso' }));
+		assert.equal(mkFrz.status, 201);
+		const frzId = mkFrz.body.freeze.id;
+		assert.equal(handleMockGovernance('GET', 'freezes').body.activeForMe.id, frzId);
+		const first = handleMockGovernance('GET', 'approvals').body.items[0].id;
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ id: first, approve: true })).status, 423, 'mock também trava aprovação');
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ id: first, approve: false })).status, 200, 'rejeitar segue permitido');
+		assert.equal(handleMockGovernance('POST', 'freezes', JSON.stringify({ action: 'lift', id: frzId })).status, 200);
+		const second = handleMockGovernance('GET', 'approvals').body.items[0].id;
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ id: second, approve: true })).status, 200, 'trava levantada libera');
+		assert.equal(handleMockGovernance('POST', 'freezes', JSON.stringify({ action: 'lift', id: frzId })).status, 409);
+		resetMockGovernance();
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

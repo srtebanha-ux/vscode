@@ -23,7 +23,9 @@ export type Permission =
 	| 'invoice:approve'
 	| 'campaign:create'
 	| 'audit:view'
-	| 'rbac:manage';
+	| 'rbac:manage'
+	| 'freeze:create'
+	| 'freeze:lift';
 
 /** Mapa cargo → permissões. Espelha ROLE_PERMISSIONS do backend. */
 export const PERMISSIONS_BY_ROLE: Readonly<Record<AppRole, readonly Permission[]>> = {
@@ -39,7 +41,9 @@ export const PERMISSIONS_BY_ROLE: Readonly<Record<AppRole, readonly Permission[]
 		'invoice:approve',
 		'campaign:create',
 		'audit:view',
-		'rbac:manage'
+		'rbac:manage',
+		'freeze:create',
+		'freeze:lift'
 	]
 };
 

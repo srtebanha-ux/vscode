@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, FlaskConical, LayoutDashboard, Landmark, Radar, ScanSearch, Server, ShieldAlert, ShieldCheck, Sparkles, Terminal, Users } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ApprovalInbox } from './ApprovalInbox.js';
+import { FreezeControl } from './FreezeControl.js';
 import { ExecutiveBriefingGenerator } from './ExecutiveBriefingGenerator.js';
 import { ERPSyncBridge } from './ERPSyncBridge.js';
 import { FiscalDiscoveryHub } from './FiscalDiscoveryHub.js';
@@ -165,7 +166,10 @@ function Dashboard(): React.JSX.Element {
 			</div>
 
 			{view === 'aprovacoes' ? (
-				<ApprovalInbox />
+				<div className="space-y-5">
+					<ApprovalInbox />
+					<FreezeControl />
+				</div>
 			) : view === 'dossie' ? (
 				<ExecutiveBriefingGenerator />
 			) : view === 'descoberta' ? (

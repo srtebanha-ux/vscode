@@ -106,6 +106,10 @@ export function ApprovalInbox(): React.JSX.Element {
 				if (response.ok) {
 					toast.success(approve ? 'Pedido aprovado e registrado na trilha de auditoria.' : 'Pedido rejeitado e registrado na trilha.');
 					setState(prev => (prev.kind === 'ready' ? { kind: 'ready', items: prev.items.filter(i => i.id !== item.id) } : prev));
+				} else if (response.status === 423) {
+					// Trava Financeira: o servidor congelou o escopo — mostra o motivo do cadeado.
+					const body = (await response.json().catch(() => ({}))) as { readonly message?: string };
+					toast.error(body.message ?? 'Escopo sob Trava Financeira — aprovação bloqueada pela Controladoria.');
 				} else {
 					const body = (await response.json().catch(() => ({}))) as { readonly message?: string };
 					toast.error(body.message ?? 'Não foi possível registrar a decisão.');

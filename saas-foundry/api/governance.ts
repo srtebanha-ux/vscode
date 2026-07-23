@@ -12,15 +12,16 @@
  */
 
 import { authenticateNode, type NodeHeaders, type Principal } from './lib/security/apiGuard';
-import { ApprovalError, InMemoryApprovalStore, InMemoryAuditSink, hasPermission, type ApprovalPolicy } from './lib/security/governance';
+import { ApprovalError, FreezeError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, hasPermission, type ApprovalPolicy } from './lib/security/governance';
 
 const ENTERPRISE_ACCESS = ['ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
 
-// ── "Banco" mock por instância quente. Em produção: tabelas `approvals` e
-//    `audit_log` escopadas por tenant/filial (Postgres/Firestore). ─────────────
+// ── "Banco" mock por instância quente. Em produção: tabelas `approvals`,
+//    `audit_log` e `freezes` escopadas por tenant/filial (Postgres/Firestore). ──
 
 const approvals = new InMemoryApprovalStore();
 const audit = new InMemoryAuditSink();
+const freezes = new InMemoryFreezeStore();
 
 /** Pedidos de demonstração (em produção nascem do fluxo real de cada módulo). */
 const DEMO_REQUESTS: readonly { readonly entityType: string; readonly entityId: string; readonly amount: number; readonly policy: ApprovalPolicy }[] = [
@@ -145,13 +146,91 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 			res.status(200).json({ tenantId: principal.tenantId, intact, count: records.length, records });
 			return;
 		}
-		res.status(400).json({ error: 'unknown_resource', message: 'resource deve ser approvals ou audit.' });
+		if (resource === 'freezes') {
+			// Todo cargo Enterprise VÊ as travas (o front precisa desenhar o cadeado).
+			const items = await freezes.list(principal.tenantId);
+			const active = await freezes.activeFor(principal.tenantId, principal.branchId);
+			res.status(200).json({ tenantId: principal.tenantId, count: items.length, items, activeForMe: active });
+			return;
+		}
+		res.status(400).json({ error: 'unknown_resource', message: 'resource deve ser approvals, audit ou freezes.' });
 		return;
 	}
 
-	// POST: decidir uma aprovação (aprova/rejeita).
+	// ── POST resource=freezes: criar ou levantar uma Trava Financeira ──────────
+	if (resource === 'freezes') {
+		const body = (typeof req.body === 'string' ? safeJson(req.body) : req.body) as Record<string, unknown> | null;
+		const action = body && typeof body['action'] === 'string' ? body['action'] : 'create';
+
+		if (action === 'create') {
+			if (!hasPermission(principal, 'freeze:create')) {
+				res.status(403).json({ error: 'forbidden', message: 'Permissão ausente: freeze:create.' });
+				return;
+			}
+			const reason = body && typeof body['reason'] === 'string' ? body['reason'].trim() : '';
+			if (!reason || reason.length > 280) {
+				res.status(422).json({ error: 'invalid_body', message: 'Informe um motivo (reason) de até 280 caracteres.' });
+				return;
+			}
+			const branchId = body && typeof body['branchId'] === 'string' && body['branchId'] ? body['branchId'] : undefined;
+			const costCenter = body && typeof body['costCenter'] === 'string' && body['costCenter'] ? body['costCenter'] : undefined;
+			// tenantId NUNCA vem do corpo: a trava nasce no tenant do token.
+			const freeze = await freezes.create({
+				tenantId: principal.tenantId,
+				...(branchId !== undefined ? { branchId } : {}),
+				...(costCenter !== undefined ? { costCenter } : {}),
+				reason,
+				createdBy: { userId: principal.userId }
+			});
+			await audit.append({
+				tenantId: principal.tenantId,
+				...(freeze.branchId !== undefined ? { branchId: freeze.branchId } : {}),
+				actorUserId: principal.userId,
+				action: 'freeze:create',
+				entityType: 'freeze',
+				entityId: freeze.id,
+				metadata: { reason: freeze.reason, ...(freeze.costCenter !== undefined ? { costCenter: freeze.costCenter } : {}) }
+			});
+			res.status(201).json({ freeze });
+			return;
+		}
+
+		if (action === 'lift') {
+			const id = body && typeof body['id'] === 'string' ? body['id'] : null;
+			if (!id) {
+				res.status(422).json({ error: 'invalid_body', message: 'Informe { action: "lift", id }.' });
+				return;
+			}
+			try {
+				const lifted = await freezes.lift(id, principal);
+				await audit.append({
+					tenantId: principal.tenantId,
+					...(lifted.branchId !== undefined ? { branchId: lifted.branchId } : {}),
+					actorUserId: principal.userId,
+					action: 'freeze:lift',
+					entityType: 'freeze',
+					entityId: lifted.id,
+					metadata: { reason: lifted.reason }
+				});
+				res.status(200).json({ freeze: lifted });
+			} catch (error) {
+				if (error instanceof FreezeError) {
+					const status = error.message.includes('inexistente') ? 404 : error.message.includes('terminal') ? 409 : 403;
+					res.status(status).json({ error: 'freeze_rejected', message: error.message });
+					return;
+				}
+				throw error;
+			}
+			return;
+		}
+
+		res.status(422).json({ error: 'invalid_body', message: 'action deve ser create ou lift.' });
+		return;
+	}
+
+	// ── POST resource=approvals: decidir uma aprovação (aprova/rejeita) ────────
 	if (resource !== 'approvals') {
-		res.status(400).json({ error: 'unknown_resource', message: 'POST só atende resource=approvals.' });
+		res.status(400).json({ error: 'unknown_resource', message: 'POST atende resource=approvals ou freezes.' });
 		return;
 	}
 	const decision = parseDecideBody(typeof req.body === 'string' ? safeJson(req.body) : req.body);
@@ -161,6 +240,25 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 	}
 
 	try {
+		// TRAVA FINANCEIRA: escopo congelado -> 423 Locked ANTES do maker-checker.
+		// Rejeitar continua permitido (rejeição não gera despesa); aprovar não passa.
+		const target = await approvals.get(decision.id);
+		if (decision.approve && target) {
+			const freeze = await freezes.activeFor(target.tenantId, target.branchId);
+			if (freeze) {
+				await audit.append({
+					tenantId: principal.tenantId,
+					...(target.branchId !== undefined ? { branchId: target.branchId } : {}),
+					actorUserId: principal.userId,
+					action: 'freeze:blocked_attempt',
+					entityType: target.entityType,
+					entityId: target.entityId,
+					metadata: { freezeId: freeze.id, reason: freeze.reason }
+				});
+				res.status(423).json({ error: 'frozen', message: `Escopo sob Trava Financeira: ${freeze.reason}`, freezeId: freeze.id });
+				return;
+			}
+		}
 		const decided = await approvals.decide(decision.id, principal, decision.approve, decision.reason);
 		await audit.append({
 			tenantId: principal.tenantId,

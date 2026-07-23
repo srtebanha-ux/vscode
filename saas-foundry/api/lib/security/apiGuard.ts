@@ -271,6 +271,35 @@ export function authenticateNode(
 	return authenticateHeaders(headerValue(headers['authorization']), headerValue(headers['cookie']), allowedRoles, options);
 }
 
+/**
+ * A ponte de sessão está COMPLETA neste ambiente? (segredo HS256 + projeto
+ * Firebase para emitir/verificar o cookie). Espelha o `isFirebaseConfigured` do
+ * cliente: verdadeiro só em produção provisionada; falso em dev/preview.
+ */
+export function isSessionAuthConfigured(secret?: string): boolean {
+	const resolved = secret ?? process.env['JWT_SECRET'];
+	const projectId = process.env['FIREBASE_PROJECT_ID'] ?? process.env['VITE_FIREBASE_PROJECT_ID'];
+	return Boolean(resolved && resolved.length >= MIN_SECRET_LENGTH && projectId);
+}
+
+/**
+ * Guard "enforce só quando configurado" para rotas que o front chama sem passar
+ * token de propósito no dev (ex.: as rotas de IA). Sem a ponte de sessão
+ * completa (dev/preview OU prod ainda não provisionado) deixa passar como
+ * ANÔNIMO — preservando o comportamento aberto e evitando outage por env
+ * faltando. Com a ponte configurada, exige sessão válida (fail-closed).
+ */
+export async function authenticateNodeWhenConfigured(
+	headers: NodeHeaders,
+	allowedRoles: readonly ServerRole[],
+	options?: { readonly secret?: string }
+): Promise<NodeAuthResult> {
+	if (!isSessionAuthConfigured(options?.secret)) {
+		return { ok: true, principal: { userId: 'anonymous', tenantId: 'public', role: 'ROLE_PME' } };
+	}
+	return authenticateNode(headers, allowedRoles, options);
+}
+
 export type GuardedHandler = (request: Request, principal: Principal) => Promise<Response> | Response;
 
 /**

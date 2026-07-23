@@ -2002,6 +2002,68 @@ try {
 	}
 }
 
+// 37b. Guard "enforce só quando configurado" nas rotas de IA (oracle/planner).
+{
+	const esbuild = await import('esbuild');
+	const { default: jsonwebtoken } = await import('jsonwebtoken');
+	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+	const makeRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
+
+	const compileRoute = async (rel, prefix) => {
+		const build = await esbuild.build({
+			entryPoints: [new URL(rel, import.meta.url).pathname],
+			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai', 'node:crypto']
+		});
+		const dir = await mkdtemp(new URL(`./.smoke-${prefix}-`, import.meta.url).pathname);
+		const file = join(dir, `${prefix}.mjs`);
+		await writeFile(file, build.outputFiles[0].text);
+		return { dir, file };
+	};
+
+	const dirs = [];
+	try {
+		const oracle = await compileRoute('./api/oracle-pricing.ts', 'guard-oracle'); dirs.push(oracle.dir);
+		const planner = await compileRoute('./api/supply-planner.ts', 'guard-planner'); dirs.push(planner.dir);
+		const { default: oracleHandler } = await import(pathToFileURL(oracle.file).href);
+		const { default: plannerHandler } = await import(pathToFileURL(planner.file).href);
+		delete process.env.GEMINI_API_KEY;
+		const session = jsonwebtoken.sign({ sub: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' }, SECRET, { algorithm: 'HS256', expiresIn: 3600 });
+
+		for (const handler of [oracleHandler, plannerHandler]) {
+			// (A) SEM a ponte configurada (dev/preview) -> aberto: anônimo passa a guarda.
+			delete process.env.JWT_SECRET;
+			delete process.env.FIREBASE_PROJECT_ID;
+			let r = makeRes();
+			await handler({ method: 'POST', body: {}, headers: {} }, r);
+			assert.equal(r.code, 400, 'dev/aberto: anônimo passa a guarda e cai na validação de corpo');
+
+			// (B) COM a ponte configurada (prod) -> fail-closed: anônimo é barrado (401).
+			process.env.JWT_SECRET = SECRET;
+			process.env.FIREBASE_PROJECT_ID = 'proj-test';
+			r = makeRes();
+			await handler({ method: 'POST', body: {}, headers: {} }, r);
+			assert.equal(r.code, 401, 'prod/fechado: sem sessão -> 401');
+
+			// (C) COM a ponte + cookie de sessão válido -> passa a guarda (cai em 400/500 depois).
+			r = makeRes();
+			await handler({ method: 'POST', body: {}, headers: { cookie: `__lidar_session=${session}` } }, r);
+			assert.equal(r.code, 400, 'prod: sessão válida passa a guarda');
+			// Bearer também autentica.
+			r = makeRes();
+			await handler({ method: 'POST', body: {}, headers: { authorization: `Bearer ${session}` } }, r);
+			assert.equal(r.code, 400);
+			// Método errado curto-circuita antes da guarda (comportamento inalterado).
+			r = makeRes();
+			await handler({ method: 'GET', headers: {} }, r);
+			assert.equal(r.code, 405);
+		}
+	} finally {
+		delete process.env.JWT_SECRET;
+		delete process.env.FIREBASE_PROJECT_ID;
+		for (const d of dirs) await rm(d, { recursive: true, force: true });
+	}
+}
+
 // 38. AppTour: Deep Tours contextuais por módulo (dicionário react-joyride)
 {
 	const esbuild = await import('esbuild');

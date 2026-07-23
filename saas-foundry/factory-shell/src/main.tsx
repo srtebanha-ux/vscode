@@ -212,4 +212,7 @@ createRoot(rootElement).render(
 
 if (!isFirebaseConfigured) {
 	console.warn('[foundry] Firebase não configurado — rodando em modo dev com MockApiService (ver .env.example).');
+	// Sem login Firebase não há sessão para as rotas guardadas — intercepta
+	// /api/governance com dados mockados para a Central de Aprovações renderizar.
+	void import('./services/mockGovernanceApi').then(m => m.installMockGovernanceApi());
 }

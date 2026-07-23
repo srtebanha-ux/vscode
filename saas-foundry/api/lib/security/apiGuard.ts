@@ -12,8 +12,10 @@
  * tocar em dados. Zero confiança no cliente.
  */
 
-import jwt from 'jsonwebtoken';
-import { z } from 'zod';
+// SÓ node:crypto (builtin): funciona em QUALQUER formato de bundle da Vercel.
+// jsonwebtoken (require dinâmico) e jose (ESM-only) quebravam no empacotamento
+// serverless — zero dependência externa no caminho de autenticação.
+import { createHmac, timingSafeEqual, createPublicKey, verify as cryptoVerify, X509Certificate } from 'node:crypto';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
@@ -23,23 +25,55 @@ declare const process: { readonly env: Record<string, string | undefined> };
 export const SERVER_ROLES = ['ROLE_PME', 'ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
 export type ServerRole = (typeof SERVER_ROLES)[number];
 
-/** Assinatura só com estes algoritmos: bloqueia `alg:none` e confusão RS/HS. */
-const ALLOWED_ALGORITHMS: readonly jwt.Algorithm[] = ['HS256'];
-
 /** Segredo mínimo aceitável — barra segredos default/fracos em produção. */
 const MIN_SECRET_LENGTH = 16;
 
-/** Claims mínimos e rígidos do token. Sobra desconhecida é ignorada, faltou -> inválido. */
-const claimsSchema = z
-	.object({
-		sub: z.string().min(1).optional(),
-		uid: z.string().min(1).optional(),
-		tenantId: z.string().min(1, { error: 'token sem tenantId' }),
-		// Filial/centro de custo — multi-tenant de 2 níveis. Ausente em contas PME.
-		branchId: z.string().min(1).optional(),
-		role: z.enum(SERVER_ROLES, { error: 'role desconhecido' })
-	})
-	.refine(claims => Boolean(claims.sub ?? claims.uid), { error: 'token sem identidade de usuário' });
+// ── JWT mínimo em node:crypto (HS256 assinar/verificar, RS256 verificar) ─────
+
+/** Decodifica base64url para Buffer. */
+function b64urlToBuffer(segment: string): Buffer {
+	return Buffer.from(segment.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+}
+
+/** Codifica um Buffer em base64url (sem padding). */
+function bufferToB64url(buffer: Buffer): string {
+	return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** Codifica um objeto JSON em base64url (segmento de JWT). */
+function jsonToB64url(value: unknown): string {
+	return bufferToB64url(Buffer.from(JSON.stringify(value), 'utf8'));
+}
+
+/** Parse seguro de um segmento base64url em objeto (ou lança). */
+function decodeSegment(segment: string): Record<string, unknown> {
+	const parsed = JSON.parse(b64urlToBuffer(segment).toString('utf8')) as unknown;
+	if (typeof parsed !== 'object' || parsed === null) throw new Error('segmento JWT inválido');
+	return parsed as Record<string, unknown>;
+}
+
+/** Assina um payload em HS256 (HMAC-SHA256) com o segredo do servidor. */
+function signHs256(payload: Record<string, unknown>, secret: string): string {
+	const head = jsonToB64url({ alg: 'HS256', typ: 'JWT' });
+	const body = jsonToB64url(payload);
+	const signature = bufferToB64url(createHmac('sha256', secret).update(`${head}.${body}`).digest());
+	return `${head}.${body}.${signature}`;
+}
+
+/** Verifica um JWT HS256 (assinatura em tempo constante + expiração). Devolve o payload ou lança. */
+function verifyHs256(token: string, secret: string, nowSec: number): Record<string, unknown> {
+	const [head, body, signature, ...rest] = token.split('.');
+	if (!head || !body || !signature || rest.length > 0) throw new Error('JWT malformado');
+	const header = decodeSegment(head);
+	if (header['alg'] !== 'HS256') throw new Error('algoritmo inesperado'); // bloqueia alg:none e RS/HS-confusion
+	const expected = bufferToB64url(createHmac('sha256', secret).update(`${head}.${body}`).digest());
+	const a = Buffer.from(signature);
+	const b = Buffer.from(expected);
+	if (a.length !== b.length || !timingSafeEqual(a, b)) throw new Error('assinatura inválida');
+	const payload = decodeSegment(body);
+	if (typeof payload['exp'] === 'number' && nowSec >= payload['exp']) throw new Error('token expirado');
+	return payload;
+}
 
 export interface Principal {
 	readonly userId: string;
@@ -139,12 +173,12 @@ export function hasRequiredRole(role: ServerRole, allowedRoles: readonly ServerR
  * tanto pelo `authenticate` (App Router) quanto pelas rotas Node clássicas
  * (handler(req,res)) que não têm `Request.headers.get`.
  */
-export function authenticateHeaders(
+export async function authenticateHeaders(
 	authorization: string | null,
 	cookie: string | null,
 	allowedRoles: readonly ServerRole[],
 	options?: { readonly secret?: string }
-): NodeAuthResult {
+): Promise<NodeAuthResult> {
 	let secret: string;
 	try {
 		secret = resolveSecret(options?.secret);
@@ -158,25 +192,29 @@ export function authenticateHeaders(
 		return { ok: false, status: 401, error: 'unauthorized', message: 'Credencial ausente ou malformada.' };
 	}
 
-	let rawClaims: unknown;
+	let claims: Record<string, unknown>;
 	try {
 		// Verify pinado: valida assinatura E expiração; `alg:none` e RS/HS-confusion barrados.
-		rawClaims = jwt.verify(token, secret, { algorithms: [...ALLOWED_ALGORITHMS] });
+		claims = verifyHs256(token, secret, Math.floor(Date.now() / 1000));
 	} catch {
 		return { ok: false, status: 401, error: 'unauthorized', message: 'Token inválido ou expirado.' };
 	}
 
-	const parsed = claimsSchema.safeParse(rawClaims);
-	if (!parsed.success) {
+	// Validação manual do contrato (substitui o Zod — sem dependência externa).
+	const sub = typeof claims['sub'] === 'string' && claims['sub'] ? claims['sub'] : typeof claims['uid'] === 'string' && claims['uid'] ? claims['uid'] : null;
+	const tenantId = typeof claims['tenantId'] === 'string' && claims['tenantId'] ? claims['tenantId'] : null;
+	const role = normalizeServerRole(claims['role']);
+	const branchId = typeof claims['branchId'] === 'string' && claims['branchId'] ? claims['branchId'] : undefined;
+	if (!sub || !tenantId || !role) {
 		return { ok: false, status: 401, error: 'unauthorized', message: 'Token fora do contrato de segurança.' };
 	}
 
 	// branchId é opcional; com exactOptionalPropertyTypes só entra no objeto se existir.
 	const principal: Principal = {
-		userId: (parsed.data.sub ?? parsed.data.uid) as string,
-		tenantId: parsed.data.tenantId,
-		...(parsed.data.branchId !== undefined ? { branchId: parsed.data.branchId } : {}),
-		role: parsed.data.role
+		userId: sub,
+		tenantId,
+		...(branchId !== undefined ? { branchId } : {}),
+		role
 	};
 
 	if (!hasRequiredRole(principal.role, allowedRoles)) {
@@ -195,12 +233,12 @@ export function authenticateHeaders(
  *   cargo não permitido -> 403
  * Só devolve `principal` quando TUDO passa. Delega ao núcleo header-based.
  */
-export function authenticate(
+export async function authenticate(
 	request: Request,
 	allowedRoles: readonly ServerRole[],
 	options?: { readonly secret?: string }
-): AuthResult {
-	const result = authenticateHeaders(
+): Promise<AuthResult> {
+	const result = await authenticateHeaders(
 		request.headers.get('authorization'),
 		request.headers.get('cookie'),
 		allowedRoles,
@@ -229,7 +267,7 @@ export function authenticateNode(
 	headers: NodeHeaders,
 	allowedRoles: readonly ServerRole[],
 	options?: { readonly secret?: string }
-): NodeAuthResult {
+): Promise<NodeAuthResult> {
 	return authenticateHeaders(headerValue(headers['authorization']), headerValue(headers['cookie']), allowedRoles, options);
 }
 
@@ -245,7 +283,7 @@ export function withApiGuard(
 	options?: { readonly secret?: string }
 ): (request: Request) => Promise<Response> {
 	return async (request: Request): Promise<Response> => {
-		const auth = authenticate(request, allowedRoles, options);
+		const auth = await authenticate(request, allowedRoles, options);
 		if (isAuthDenied(auth)) return auth.response;
 		return handler(request, auth.principal);
 	};
@@ -369,11 +407,11 @@ export async function verifyFirebaseIdToken(
 	idToken: string,
 	options: { readonly projectId: string; readonly certs?: Readonly<Record<string, string>>; readonly now?: number }
 ): Promise<FirebaseClaims> {
-	const decoded = jwt.decode(idToken, { complete: true });
-	if (!decoded || typeof decoded === 'string' || decoded.header.alg !== 'RS256') {
-		throw new Error('token Firebase malformado');
-	}
-	const kid = decoded.header.kid;
+	const [head, body, signature, ...rest] = idToken.split('.');
+	if (!head || !body || !signature || rest.length > 0) throw new Error('token Firebase malformado');
+	const header = decodeSegment(head);
+	if (header['alg'] !== 'RS256') throw new Error('token Firebase com algoritmo inesperado');
+	const kid = typeof header['kid'] === 'string' ? header['kid'] : null;
 	if (!kid) throw new Error('token Firebase sem kid');
 
 	const nowMs = options.now ?? Date.now();
@@ -381,23 +419,39 @@ export async function verifyFirebaseIdToken(
 	const pem = certs[kid];
 	if (!pem) throw new Error('kid do token não corresponde a nenhum certificado');
 
-	const verified = jwt.verify(idToken, pem, {
-		algorithms: ['RS256'],
-		issuer: `https://securetoken.google.com/${options.projectId}`,
-		audience: options.projectId,
-		clockTimestamp: Math.floor(nowMs / 1000)
-	}) as Record<string, unknown>;
+	// Assinatura RS256 verificada com node:crypto (cert X.509 do Google ou chave SPKI nos testes).
+	const publicKey = importPublicKey(pem);
+	const valid = cryptoVerify('RSA-SHA256', Buffer.from(`${head}.${body}`, 'utf8'), publicKey, b64urlToBuffer(signature));
+	if (!valid) throw new Error('assinatura RS256 inválida');
+
+	const payload = decodeSegment(body);
+	const nowSec = Math.floor(nowMs / 1000);
+	if (payload['iss'] !== `https://securetoken.google.com/${options.projectId}`) throw new Error('issuer inesperado');
+	if (payload['aud'] !== options.projectId) throw new Error('audience inesperado');
+	if (typeof payload['exp'] === 'number' && nowSec >= payload['exp']) throw new Error('token Firebase expirado');
 
 	// Firebase usa `sub` (== `user_id`) como identidade do usuário.
-	const sub = typeof verified['sub'] === 'string' && verified['sub'] ? verified['sub'] : undefined;
+	const sub = typeof payload['sub'] === 'string' && payload['sub'] ? payload['sub'] : undefined;
 	if (!sub) throw new Error('token Firebase sem identidade');
 
 	return {
 		sub,
-		...(typeof verified['tenantId'] === 'string' ? { tenantId: verified['tenantId'] } : {}),
-		...(typeof verified['role'] === 'string' ? { role: verified['role'] } : {}),
-		...(typeof verified['branchId'] === 'string' ? { branchId: verified['branchId'] } : {})
+		...(typeof payload['tenantId'] === 'string' ? { tenantId: payload['tenantId'] } : {}),
+		...(typeof payload['role'] === 'string' ? { role: payload['role'] } : {}),
+		...(typeof payload['branchId'] === 'string' ? { branchId: payload['branchId'] } : {})
 	};
+}
+
+/**
+ * Importa a chave pública que verifica o token. Produção: certs X.509 do Google
+ * (X509Certificate.publicKey). Fallback para chave pública SPKI (testes sem cert).
+ */
+function importPublicKey(pem: string): ReturnType<typeof createPublicKey> {
+	try {
+		return new X509Certificate(pem).publicKey;
+	} catch {
+		return createPublicKey(pem);
+	}
 }
 
 /** Normaliza um valor arbitrário para um ServerRole conhecido — ou null. */
@@ -420,18 +474,23 @@ export function principalFromFirebaseClaims(claims: FirebaseClaims): Principal {
 }
 
 /** Emite o JWT de sessão HS256 (assinado com JWT_SECRET) a partir do Principal. */
-export function mintSessionToken(principal: Principal, options?: { readonly secret?: string; readonly ttlSeconds?: number }): string {
+export function mintSessionToken(principal: Principal, options?: { readonly secret?: string; readonly ttlSeconds?: number }): Promise<string> {
 	const secret = resolveSecret(options?.secret);
-	return jwt.sign(
+	const ttl = options?.ttlSeconds ?? SESSION_TTL_SECONDS;
+	const nowSec = Math.floor(Date.now() / 1000);
+	const token = signHs256(
 		{
 			sub: principal.userId,
 			tenantId: principal.tenantId,
 			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
-			role: principal.role
+			role: principal.role,
+			iat: nowSec,
+			exp: nowSec + ttl
 		},
-		secret,
-		{ algorithm: 'HS256', expiresIn: options?.ttlSeconds ?? SESSION_TTL_SECONDS }
+		secret
 	);
+	// Assinatura é síncrona (node:crypto), mas mantemos o contrato assíncrono.
+	return Promise.resolve(token);
 }
 
 /** Set-Cookie do cookie de sessão (HttpOnly/Secure/SameSite=Strict). */

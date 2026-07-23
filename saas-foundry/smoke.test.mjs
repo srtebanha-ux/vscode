@@ -270,7 +270,8 @@ const forbidden = [
 	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
 	'./api/lib/security/apiGuard.ts',
 	'./api/lib/security/governance.ts',
-	'./api/session/route.ts',
+	'./api/session.ts',
+	'./api/governance.ts',
 	'./api/secure-invoices/route.ts',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
@@ -1463,14 +1464,14 @@ try {
 		assert.deepEqual(scopeCreate(branchPrincipal, { valor: 2 }), { valor: 2, branchId: 'fil_sp', tenantId: 'tnt_alpha' });
 
 		// authenticateHeaders: token com branchId popula o principal; sem branchId, ausente
-		const withBranch = authenticateHeaders(`Bearer ${sign({ uid: 'u2', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ENTERPRISE_CLIENT' })}`, null, ['ROLE_ENTERPRISE_CLIENT']);
+		const withBranch = await authenticateHeaders(`Bearer ${sign({ uid: 'u2', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ENTERPRISE_CLIENT' })}`, null, ['ROLE_ENTERPRISE_CLIENT']);
 		assert.equal(withBranch.ok, true);
 		assert.equal(withBranch.principal.branchId, 'fil_sp');
-		const noBranch = authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_PME']);
+		const noBranch = await authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_PME']);
 		assert.equal(noBranch.ok, true);
 		assert.equal('branchId' in noBranch.principal, false, 'conta PME não carrega filial');
 		// Cargo não permitido -> resultado neutro 403 (sem Response)
-		const wrongRole = authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_ADMIN_CONTROLLER']);
+		const wrongRole = await authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(wrongRole.ok, false);
 		assert.equal(wrongRole.status, 403);
 	} finally {
@@ -1554,8 +1555,8 @@ try {
 
 		// ── round-trip: a sessão emitida é aceita pelo próprio apiGuard ─────────
 		const principal = { userId: 'firebase_uid_123', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ADMIN_CONTROLLER' };
-		const session = mintSessionToken(principal);
-		const back = authenticateHeaders(`Bearer ${session}`, null, ['ROLE_ADMIN_CONTROLLER']);
+		const session = await mintSessionToken(principal);
+		const back = await authenticateHeaders(`Bearer ${session}`, null, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(back.ok, true);
 		assert.equal(back.principal.tenantId, 'tnt_alpha');
 		assert.equal(back.principal.branchId, 'fil_sp');
@@ -1564,7 +1565,7 @@ try {
 		const cookie = buildSessionCookie(session);
 		assert.match(cookie, /^__lidar_session=.+; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600$/);
 		assert.equal(SESSION_TTL_SECONDS, 3600);
-		const viaCookie = authenticateHeaders(null, `__lidar_session=${session}`, ['ROLE_ADMIN_CONTROLLER']);
+		const viaCookie = await authenticateHeaders(null, `__lidar_session=${session}`, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(viaCookie.ok, true);
 		// logout: cookie expira
 		assert.match(clearSessionCookie(), /^__lidar_session=; .*Max-Age=0$/);
@@ -1599,7 +1600,7 @@ try {
 	globalThis.fetch = async () => ({ ok: true, json: async () => ({ [KID]: publicKey }), headers: { get: () => 'max-age=3600' } });
 
 	const build = await esbuild.build({
-		entryPoints: [new URL('./api/session/route.ts', import.meta.url).pathname],
+		entryPoints: [new URL('./api/session.ts', import.meta.url).pathname],
 		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken']
 	});
 	const dir = await mkdtemp(new URL('./.smoke-session-', import.meta.url).pathname);
@@ -1607,16 +1608,16 @@ try {
 	try {
 		await writeFile(file, build.outputFiles[0].text);
 		const { default: handler } = await import(pathToFileURL(file).href);
-		const url = 'https://lidarcore.example/api/session';
+		// Mock req/res no estilo Node (o que a Vercel realmente invoca).
+		const makeRes = () => ({ code: 0, body: null, cookie: null, status(c) { this.code = c; return this; }, json(d) { this.body = d; }, setHeader(name, value) { if (name.toLowerCase() === 'set-cookie') this.cookie = value; } });
 
 		// POST com ID token válido -> 200 + Set-Cookie de sessão
-		const ok = await handler(new Request(url, { method: 'POST', headers: { authorization: `Bearer ${idToken}` } }));
-		assert.equal(ok.status, 200);
-		const setCookie = ok.headers.get('set-cookie');
-		assert.match(setCookie, /^__lidar_session=[^;]+; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600$/);
-		const okBody = await ok.json();
-		assert.equal(okBody.role, 'ROLE_ADMIN_CONTROLLER');
-		assert.equal(okBody.tenantId, 'tnt_alpha');
+		const ok = makeRes();
+		await handler({ method: 'POST', headers: { authorization: `Bearer ${idToken}` } }, ok);
+		assert.equal(ok.code, 200);
+		assert.match(ok.cookie, /^__lidar_session=[^;]+; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600$/);
+		assert.equal(ok.body.role, 'ROLE_ADMIN_CONTROLLER');
+		assert.equal(ok.body.tenantId, 'tnt_alpha');
 
 		// O cookie emitido autentica de verdade nas rotas guardadas (cadeia completa).
 		const guardBuild = await esbuild.build({
@@ -1626,25 +1627,156 @@ try {
 		const guardFile = join(dir, 'guard.mjs');
 		await writeFile(guardFile, guardBuild.outputFiles[0].text);
 		const { authenticateHeaders } = await import(pathToFileURL(guardFile).href);
-		const sessionToken = /^__lidar_session=([^;]+)/.exec(setCookie)[1];
-		const authed = authenticateHeaders(null, `__lidar_session=${sessionToken}`, ['ROLE_ADMIN_CONTROLLER']);
+		const sessionToken = /^__lidar_session=([^;]+)/.exec(ok.cookie)[1];
+		const authed = await authenticateHeaders(null, `__lidar_session=${sessionToken}`, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(authed.ok, true);
 		assert.equal(authed.principal.userId, 'uid_route');
 
 		// Sem credencial -> 401
-		assert.equal((await handler(new Request(url, { method: 'POST' }))).status, 401);
+		const anon = makeRes();
+		await handler({ method: 'POST', headers: {} }, anon);
+		assert.equal(anon.code, 401);
 		// Token inválido -> 401
-		assert.equal((await handler(new Request(url, { method: 'POST', headers: { authorization: 'Bearer a.b.c' } }))).status, 401);
+		const bad = makeRes();
+		await handler({ method: 'POST', headers: { authorization: 'Bearer a.b.c' } }, bad);
+		assert.equal(bad.code, 401);
 		// DELETE (logout) -> 200 + cookie expirado
-		const del = await handler(new Request(url, { method: 'DELETE' }));
-		assert.equal(del.status, 200);
-		assert.match(del.headers.get('set-cookie'), /^__lidar_session=; .*Max-Age=0$/);
+		const del = makeRes();
+		await handler({ method: 'DELETE', headers: {} }, del);
+		assert.equal(del.code, 200);
+		assert.match(del.cookie, /^__lidar_session=; .*Max-Age=0$/);
 		// Método não suportado -> 405
-		assert.equal((await handler(new Request(url, { method: 'GET' }))).status, 405);
+		const wrong = makeRes();
+		await handler({ method: 'GET', headers: {} }, wrong);
+		assert.equal(wrong.code, 405);
 	} finally {
 		globalThis.fetch = originalFetch;
 		delete process.env.JWT_SECRET;
 		delete process.env.FIREBASE_PROJECT_ID;
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+// 32f. Rota /api/governance: inbox de aprovações + auditoria sobre o Zero-Trust.
+{
+	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+	process.env.JWT_SECRET = SECRET;
+	const { default: jsonwebtoken } = await import('jsonwebtoken');
+	const sign = (claims) => jsonwebtoken.sign(claims, SECRET, { algorithm: 'HS256' });
+	const esbuild = await import('esbuild');
+
+	const build = await esbuild.build({
+		entryPoints: [new URL('./api/governance.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken', 'node:crypto']
+	});
+	const dir = await mkdtemp(new URL('./.smoke-governance-', import.meta.url).pathname);
+	const file = join(dir, 'route.mjs');
+	try {
+		await writeFile(file, build.outputFiles[0].text);
+		const { default: handler } = await import(pathToFileURL(file).href);
+		const makeRes = () => ({ code: 0, body: null, status(c) { this.code = c; return this; }, json(d) { this.body = d; } });
+		// Chamada Node (o que a Vercel invoca): req { method, headers, query, body }.
+		const call = async ({ method = 'GET', token, resource = 'approvals', body }) => {
+			const res = makeRes();
+			const headers = token ? { authorization: `Bearer ${token}` } : {};
+			await handler({ method, headers, query: { resource }, body }, res);
+			return res;
+		};
+
+		const admin = sign({ uid: 'u_admin', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
+		const enterprise = sign({ uid: 'u_ent', tenantId: 'tnt_alpha', role: 'ROLE_ENTERPRISE_CLIENT' });
+		const pme = sign({ uid: 'u_pme', tenantId: 'tnt_alpha', role: 'ROLE_PME' });
+
+		// RBAC de rota: PME não acessa a governança Enterprise -> 403; anônimo -> 401.
+		assert.equal((await call({ token: pme })).code, 403);
+		assert.equal((await call({})).code, 401);
+
+		// Admin: inbox semeada, todos os itens aprováveis (tem alçada em tudo).
+		const listRes = await call({ token: admin });
+		assert.equal(listRes.code, 200);
+		const list = listRes.body;
+		assert.equal(list.tenantId, 'tnt_alpha');
+		assert.ok(list.count >= 3, 'inbox semeada com pendências de demonstração');
+		assert.ok(list.items.every(i => i.canApprove === true), 'admin tem alçada em todos');
+		const target = list.items[0];
+
+		// Segregação de função: quem SOLICITOU não pode aprovar (mesmo sendo admin).
+		const maker = sign({ uid: 'u_maker_demo', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
+		assert.equal((await call({ method: 'POST', token: maker, body: { id: target.id, approve: true } })).code, 403, 'solicitante não aprova o próprio pedido');
+
+		// Enterprise (sem permissão *:approve): motor barra a decisão -> 403.
+		assert.equal((await call({ method: 'POST', token: enterprise, body: { id: target.id, approve: true } })).code, 403, 'sem permissão de aprovação');
+
+		// Admin aprova de fato -> 200, e o item sai do inbox.
+		const decideRes = await call({ method: 'POST', token: admin, body: { id: target.id, approve: true, reason: 'dentro do orçamento' } });
+		assert.equal(decideRes.code, 200);
+		assert.equal(decideRes.body.request.status, 'approved');
+		assert.equal((await call({ token: admin })).body.count, list.count - 1, 'pedido decidido saiu do inbox');
+
+		// Corpo forjado (campo extra) -> 422; pedido inexistente -> 404.
+		assert.equal((await call({ method: 'POST', token: admin, body: { id: target.id, approve: true, tenantId: 'tnt_beta' } })).code, 422);
+		assert.equal((await call({ method: 'POST', token: admin, body: { id: 'apr_inexistente', approve: true } })).code, 404);
+
+		// Auditoria: a decisão foi registrada; a cadeia verifica íntegra.
+		const auditRes = await call({ token: admin, resource: 'audit' });
+		assert.equal(auditRes.code, 200);
+		assert.equal(auditRes.body.intact, true, 'cadeia de auditoria íntegra');
+		assert.ok(auditRes.body.count >= 1 && auditRes.body.records.some(r => r.entityId === target.entityId), 'a aprovação entrou na trilha');
+		// Ver a trilha exige audit:view: Enterprise (sem a permissão) -> 403.
+		assert.equal((await call({ token: enterprise, resource: 'audit' })).code, 403);
+
+		// resource desconhecido -> 400; método não suportado -> 405.
+		assert.equal((await call({ token: admin, resource: 'foo' })).code, 400);
+		const del = makeRes();
+		await handler({ method: 'DELETE', headers: { authorization: `Bearer ${admin}` }, query: { resource: 'approvals' } }, del);
+		assert.equal(del.code, 405);
+	} finally {
+		delete process.env.JWT_SECRET;
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+// 32g. Mock de /api/governance (modo dev sem Firebase): payload + decidir.
+{
+	const esbuild = await import('esbuild');
+	const build = await esbuild.build({
+		entryPoints: [new URL('./factory-shell/src/services/mockGovernanceApi.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const dir = await mkdtemp(new URL('./.smoke-mockgov-', import.meta.url).pathname);
+	const file = join(dir, 'mock.mjs');
+	try {
+		await writeFile(file, build.outputFiles[0].text);
+		const { handleMockGovernance, resetMockGovernance } = await import(pathToFileURL(file).href);
+		resetMockGovernance();
+
+		// GET approvals: envelope { count, items } com 3 pendências enriquecidas.
+		const list = handleMockGovernance('GET', 'approvals');
+		assert.equal(list.status, 200);
+		assert.equal(list.body.count, 3);
+		assert.ok(list.body.items.every(i => i.canApprove === true));
+		const campaign = list.body.items.find(i => i.entityType === 'marketing_campaign');
+		assert.equal(campaign.amount, null, 'campanha não tem valor monetário');
+		assert.equal(campaign.module, 'Virtual CMO');
+		assert.ok(list.body.items.every(i => typeof i.description === 'string' && typeof i.date === 'string' && typeof i.module === 'string'));
+
+		// POST decide: aprovar remove do inbox e devolve status approved.
+		const target = list.body.items[0].id;
+		const decided = handleMockGovernance('POST', 'approvals', JSON.stringify({ id: target, approve: true }));
+		assert.equal(decided.status, 200);
+		assert.equal(decided.body.request.status, 'approved');
+		assert.equal(handleMockGovernance('GET', 'approvals').body.count, 2, 'pedido decidido saiu do inbox');
+		// Rejeitar também sai; id inexistente -> 404; corpo sem id -> 422.
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ id: 'nao-existe', approve: true })).status, 404);
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ approve: true })).status, 422);
+
+		// audit: envelope íntegro; resource desconhecido -> 400.
+		assert.equal(handleMockGovernance('GET', 'audit').body.intact, true);
+		assert.equal(handleMockGovernance('GET', 'foo').status, 400);
+
+		resetMockGovernance();
+		assert.equal(handleMockGovernance('GET', 'approvals').body.count, 3, 'reset restaura as pendências');
+	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
 }

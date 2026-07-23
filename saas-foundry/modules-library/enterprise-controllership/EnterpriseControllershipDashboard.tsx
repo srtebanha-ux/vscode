@@ -6,6 +6,7 @@ import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, Fl
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ApprovalInbox } from './ApprovalInbox.js';
 import { FreezeControl } from './FreezeControl.js';
+import { LossRadar } from './LossRadar.js';
 import { ExecutiveBriefingGenerator } from './ExecutiveBriefingGenerator.js';
 import { ERPSyncBridge } from './ERPSyncBridge.js';
 import { FiscalDiscoveryHub } from './FiscalDiscoveryHub.js';
@@ -91,7 +92,7 @@ function Dashboard(): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [exporting, setExporting] = useState(false);
-	const [view, setView] = useState<'painel' | 'aprovacoes' | 'dossie' | 'erp' | 'simulador' | 'descoberta'>('painel');
+	const [view, setView] = useState<'painel' | 'aprovacoes' | 'radar' | 'dossie' | 'erp' | 'simulador' | 'descoberta'>('painel');
 
 	const totals = useMemo(() => {
 		const folha = SECTORS.reduce((s, r) => s + r.custoFolha, 0);
@@ -144,6 +145,7 @@ function Dashboard(): React.JSX.Element {
 				{([
 					['painel', 'Painel', LayoutDashboard],
 						['aprovacoes', 'Aprovações', ShieldCheck],
+						['radar', 'Radar de Prejuízo', Radar],
 						['descoberta', 'Descoberta Fiscal', ScanSearch],
 					['erp', 'Ingestão ERP', Server],
 					['simulador', 'Simulador Tributário', FlaskConical],
@@ -170,6 +172,8 @@ function Dashboard(): React.JSX.Element {
 					<ApprovalInbox />
 					<FreezeControl />
 				</div>
+			) : view === 'radar' ? (
+				<LossRadar />
 			) : view === 'dossie' ? (
 				<ExecutiveBriefingGenerator />
 			) : view === 'descoberta' ? (

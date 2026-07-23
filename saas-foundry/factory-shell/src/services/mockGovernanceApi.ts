@@ -147,6 +147,36 @@ export function handleMockGovernance(method: string, resource: string, body?: un
 		return { status: 200, body: { tenantId: 'tnt_demo', intact: true, count: 0, records: [] } };
 	}
 
+	if (resource === 'radar' && verb === 'POST') {
+		// Mesma semântica do fallback determinístico do servidor (sem chave de IA).
+		const input = (typeof body === 'string' ? safeParse(body) : body) as { findings?: unknown } | null;
+		const findings = input && Array.isArray(input.findings) ? (input.findings as Record<string, unknown>[]) : null;
+		if (!findings || findings.length === 0 || findings.length > 10) {
+			return { status: 422, body: { error: 'invalid_body', message: 'Informe { findings: [...] } (1 a 10 desvios da Fase 1).' } };
+		}
+		const top = findings[0] as { filial?: unknown; fornecedor?: unknown; metrica?: unknown; desvio_pp?: unknown; perda_estimada_reais?: unknown };
+		const filial = typeof top.filial === 'string' ? top.filial : 'filial';
+		const fornecedor = typeof top.fornecedor === 'string' ? top.fornecedor : 'fornecedor';
+		const metrica = typeof top.metrica === 'string' ? top.metrica : 'custo';
+		const desvio = typeof top.desvio_pp === 'number' ? top.desvio_pp : 0;
+		const perda = typeof top.perda_estimada_reais === 'number' ? top.perda_estimada_reais : 0;
+		return {
+			status: 200,
+			body: {
+				diagnosis: {
+					diagnostico: `A ${filial} paga ${desvio.toFixed(1)} p.p. a mais de ${metrica} que a mediana das demais filiais no fornecedor ${fornecedor} — vazamento estimado de R$ ${Math.round(perda).toLocaleString('pt-BR')} no período.`,
+					hipoteses: [
+						`Tabela de ${metrica} desatualizada ou renegociada só nas outras filiais no contrato com ${fornecedor}.`,
+						'Cobrança de taxas acessórias (re-entrega, ad valorem, praça) aplicadas indevidamente a esta filial.',
+						'Classificação fiscal/rota divergente no cadastro local do ERP da filial.'
+					],
+					acao_recomendada: `Congelar novas aprovações de despesa da ${filial} no escopo afetado (Trava de Limite) e exigir a justificativa do gerente antes de liberar.`,
+					engine: 'simulated'
+				}
+			}
+		};
+	}
+
 	return { status: 400, body: { error: 'unknown_resource', message: 'resource deve ser approvals ou audit.' } };
 }
 

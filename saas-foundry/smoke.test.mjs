@@ -1198,6 +1198,52 @@ try {
 	assert.equal(loadCube({ getItem: () => 'lixo{{{' }), null, 'cubo corrompido -> null, nunca lança');
 }
 
+// 28c. Radar de Prejuízo — Fase 1 (lossRadar): mediana, desvios e a anomalia achada
+{
+	const { generateDemoCsv, ingestCsv } = await import('./modules-library/enterprise-controllership/dist/erpIngest.js');
+	const { median, analyzeCube, toRadarPayload, DEFAULT_THRESHOLD_PP } = await import('./modules-library/enterprise-controllership/dist/lossRadar.js');
+
+	assert.equal(median([3, 1, 2]), 2);
+	assert.equal(median([1, 2, 3, 4]), 2.5);
+	assert.equal(DEFAULT_THRESHOLD_PP, 0.05);
+
+	// Cubo artesanal: filial-x paga 20% de frete no Forn A; as outras ~8% -> ACHADO.
+	// Forn B só existe numa filial -> sem base de comparação -> SEM achado.
+	const cube = {
+		generatedAt: 'x', recordCount: 4, cells: [
+			{ branchId: 'filial-x', supplier: 'Forn A', category: 'g', count: 1, total: 1000, freteTotal: 200, impostoTotal: 120 },
+			{ branchId: 'filial-y', supplier: 'Forn A', category: 'g', count: 1, total: 1000, freteTotal: 80, impostoTotal: 120 },
+			{ branchId: 'filial-z', supplier: 'Forn A', category: 'g', count: 1, total: 1000, freteTotal: 80, impostoTotal: 120 },
+			{ branchId: 'filial-x', supplier: 'Forn B', category: 'g', count: 1, total: 500, freteTotal: 250, impostoTotal: 60 }
+		]
+	};
+	const found = analyzeCube(cube);
+	assert.equal(found.length, 1, 'só o desvio com base de comparação vira achado');
+	assert.equal(found[0].branchId, 'filial-x');
+	assert.equal(found[0].supplier, 'Forn A');
+	assert.equal(found[0].metric, 'frete');
+	assert.ok(Math.abs(found[0].deviationPp - 0.12) < 1e-9, 'desvio de 12 p.p. (20% vs mediana 8%)');
+	assert.ok(Math.abs(found[0].estimatedLoss - 120) < 1e-6, 'perda = desvio × volume (0.12 × 1000)');
+
+	// O CENÁRIO DA HELENA: o Radar encontra a anomalia embutida no lote de demonstração.
+	const demo = await ingestCsv(generateDemoCsv(20000), { chunkSize: 5000 });
+	const radar = analyzeCube(demo.cube);
+	assert.ok(radar.length >= 1, 'o Radar encontra pelo menos um desvio no lote');
+	const top = radar[0];
+	assert.equal(top.branchId, 'filial-sul', 'o maior rombo é a Filial Sul');
+	assert.equal(top.supplier, 'TransLog Sul', 'no fornecedor da anomalia');
+	assert.equal(top.metric, 'frete');
+	assert.ok(top.deviationPp > 0.12 && top.deviationPp < 0.16, `desvio ~14 p.p. (medido ${(top.deviationPp * 100).toFixed(1)})`);
+	assert.ok(top.estimatedLoss > 0, 'perda estimada positiva em R$');
+
+	// Payload da Fase 2: compacto (máx. 10), com números já formatados para a IA.
+	const payload = toRadarPayload(radar);
+	assert.ok(payload.length <= 10);
+	assert.equal(payload[0].filial, 'filial-sul');
+	assert.equal(typeof payload[0].desvio_pp, 'number');
+	assert.equal(typeof payload[0].perda_estimada_reais, 'number');
+}
+
 // 29. Central de Descoberta Fiscal: feed proativo (Push) + mineração ativa (Pull)
 {
 	const { FiscalDiscoveryHub, filterRecords, sortRecords, FISCAL_RECORDS } = await import(
@@ -1761,7 +1807,7 @@ try {
 
 	const build = await esbuild.build({
 		entryPoints: [new URL('./api/governance.ts', import.meta.url).pathname],
-		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken', 'node:crypto']
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken', 'node:crypto', '@google/generative-ai']
 	});
 	const dir = await mkdtemp(new URL('./.smoke-governance-', import.meta.url).pathname);
 	const file = join(dir, 'route.mjs');
@@ -1863,6 +1909,26 @@ try {
 		// Levantar de novo -> 409 (terminal); id inexistente -> 404.
 		assert.equal((await call({ method: 'POST', token: admin2, resource: 'freezes', body: { action: 'lift', id: freezeId } })).code, 409);
 		assert.equal((await call({ method: 'POST', token: admin2, resource: 'freezes', body: { action: 'lift', id: 'frz_ghost' } })).code, 404);
+
+		// ── Radar de Prejuízo (Fase 2) via rota: diagnóstico sobre os desvios ───
+		delete process.env.GEMINI_API_KEY; // sem chave -> fallback determinístico (nunca 500)
+		const radarFinding = { filial: 'filial-sul', fornecedor: 'TransLog Sul', metrica: 'frete', desvio_pp: 14.2, perda_estimada_reais: 48200, percentual_filial: 22.1, mediana_outras_filiais: 7.9 };
+		const diag = await call({ method: 'POST', token: admin, resource: 'radar', body: { findings: [radarFinding] } });
+		assert.equal(diag.code, 200);
+		assert.equal(diag.body.diagnosis.engine, 'simulated');
+		assert.match(diag.body.diagnosis.diagnostico, /filial-sul/);
+		assert.match(diag.body.diagnosis.diagnostico, /TransLog Sul/);
+		assert.ok(diag.body.diagnosis.hipoteses.length >= 2);
+		assert.match(diag.body.diagnosis.acao_recomendada, /Trava|Congelar/i);
+		// Corpo inválido -> 422 (vazio, >10 achados, campo com tipo errado)
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'radar', body: { findings: [] } })).code, 422);
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'radar', body: { findings: Array(11).fill(radarFinding) } })).code, 422);
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'radar', body: { findings: [{ ...radarFinding, desvio_pp: 'x' }] } })).code, 422);
+		// Anônimo -> 401 (mesma guarda da porta única)
+		assert.equal((await call({ method: 'POST', resource: 'radar', body: { findings: [radarFinding] } })).code, 401);
+		// A consulta ao Radar entra na trilha de auditoria.
+		const auditRadar = await call({ token: admin, resource: 'audit' });
+		assert.ok(auditRadar.body.records.some(r => r.action === 'radar:diagnose'), 'diagnóstico auditado');
 	} finally {
 		delete process.env.JWT_SECRET;
 		await rm(dir, { recursive: true, force: true });
@@ -1923,6 +1989,14 @@ try {
 		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ id: second, approve: true })).status, 200, 'trava levantada libera');
 		assert.equal(handleMockGovernance('POST', 'freezes', JSON.stringify({ action: 'lift', id: frzId })).status, 409);
 		resetMockGovernance();
+
+		// Radar (Fase 2) no mock: diagnóstico determinístico com os dados do achado.
+		const radarBody = JSON.stringify({ findings: [{ filial: 'filial-sul', fornecedor: 'TransLog Sul', metrica: 'frete', desvio_pp: 14.2, perda_estimada_reais: 48200 }] });
+		const mockDiag = handleMockGovernance('POST', 'radar', radarBody);
+		assert.equal(mockDiag.status, 200);
+		assert.equal(mockDiag.body.diagnosis.engine, 'simulated');
+		assert.match(mockDiag.body.diagnosis.diagnostico, /filial-sul/);
+		assert.equal(handleMockGovernance('POST', 'radar', JSON.stringify({ findings: [] })).status, 422);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

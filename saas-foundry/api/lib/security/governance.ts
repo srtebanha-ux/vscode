@@ -17,6 +17,84 @@
 import { createHash } from 'node:crypto';
 import type { Principal, ServerRole } from './apiGuard';
 
+// process/fetch são globais do runtime Node da Vercel; o tsconfig da função não os traz.
+declare const process: { readonly env: Record<string, string | undefined> };
+declare const fetch: (input: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{ readonly ok: boolean; json(): Promise<unknown> }>;
+
+// ════════════════════════════════════════════════════════════════════════════
+// 0) Persistência — Porta KV (durável quando configurada; InMemory no dev)
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Os stores abaixo (auditoria, aprovações, travas) guardam estado. Em memória,
+// esse estado EVAPORA a cada cold start da função serverless. A Porta KV troca
+// o Map por um armazenamento por chave: em produção, o Vercel KV / Upstash Redis
+// via API REST (fetch puro — ZERO dependência que quebre no bundle, a lição das
+// migrações anteriores); no dev/preview (sem env), cai no InMemory. O mesmo
+// padrão "configurado -> durável, senão -> dev" já usado na auth.
+
+/** Armazenamento mínimo por chave (blobs JSON). */
+export interface KvPort {
+	getJson<T>(key: string): Promise<T | null>;
+	setJson<T>(key: string, value: T): Promise<void>;
+}
+
+/** Implementação em memória (dev/preview/testes) — some no cold start, como antes. */
+export class InMemoryKv implements KvPort {
+	private readonly store = new Map<string, string>();
+	async getJson<T>(key: string): Promise<T | null> {
+		const raw = this.store.get(key);
+		return raw === undefined ? null : (JSON.parse(raw) as T);
+	}
+	async setJson<T>(key: string, value: T): Promise<void> {
+		this.store.set(key, JSON.stringify(value));
+	}
+}
+
+/**
+ * Adaptador DURÁVEL sobre a API REST do Vercel KV / Upstash Redis. Comandos
+ * ["GET", k] / ["SET", k, v] via POST autenticado — só `fetch` (builtin), sem
+ * SDK, sem risco de bundle. Injetável nos testes (baseUrl/token + fetch stub).
+ */
+export class RestKv implements KvPort {
+	constructor(private readonly baseUrl: string, private readonly token: string) {}
+
+	private async cmd(command: readonly string[]): Promise<unknown> {
+		const response = await fetch(this.baseUrl, {
+			method: 'POST',
+			headers: { authorization: `Bearer ${this.token}`, 'content-type': 'application/json' },
+			body: JSON.stringify(command)
+		});
+		if (!response.ok) throw new Error('KV indisponível');
+		const data = (await response.json()) as { result?: unknown };
+		return data.result ?? null;
+	}
+
+	async getJson<T>(key: string): Promise<T | null> {
+		const result = await this.cmd(['GET', key]);
+		return typeof result === 'string' ? (JSON.parse(result) as T) : null;
+	}
+
+	async setJson<T>(key: string, value: T): Promise<void> {
+		await this.cmd(['SET', key, JSON.stringify(value)]);
+	}
+}
+
+let sharedKv: KvPort | null = null;
+
+/**
+ * KV compartilhado da governança: durável (Vercel KV/Upstash) quando
+ * KV_REST_API_URL + KV_REST_API_TOKEN existem no ambiente; senão InMemory.
+ * Provisionar 1 KV store na Vercel e setar essas 2 envs liga a durabilidade —
+ * sem tocar em código (mesmo desenho fail-safe da auth).
+ */
+export function getGovernanceKv(): KvPort {
+	if (sharedKv) return sharedKv;
+	const url = process.env['KV_REST_API_URL'];
+	const token = process.env['KV_REST_API_TOKEN'];
+	sharedKv = url && token ? new RestKv(url, token) : new InMemoryKv();
+	return sharedKv;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // 1) RBAC de granularidade fina (permissões por recurso×ação)
 // ════════════════════════════════════════════════════════════════════════════
@@ -158,28 +236,36 @@ export interface AuditSink {
 	verify(tenantId: string): Promise<boolean>;
 }
 
-/** MOCK em memória — mesma semântica append-only da porta de produção. */
+/**
+ * Trilha append-only persistida na Porta KV (uma cadeia por tenant). Default
+ * InMemoryKv — comportamento idêntico ao mock antigo; com um KvPort durável,
+ * a cadeia SOBREVIVE ao cold start. A integridade por hash é preservada porque
+ * o append lê a cadeia inteira, encadeia e regrava.
+ */
 export class InMemoryAuditSink implements AuditSink {
-	private readonly chains = new Map<string, AuditRecord[]>();
+	constructor(private readonly kv: KvPort = new InMemoryKv()) {}
+	private key(tenantId: string): string {
+		return `gov:audit:${tenantId}`;
+	}
 
 	async append(entry: AuditEntry, now: () => Date = () => new Date()): Promise<AuditRecord> {
-		const chain = this.chains.get(entry.tenantId) ?? [];
+		const chain = (await this.kv.getJson<AuditRecord[]>(this.key(entry.tenantId))) ?? [];
 		const prev = chain[chain.length - 1];
 		const seq = chain.length;
 		const prevHash = prev ? prev.hash : GENESIS_HASH;
 		const at = now().toISOString();
 		const record: AuditRecord = { ...entry, seq, at, prevHash, hash: hashAuditRecord(prevHash, seq, at, entry) };
 		chain.push(record);
-		this.chains.set(entry.tenantId, chain);
+		await this.kv.setJson(this.key(entry.tenantId), chain);
 		return record;
 	}
 
 	async list(tenantId: string): Promise<readonly AuditRecord[]> {
-		return [...(this.chains.get(tenantId) ?? [])];
+		return (await this.kv.getJson<AuditRecord[]>(this.key(tenantId))) ?? [];
 	}
 
 	async verify(tenantId: string): Promise<boolean> {
-		const chain = this.chains.get(tenantId) ?? [];
+		const chain = (await this.kv.getJson<AuditRecord[]>(this.key(tenantId))) ?? [];
 		let expectedPrev = GENESIS_HASH;
 		for (let i = 0; i < chain.length; i += 1) {
 			const record = chain[i]!;
@@ -266,7 +352,11 @@ const nextApprovalId = (): string => {
 
 /** MOCK em memória — mesma semântica da porta de produção. */
 export class InMemoryApprovalStore implements ApprovalStore {
-	private readonly items = new Map<string, ApprovalRequest>();
+	constructor(private readonly kv: KvPort = new InMemoryKv()) {}
+	private readonly key = 'gov:approvals';
+	private async all(): Promise<Record<string, ApprovalRequest>> {
+		return (await this.kv.getJson<Record<string, ApprovalRequest>>(this.key)) ?? {};
+	}
 
 	async submit(input: SubmitInput, now: () => Date = () => new Date()): Promise<ApprovalRequest> {
 		const request: ApprovalRequest = {
@@ -281,22 +371,25 @@ export class InMemoryApprovalStore implements ApprovalStore {
 			createdAt: now().toISOString(),
 			status: 'pending'
 		};
-		this.items.set(request.id, request);
+		const map = await this.all();
+		map[request.id] = request;
+		await this.kv.setJson(this.key, map);
 		return request;
 	}
 
 	async get(id: string): Promise<ApprovalRequest | null> {
-		return this.items.get(id) ?? null;
+		return (await this.all())[id] ?? null;
 	}
 
 	async listPending(tenantId: string, branchId?: string): Promise<readonly ApprovalRequest[]> {
-		return [...this.items.values()].filter(
+		return Object.values(await this.all()).filter(
 			item => item.status === 'pending' && item.tenantId === tenantId && (branchId === undefined || item.branchId === branchId)
 		);
 	}
 
 	async decide(id: string, decider: Principal, approve: boolean, reason?: string, now: () => Date = () => new Date()): Promise<ApprovalRequest> {
-		const request = this.items.get(id);
+		const map = await this.all();
+		const request = map[id];
 		if (!request) throw new ApprovalError('pedido de aprovação inexistente');
 		if (request.status !== 'pending') throw new ApprovalError('pedido já decidido (terminal)');
 		// Isolamento: o aprovador precisa ser do MESMO tenant (e filial, se houver).
@@ -315,6 +408,8 @@ export class InMemoryApprovalStore implements ApprovalStore {
 		request.decidedBy = decider.userId;
 		request.decidedAt = now().toISOString();
 		if (reason !== undefined) request.reason = reason;
+		map[id] = request;
+		await this.kv.setJson(this.key, map);
 		return request;
 	}
 }
@@ -390,9 +485,13 @@ export function freezeCovers(freeze: Pick<Freeze, 'branchId' | 'costCenter' | 's
 	return true;
 }
 
-/** MOCK em memória — mesma semântica da porta de produção. */
+/** Travas persistidas na Porta KV (default InMemoryKv; durável com KvPort real). */
 export class InMemoryFreezeStore implements FreezeStore {
-	private readonly items = new Map<string, Freeze>();
+	constructor(private readonly kv: KvPort = new InMemoryKv()) {}
+	private readonly key = 'gov:freezes';
+	private async all(): Promise<Record<string, Freeze>> {
+		return (await this.kv.getJson<Record<string, Freeze>>(this.key)) ?? {};
+	}
 
 	async create(input: CreateFreezeInput, now: () => Date = () => new Date()): Promise<Freeze> {
 		if (!input.reason.trim()) throw new FreezeError('trava exige um motivo');
@@ -406,23 +505,26 @@ export class InMemoryFreezeStore implements FreezeStore {
 			createdAt: now().toISOString(),
 			status: 'active'
 		};
-		this.items.set(freeze.id, freeze);
+		const map = await this.all();
+		map[freeze.id] = freeze;
+		await this.kv.setJson(this.key, map);
 		return freeze;
 	}
 
 	async list(tenantId: string): Promise<readonly Freeze[]> {
-		return [...this.items.values()].filter(f => f.tenantId === tenantId);
+		return Object.values(await this.all()).filter(f => f.tenantId === tenantId);
 	}
 
 	async activeFor(tenantId: string, branchId?: string, costCenter?: string): Promise<Freeze | null> {
-		for (const freeze of this.items.values()) {
+		for (const freeze of Object.values(await this.all())) {
 			if (freeze.tenantId === tenantId && freezeCovers(freeze, branchId, costCenter)) return freeze;
 		}
 		return null;
 	}
 
 	async lift(id: string, lifter: Principal, now: () => Date = () => new Date()): Promise<Freeze> {
-		const freeze = this.items.get(id);
+		const map = await this.all();
+		const freeze = map[id];
 		if (!freeze) throw new FreezeError('trava inexistente');
 		if (freeze.status !== 'active') throw new FreezeError('trava já levantada (terminal)');
 		// Isolamento: só o próprio tenant.
@@ -434,6 +536,8 @@ export class InMemoryFreezeStore implements FreezeStore {
 		freeze.status = 'lifted';
 		freeze.liftedBy = lifter.userId;
 		freeze.liftedAt = now().toISOString();
+		map[id] = freeze;
+		await this.kv.setJson(this.key, map);
 		return freeze;
 	}
 }

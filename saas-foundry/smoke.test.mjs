@@ -1556,7 +1556,8 @@ try {
 			hasPermission, permissionsOf, ROLE_PERMISSIONS, requirePermission,
 			InMemoryAuditSink, hashAuditRecord, GENESIS_HASH,
 			InMemoryApprovalStore, requiresApproval, ApprovalError,
-			InMemoryFreezeStore, freezeCovers, FreezeError
+			InMemoryFreezeStore, freezeCovers, FreezeError,
+			InMemoryKv, RestKv, getGovernanceKv
 		} = await import(pathToFileURL(govL.file).href);
 
 		// ── RBAC fino ──────────────────────────────────────────────────────────
@@ -1613,11 +1614,12 @@ try {
 		await sink.append({ tenantId: 'tnt_beta', actorUserId: 'ux', action: 'receipt:create', entityType: 'receipt', entityId: 'rc1' }, fixedClock);
 		assert.equal((await sink.list('tnt_alpha')).length, 2);
 		assert.equal((await sink.list('tnt_beta')).length, 1);
-		// Adulteração retroativa quebra a verificação
+		// Adulteração retroativa quebra a verificação: grava uma cadeia alterada
+		// direto na KV (o registro 0 com a action trocada, mantendo o hash antigo).
 		const chain = await sink.list('tnt_alpha');
-		const tampered = new InMemoryAuditSink();
-		// injeta uma cópia com o primeiro registro alterado (action trocada, hash antigo)
-		tampered.chains = new Map([['tnt_alpha', [{ ...chain[0], action: 'quote:create' }, { ...chain[1] }]]]);
+		const tamperedKv = new InMemoryKv();
+		await tamperedKv.setJson('gov:audit:tnt_alpha', [{ ...chain[0], action: 'quote:create' }, { ...chain[1] }]);
+		const tampered = new InMemoryAuditSink(tamperedKv);
 		assert.equal(await tampered.verify('tnt_alpha'), false, 'alteração de conteúdo é detectada');
 		// hash é determinístico para a mesma entrada
 		const h = hashAuditRecord(GENESIS_HASH, 0, r0.at, { tenantId: 'tnt_alpha', actorUserId: 'u1', action: 'quote:approve', entityType: 'quote', entityId: 'q1' });
@@ -1678,6 +1680,51 @@ try {
 		assert.equal(lifted.liftedBy, 'u_ctrl2');
 		assert.equal(await fStore.activeFor('tnt_alpha', 'fil_sul'), null, 'depois de levantada, o escopo volta a aprovar');
 		await assert.rejects(fStore.lift(frz.id, ctrl2), FreezeError); // terminal
+
+		// ── Persistência via Porta KV: o estado SOBREVIVE a uma nova instância ──
+		// (simula o cold start da função — dois stores compartilhando o mesmo KV).
+		const kv = new InMemoryKv();
+		await kv.setJson('t', { a: 1 });
+		assert.deepEqual(await kv.getJson('t'), { a: 1 });
+		assert.equal(await kv.getJson('inexistente'), null);
+		const storeA = new InMemoryApprovalStore(kv);
+		const submitted = await storeA.submit({ tenantId: 'tnt_alpha', entityType: 'quote', entityId: 'q1', amount: 500, policy: { threshold: 0, approvePermission: 'quote:approve' }, requestedBy: { userId: 'u_maker' } });
+		const storeB = new InMemoryApprovalStore(kv); // "outra invocação" lê o mesmo backend
+		assert.equal((await storeB.get(submitted.id))?.id, submitted.id, 'aprovação persiste entre instâncias (não evapora no cold start)');
+		assert.equal((await storeB.listPending('tnt_alpha')).length, 1);
+		// A trava também persiste entre instâncias.
+		const fA = new InMemoryFreezeStore(kv);
+		const persistedFreeze = await fA.create({ tenantId: 'tnt_alpha', reason: 'auditoria', createdBy: { userId: 'u_ctrl' } });
+		const fB = new InMemoryFreezeStore(kv);
+		assert.equal((await fB.activeFor('tnt_alpha'))?.id, persistedFreeze.id, 'trava persiste entre instâncias');
+
+		// ── RestKv (Vercel KV/Upstash via fetch): GET/SET contra um fake REST ──
+		const backing = new Map();
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = async (_url, init) => {
+			const [cmd, key, value] = JSON.parse(init.body);
+			if (cmd === 'SET') { backing.set(key, value); return { ok: true, json: async () => ({ result: 'OK' }) }; }
+			if (cmd === 'GET') { return { ok: true, json: async () => ({ result: backing.has(key) ? backing.get(key) : null }) }; }
+			return { ok: false, json: async () => ({}) };
+		};
+		try {
+			const rest = new RestKv('https://kv.example', 'tok');
+			await rest.setJson('k1', { hello: 'world' });
+			assert.equal(backing.get('k1'), JSON.stringify({ hello: 'world' }), 'SET grava JSON serializado');
+			assert.deepEqual(await rest.getJson('k1'), { hello: 'world' }, 'GET desserializa');
+			assert.equal(await rest.getJson('ausente'), null, 'chave ausente -> null');
+			// Um store durável ponta a ponta sobre o RestKv fake.
+			const durable = new InMemoryFreezeStore(rest);
+			const df = await durable.create({ tenantId: 'tnt_alpha', reason: 'via REST', createdBy: { userId: 'u' } });
+			assert.equal((await new InMemoryFreezeStore(rest).activeFor('tnt_alpha'))?.id, df.id, 'store sobre RestKv persiste');
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+
+		// getGovernanceKv: sem env -> InMemory; com env -> RestKv (gating fail-safe).
+		delete process.env.KV_REST_API_URL;
+		delete process.env.KV_REST_API_TOKEN;
+		assert.ok(getGovernanceKv() instanceof InMemoryKv, 'sem env -> InMemory (dev/preview)');
 
 		// ── Escopo de filial (branchId) no isolamento ──────────────────────────
 		const pmePrincipal = { userId: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' };

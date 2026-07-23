@@ -3,6 +3,7 @@ import {
 	GoogleAuthProvider,
 	createUserWithEmailAndPassword,
 	onAuthStateChanged,
+	onIdTokenChanged,
 	sendSignInLinkToEmail,
 	signInWithEmailAndPassword,
 	signInWithPopup,
@@ -63,6 +64,25 @@ export function AuthProvider({ children }: { readonly children: ReactNode }): Re
 				setRole(result.claims['role'] === 'SUPER_ADMIN' ? 'SUPER_ADMIN' : 'USER');
 				setLoading(false);
 			});
+		});
+	}, [auth]);
+
+	// Ponte de sessão: troca o ID token do Firebase por um cookie HS256 que as
+	// rotas guardadas (apiGuard) entendem. Dispara no login, no logout e a cada
+	// refresh do token — mantendo o cookie sempre fresco. Best-effort: a UI não
+	// bloqueia nisso; só as chamadas a rotas protegidas dependem do cookie.
+	useEffect(() => {
+		return onIdTokenChanged(auth, async current => {
+			try {
+				if (!current) {
+					await fetch('/api/session', { method: 'DELETE' });
+					return;
+				}
+				const idToken = await current.getIdToken();
+				await fetch('/api/session', { method: 'POST', headers: { authorization: `Bearer ${idToken}` } });
+			} catch {
+				// Silencioso: a sessão de servidor é reestabelecida no próximo refresh.
+			}
 		});
 	}, [auth]);
 

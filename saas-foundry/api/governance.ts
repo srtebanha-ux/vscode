@@ -267,6 +267,18 @@ async function forecastVerdict(input: ForecastInput): Promise<ForecastVerdict> {
 	}
 }
 
+/** Valida o corpo do submit de um novo pedido (ex.: OC gerada pelo Orchestrator). */
+export function parseSubmitBody(source: unknown): { readonly entityType: string; readonly entityId: string; readonly amount: number; readonly source: string } | null {
+	if (typeof source !== 'object' || source === null) return null;
+	const f = source as Record<string, unknown>;
+	const entityType = typeof f['entityType'] === 'string' && f['entityType'] ? f['entityType'] : null;
+	const entityId = typeof f['entityId'] === 'string' && f['entityId'] ? f['entityId'] : null;
+	const amount = typeof f['amount'] === 'number' && Number.isFinite(f['amount']) && f['amount'] >= 0 ? f['amount'] : null;
+	const source_ = typeof f['source'] === 'string' && f['source'] ? f['source'].slice(0, 60) : 'orchestrator-bot';
+	if (!entityType || !entityId || amount === null) return null;
+	return { entityType, entityId, amount, source: source_ };
+}
+
 /** Valida o corpo do decide (strict: campo extra -> rejeita, anti-injeção). Substitui o Zod. */
 export function parseDecideBody(source: unknown): { readonly id: string; readonly approve: boolean; readonly reason?: string } | null {
 	if (typeof source !== 'object' || source === null) return null;
@@ -453,12 +465,44 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 		return;
 	}
 
-	// ── POST resource=approvals: decidir uma aprovação (aprova/rejeita) ────────
+	// ── POST resource=approvals: decidir OU submeter (automação do Orchestrator) ─
 	if (resource !== 'approvals') {
 		res.status(400).json({ error: 'unknown_resource', message: 'POST atende resource=approvals ou freezes.' });
 		return;
 	}
-	const decision = parseDecideBody(typeof req.body === 'string' ? safeJson(req.body) : req.body);
+	const approvalsBody = (typeof req.body === 'string' ? safeJson(req.body) : req.body) as Record<string, unknown> | null;
+
+	// action:submit -> cria um novo pedido pendente (ex.: OC gerada por automação).
+	if (approvalsBody && approvalsBody['action'] === 'submit') {
+		const submission = parseSubmitBody(approvalsBody);
+		if (!submission) {
+			res.status(422).json({ error: 'invalid_body', message: 'Informe { action:"submit", entityType, entityId, amount, source? }.' });
+			return;
+		}
+		const created = await approvals.submit({
+			tenantId: principal.tenantId,
+			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+			entityType: submission.entityType,
+			entityId: submission.entityId,
+			amount: submission.amount,
+			policy: { threshold: 0, approvePermission: 'purchase_order:approve' },
+			// Solicitante distinto do aprovador humano (segregação de função preservada).
+			requestedBy: { userId: submission.source }
+		});
+		await audit.append({
+			tenantId: principal.tenantId,
+			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+			actorUserId: principal.userId,
+			action: 'approval:submit',
+			entityType: created.entityType,
+			entityId: created.entityId,
+			metadata: { amount: created.amount, source: submission.source }
+		});
+		res.status(201).json({ request: created });
+		return;
+	}
+
+	const decision = parseDecideBody(approvalsBody);
 	if (!decision) {
 		res.status(422).json({ error: 'invalid_body', message: 'Informe { id, approve, reason? } — sem campos extras.' });
 		return;

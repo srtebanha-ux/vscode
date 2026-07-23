@@ -1117,8 +1117,11 @@ try {
 	assert.match(erp, /TOTVS Protheus/);
 	assert.match(erp, /Receita Federal \/ XML/);
 	assert.match(erp, /Criptografia End-to-End · Compliance LGPD/);
-	assert.match(erp, /Notas Fiscais Processadas/);
-	assert.match(erp, /Forçar Sincronização de Lote/);
+	// Pipeline real: upload de CSV + lote de teste + estado do Cubo Financeiro
+	assert.match(erp, /Importar CSV do ERP/);
+	assert.match(erp, /Gerar lote de teste \(50\.000\)/);
+	assert.match(erp, /Cubo Financeiro/);
+	assert.match(erp, /Nenhum dado ingerido ainda/);
 
 	// Projeção: custo acumulado atual vs. Lidar Core, ROI = economia mensal × meses
 	const proj = projectScenario({ aliquotaAtual: 34, novaAliquota: 26.5, volumeMensal: 1_200_000, meses: 36 });
@@ -1132,6 +1135,67 @@ try {
 	// Alíquota nova >= atual -> sem economia (nunca ROI negativo fantasioso)
 	const flat = projectScenario({ aliquotaAtual: 20, novaAliquota: 20, volumeMensal: 500000, meses: 36 });
 	assert.equal(flat.roiAcumulado, 0);
+}
+
+// 28b. Motor de Ingestão Massiva (erpIngest): parser, idempotência, cubo e anomalia
+{
+	const { parseCsvLine, parseRecord, ingestCsv, generateDemoCsv, saveCube, loadCube, DEMO_ANOMALY } =
+		await import('./modules-library/enterprise-controllership/dist/erpIngest.js');
+
+	// Parser CSV quote-aware: vírgula e aspas escapadas dentro do campo
+	assert.deepEqual(parseCsvLine('a,b,c'), ['a', 'b', 'c']);
+	assert.deepEqual(parseCsvLine('a,"b, com vírgula",c'), ['a', 'b, com vírgula', 'c']);
+	assert.deepEqual(parseCsvLine('a,"diz ""oi""",c'), ['a', 'diz "oi"', 'c']);
+
+	// Validação de linha: campos faltando, número inválido, data inválida
+	assert.match(parseRecord(['só', 'três', 'campos'], 7).reason, /esperava 8 campos/);
+	assert.match(parseRecord(['id1', 'f1', 's1', 'cat', 'abc', '1', '1', '2026-04-01'], 8).reason, /valor inválido/);
+	assert.match(parseRecord(['id1', 'f1', 's1', 'cat', '10', '1', '1', '01/04/2026'], 9).reason, /data inválida/);
+	const okRec = parseRecord(['id1', 'f1', 's1', '', '10.5', '1', '2', '2026-04-01'], 10);
+	assert.equal(okRec.category, 'geral'); // categoria vazia -> default
+
+	// Ingestão: header opcional, idempotência (id repetido), rejeição, cubo agregado
+	const csv = [
+		'id,branchId,supplier,category,valor,frete,imposto,date',
+		'n1,filial-a,Forn X,frete,100,10,12,2026-04-01',
+		'n2,filial-a,Forn X,frete,200,20,24,2026-04-02',
+		'n1,filial-a,Forn X,frete,100,10,12,2026-04-01', // duplicada
+		'n3,filial-b,Forn Y,insumo,50,2,6,2026-04-03',
+		'linha,quebrada,demais' // rejeitada
+	].join('\n');
+	const progress = [];
+	const result = await ingestCsv(csv, { chunkSize: 2, onProgress: p => progress.push(p.processed) });
+	assert.equal(result.accepted, 3);
+	assert.equal(result.duplicates, 1);
+	assert.equal(result.errors.length, 1);
+	assert.match(result.errors[0].reason, /esperava 8 campos/);
+	assert.deepEqual(result.branches, ['filial-a', 'filial-b']);
+	const cellAX = result.cube.cells.find(c => c.branchId === 'filial-a' && c.supplier === 'Forn X');
+	assert.equal(cellAX.count, 2);
+	assert.equal(cellAX.total, 300);
+	assert.equal(cellAX.freteTotal, 30);
+	assert.ok(progress.length >= 2 && progress[progress.length - 1] === 5, 'progresso reporta até o total');
+
+	// Lote de demonstração: 5.000 registros determinísticos com a anomalia EMBUTIDA
+	const demo = await ingestCsv(generateDemoCsv(5000), { chunkSize: 1000 });
+	assert.equal(demo.accepted, 5000);
+	assert.equal(demo.errors.length, 0);
+	const pct = cell => cell.freteTotal / cell.total;
+	const anomalous = demo.cube.cells.filter(c => c.branchId === DEMO_ANOMALY.branchId && c.supplier === DEMO_ANOMALY.supplier);
+	const normal = demo.cube.cells.filter(c => c.supplier === DEMO_ANOMALY.supplier && c.branchId !== DEMO_ANOMALY.branchId);
+	assert.ok(anomalous.length > 0 && normal.length > 0);
+	const avg = cells => cells.reduce((s, c) => s + pct(c), 0) / cells.length;
+	const gap = avg(anomalous) - avg(normal);
+	assert.ok(gap > 0.12 && gap < 0.16, `anomalia de ~14 p.p. presente no lote (medido: ${(gap * 100).toFixed(1)} p.p.)`);
+
+	// Persistência do cubo (storage injetável)
+	const mem = new Map();
+	const fakeStorage = { setItem: (k, v) => mem.set(k, v), getItem: k => mem.get(k) ?? null };
+	saveCube(demo.cube, fakeStorage);
+	const loaded = loadCube(fakeStorage);
+	assert.equal(loaded.recordCount, 5000);
+	assert.equal(loaded.cells.length, demo.cube.cells.length);
+	assert.equal(loadCube({ getItem: () => 'lixo{{{' }), null, 'cubo corrompido -> null, nunca lança');
 }
 
 // 29. Central de Descoberta Fiscal: feed proativo (Push) + mineração ativa (Pull)

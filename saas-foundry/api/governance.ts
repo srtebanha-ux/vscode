@@ -15,16 +15,20 @@ import { authenticateNode, type NodeHeaders, type Principal } from './lib/securi
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
-import { ApprovalError, FreezeError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, hasPermission, type ApprovalPolicy } from './lib/security/governance';
+import { ApprovalError, FreezeError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, getGovernanceKv, hasPermission, type ApprovalPolicy } from './lib/security/governance';
 
 const ENTERPRISE_ACCESS = ['ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
 
 // ── "Banco" mock por instância quente. Em produção: tabelas `approvals`,
 //    `audit_log` e `freezes` escopadas por tenant/filial (Postgres/Firestore). ──
 
-const approvals = new InMemoryApprovalStore();
-const audit = new InMemoryAuditSink();
-const freezes = new InMemoryFreezeStore();
+// KV compartilhado: durável (Vercel KV/Upstash) quando as envs existem; senão
+// InMemory. Os três stores usam o MESMO backend (chaves com prefixos distintos),
+// então em produção o estado sobrevive ao cold start da função.
+const kv = getGovernanceKv();
+const approvals = new InMemoryApprovalStore(kv);
+const audit = new InMemoryAuditSink(kv);
+const freezes = new InMemoryFreezeStore(kv);
 
 /** Pedidos de demonstração (em produção nascem do fluxo real de cada módulo). */
 const DEMO_REQUESTS: readonly { readonly entityType: string; readonly entityId: string; readonly amount: number; readonly policy: ApprovalPolicy }[] = [

@@ -1,22 +1,22 @@
 /**
  * /api/governance — porta ÚNICA das features de governança Enterprise.
  *
- * Consolidada de propósito num só arquivo (cada .ts sob api/ vira uma Serverless
- * Function e há teto de funções no deploy): roteia por `?resource=` sobre a
- * mesma guarda Zero-Trust. Autentica via cookie de sessão HS256 (emitido pela
- * ponte /api/session a partir do login Firebase).
+ * Handler Node clássico (req,res) — o estilo que a Vercel realmente invoca neste
+ * projeto Vite (o estilo Web Request/Response não é alimentado como função
+ * comum). Consolidada num só arquivo (cada .ts sob api/ vira uma função, e há
+ * teto de funções). Autentica via cookie de sessão HS256 (ponte /api/session).
  *
  *   GET  ?resource=approvals   → inbox de pendências do tenant/filial do token
  *   POST ?resource=approvals   → decide (aprova/rejeita) — regras no motor
  *   GET  ?resource=audit       → trilha imutável + verificação (perm audit:view)
  *
- * A autoridade é sempre o servidor: withApiGuard verifica o JWT e o cargo; o
+ * A autoridade é sempre o servidor: authenticateNode verifica o JWT e o cargo; o
  * motor de aprovações revalida escopo (tenant/filial), segregação de função e
  * permissão fina; a trilha registra a decisão com o ator vindo do token.
  */
 
 import { z } from 'zod';
-import { withApiGuard, type Principal } from './lib/security/apiGuard';
+import { authenticateNode, type NodeHeaders, type Principal } from './lib/security/apiGuard';
 import {
 	ApprovalError,
 	InMemoryApprovalStore,
@@ -82,54 +82,40 @@ function approvalErrorStatus(message: string): number {
 	return 403; // escopo, segregação de função ou permissão ausente
 }
 
-// ── GET: inbox de aprovações OU trilha de auditoria ──────────────────────────
+// Interfaces mínimas do handler serverless (evitam a dependência @vercel/node).
+interface ApiRequest {
+	readonly method?: string;
+	readonly headers?: NodeHeaders;
+	readonly query?: Record<string, string | string[] | undefined>;
+	readonly body?: unknown;
+}
+interface ApiResponse {
+	status(code: number): ApiResponse;
+	json(data: unknown): void;
+}
 
-export const GET = withApiGuard(ENTERPRISE_ACCESS, async (request, principal: Principal) => {
-	const resource = new URL(request.url).searchParams.get('resource') ?? 'approvals';
-
-	if (resource === 'approvals') {
-		await ensureSeed(principal);
-		const pending = await approvals.listPending(principal.tenantId, principal.branchId);
-		// O front usa `canApprove` para habilitar o botão; o back revalida no POST.
-		const items = pending.map(item => ({ ...item, canApprove: hasPermission(principal, item.approvePermission) }));
-		return Response.json({ tenantId: principal.tenantId, branchId: principal.branchId ?? null, count: items.length, items });
-	}
-
-	if (resource === 'audit') {
-		// Ver a trilha é privilégio de controladoria (permissão fina audit:view).
-		if (!hasPermission(principal, 'audit:view')) {
-			return Response.json({ error: 'forbidden', message: 'Permissão ausente: audit:view.' }, { status: 403 });
-		}
-		const [records, intact] = await Promise.all([audit.list(principal.tenantId), audit.verify(principal.tenantId)]);
-		return Response.json({ tenantId: principal.tenantId, intact, count: records.length, records });
-	}
-
-	return Response.json({ error: 'unknown_resource', message: 'resource deve ser approvals ou audit.' }, { status: 400 });
-});
-
-// ── POST: decidir uma aprovação (aprova/rejeita) ─────────────────────────────
-
-export const POST = withApiGuard(ENTERPRISE_ACCESS, async (request, principal: Principal) => {
-	const resource = new URL(request.url).searchParams.get('resource') ?? 'approvals';
-	if (resource !== 'approvals') {
-		return Response.json({ error: 'unknown_resource', message: 'POST só atende resource=approvals.' }, { status: 400 });
-	}
-
-	let body: unknown;
+function safeJson(value: string): unknown {
 	try {
-		body = await request.json();
+		return JSON.parse(value);
 	} catch {
-		return Response.json({ error: 'bad_request', message: 'JSON inválido.' }, { status: 400 });
+		return null;
 	}
-	const parsed = decideSchema.safeParse(body);
-	if (!parsed.success) {
-		return Response.json({ error: 'invalid_body', issues: parsed.error.issues }, { status: 422 });
-	}
+}
 
+/** Lê o `?resource=` da query (Vercel já parseia), default 'approvals'. */
+function readResource(req: ApiRequest): string {
+	const raw = req.query?.['resource'];
+	const value = Array.isArray(raw) ? raw[0] : raw;
+	return value ?? 'approvals';
+}
+
+/** Testável: núcleo de decisão exposto para o smoke test sem simular req/res. */
+export async function decideApproval(
+	principal: Principal,
+	input: { readonly id: string; readonly approve: boolean; readonly reason?: string }
+): Promise<{ readonly status: number; readonly body: unknown }> {
 	try {
-		// O motor cobra escopo (tenant/filial), segregação de função e permissão fina.
-		const decided = await approvals.decide(parsed.data.id, principal, parsed.data.approve, parsed.data.reason);
-		// Trilha imutável: registra a decisão com o ator vindo do JWT verificado.
+		const decided = await approvals.decide(input.id, principal, input.approve, input.reason);
 		await audit.append({
 			tenantId: principal.tenantId,
 			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
@@ -139,18 +125,70 @@ export const POST = withApiGuard(ENTERPRISE_ACCESS, async (request, principal: P
 			entityId: decided.entityId,
 			metadata: { decision: decided.status, amount: decided.amount, ...(decided.reason !== undefined ? { reason: decided.reason } : {}) }
 		});
-		return Response.json({ request: decided });
+		return { status: 200, body: { request: decided } };
 	} catch (error) {
 		if (error instanceof ApprovalError) {
-			return Response.json({ error: 'approval_rejected', message: error.message }, { status: approvalErrorStatus(error.message) });
+			return { status: approvalErrorStatus(error.message), body: { error: 'approval_rejected', message: error.message } };
 		}
 		throw error;
 	}
-});
+}
 
-/** Método não suportado -> 405 (sem vazar handler). */
-export default function handler(request: Request): Promise<Response> {
-	if (request.method === 'GET') return GET(request);
-	if (request.method === 'POST') return POST(request);
-	return Promise.resolve(Response.json({ error: 'method_not_allowed' }, { status: 405, headers: { allow: 'GET, POST' } }));
+/** Handler: valida cargo (Enterprise) e roteia por método + ?resource=. */
+export default async function handler(req: ApiRequest, res: ApiResponse): Promise<void> {
+	const method = req.method ?? 'GET';
+	if (method !== 'GET' && method !== 'POST') {
+		res.status(405).json({ error: 'method_not_allowed' });
+		return;
+	}
+
+	// Zero-Trust: JWT de sessão (cookie) + cargo Enterprise antes de qualquer dado.
+	const auth = authenticateNode(req.headers ?? {}, ENTERPRISE_ACCESS);
+	if (!auth.ok) {
+		res.status(auth.status).json({ error: auth.error, message: auth.message });
+		return;
+	}
+	const principal = auth.principal;
+	const resource = readResource(req);
+
+	if (method === 'GET') {
+		if (resource === 'approvals') {
+			await ensureSeed(principal);
+			const pending = await approvals.listPending(principal.tenantId, principal.branchId);
+			// O front usa `canApprove` para habilitar o botão; o back revalida no POST.
+			const items = pending.map(item => ({ ...item, canApprove: hasPermission(principal, item.approvePermission) }));
+			res.status(200).json({ tenantId: principal.tenantId, branchId: principal.branchId ?? null, count: items.length, items });
+			return;
+		}
+		if (resource === 'audit') {
+			// Ver a trilha é privilégio de controladoria (permissão fina audit:view).
+			if (!hasPermission(principal, 'audit:view')) {
+				res.status(403).json({ error: 'forbidden', message: 'Permissão ausente: audit:view.' });
+				return;
+			}
+			const [records, intact] = await Promise.all([audit.list(principal.tenantId), audit.verify(principal.tenantId)]);
+			res.status(200).json({ tenantId: principal.tenantId, intact, count: records.length, records });
+			return;
+		}
+		res.status(400).json({ error: 'unknown_resource', message: 'resource deve ser approvals ou audit.' });
+		return;
+	}
+
+	// POST: decidir uma aprovação (aprova/rejeita).
+	if (resource !== 'approvals') {
+		res.status(400).json({ error: 'unknown_resource', message: 'POST só atende resource=approvals.' });
+		return;
+	}
+	const source = typeof req.body === 'string' ? safeJson(req.body) : req.body;
+	const parsed = decideSchema.safeParse(source);
+	if (!parsed.success) {
+		res.status(422).json({ error: 'invalid_body', issues: parsed.error.issues });
+		return;
+	}
+	const outcome = await decideApproval(principal, {
+		id: parsed.data.id,
+		approve: parsed.data.approve,
+		...(parsed.data.reason !== undefined ? { reason: parsed.data.reason } : {})
+	});
+	res.status(outcome.status).json(outcome.body);
 }

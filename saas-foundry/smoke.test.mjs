@@ -1608,16 +1608,16 @@ try {
 	try {
 		await writeFile(file, build.outputFiles[0].text);
 		const { default: handler } = await import(pathToFileURL(file).href);
-		const url = 'https://lidarcore.example/api/session';
+		// Mock req/res no estilo Node (o que a Vercel realmente invoca).
+		const makeRes = () => ({ code: 0, body: null, cookie: null, status(c) { this.code = c; return this; }, json(d) { this.body = d; }, setHeader(name, value) { if (name.toLowerCase() === 'set-cookie') this.cookie = value; } });
 
 		// POST com ID token válido -> 200 + Set-Cookie de sessão
-		const ok = await handler(new Request(url, { method: 'POST', headers: { authorization: `Bearer ${idToken}` } }));
-		assert.equal(ok.status, 200);
-		const setCookie = ok.headers.get('set-cookie');
-		assert.match(setCookie, /^__lidar_session=[^;]+; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600$/);
-		const okBody = await ok.json();
-		assert.equal(okBody.role, 'ROLE_ADMIN_CONTROLLER');
-		assert.equal(okBody.tenantId, 'tnt_alpha');
+		const ok = makeRes();
+		await handler({ method: 'POST', headers: { authorization: `Bearer ${idToken}` } }, ok);
+		assert.equal(ok.code, 200);
+		assert.match(ok.cookie, /^__lidar_session=[^;]+; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600$/);
+		assert.equal(ok.body.role, 'ROLE_ADMIN_CONTROLLER');
+		assert.equal(ok.body.tenantId, 'tnt_alpha');
 
 		// O cookie emitido autentica de verdade nas rotas guardadas (cadeia completa).
 		const guardBuild = await esbuild.build({
@@ -1627,21 +1627,28 @@ try {
 		const guardFile = join(dir, 'guard.mjs');
 		await writeFile(guardFile, guardBuild.outputFiles[0].text);
 		const { authenticateHeaders } = await import(pathToFileURL(guardFile).href);
-		const sessionToken = /^__lidar_session=([^;]+)/.exec(setCookie)[1];
+		const sessionToken = /^__lidar_session=([^;]+)/.exec(ok.cookie)[1];
 		const authed = authenticateHeaders(null, `__lidar_session=${sessionToken}`, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(authed.ok, true);
 		assert.equal(authed.principal.userId, 'uid_route');
 
 		// Sem credencial -> 401
-		assert.equal((await handler(new Request(url, { method: 'POST' }))).status, 401);
+		const anon = makeRes();
+		await handler({ method: 'POST', headers: {} }, anon);
+		assert.equal(anon.code, 401);
 		// Token inválido -> 401
-		assert.equal((await handler(new Request(url, { method: 'POST', headers: { authorization: 'Bearer a.b.c' } }))).status, 401);
+		const bad = makeRes();
+		await handler({ method: 'POST', headers: { authorization: 'Bearer a.b.c' } }, bad);
+		assert.equal(bad.code, 401);
 		// DELETE (logout) -> 200 + cookie expirado
-		const del = await handler(new Request(url, { method: 'DELETE' }));
-		assert.equal(del.status, 200);
-		assert.match(del.headers.get('set-cookie'), /^__lidar_session=; .*Max-Age=0$/);
+		const del = makeRes();
+		await handler({ method: 'DELETE', headers: {} }, del);
+		assert.equal(del.code, 200);
+		assert.match(del.cookie, /^__lidar_session=; .*Max-Age=0$/);
 		// Método não suportado -> 405
-		assert.equal((await handler(new Request(url, { method: 'GET' }))).status, 405);
+		const wrong = makeRes();
+		await handler({ method: 'GET', headers: {} }, wrong);
+		assert.equal(wrong.code, 405);
 	} finally {
 		globalThis.fetch = originalFetch;
 		delete process.env.JWT_SECRET;
@@ -1666,23 +1673,28 @@ try {
 	const file = join(dir, 'route.mjs');
 	try {
 		await writeFile(file, build.outputFiles[0].text);
-		const { GET, POST, default: handler } = await import(pathToFileURL(file).href);
-		const url = 'https://lidarcore.example/api/governance?resource=approvals';
-		const auditUrl = 'https://lidarcore.example/api/governance?resource=audit';
-		const bearer = t => ({ authorization: `Bearer ${t}` });
+		const { default: handler } = await import(pathToFileURL(file).href);
+		const makeRes = () => ({ code: 0, body: null, status(c) { this.code = c; return this; }, json(d) { this.body = d; } });
+		// Chamada Node (o que a Vercel invoca): req { method, headers, query, body }.
+		const call = async ({ method = 'GET', token, resource = 'approvals', body }) => {
+			const res = makeRes();
+			const headers = token ? { authorization: `Bearer ${token}` } : {};
+			await handler({ method, headers, query: { resource }, body }, res);
+			return res;
+		};
 
 		const admin = sign({ uid: 'u_admin', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
 		const enterprise = sign({ uid: 'u_ent', tenantId: 'tnt_alpha', role: 'ROLE_ENTERPRISE_CLIENT' });
 		const pme = sign({ uid: 'u_pme', tenantId: 'tnt_alpha', role: 'ROLE_PME' });
 
 		// RBAC de rota: PME não acessa a governança Enterprise -> 403; anônimo -> 401.
-		assert.equal((await GET(new Request(url, { headers: bearer(pme) }))).status, 403);
-		assert.equal((await GET(new Request(url, {}))).status, 401);
+		assert.equal((await call({ token: pme })).code, 403);
+		assert.equal((await call({})).code, 401);
 
 		// Admin: inbox semeada, todos os itens aprováveis (tem alçada em tudo).
-		const listRes = await GET(new Request(url, { headers: bearer(admin) }));
-		assert.equal(listRes.status, 200);
-		const list = await listRes.json();
+		const listRes = await call({ token: admin });
+		assert.equal(listRes.code, 200);
+		const list = listRes.body;
 		assert.equal(list.tenantId, 'tnt_alpha');
 		assert.ok(list.count >= 3, 'inbox semeada com pendências de demonstração');
 		assert.ok(list.items.every(i => i.canApprove === true), 'admin tem alçada em todos');
@@ -1690,38 +1702,34 @@ try {
 
 		// Segregação de função: quem SOLICITOU não pode aprovar (mesmo sendo admin).
 		const maker = sign({ uid: 'u_maker_demo', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
-		const selfApprove = await POST(new Request(url, { method: 'POST', headers: { ...bearer(maker), 'content-type': 'application/json' }, body: JSON.stringify({ id: target.id, approve: true }) }));
-		assert.equal(selfApprove.status, 403, 'solicitante não aprova o próprio pedido');
+		assert.equal((await call({ method: 'POST', token: maker, body: { id: target.id, approve: true } })).code, 403, 'solicitante não aprova o próprio pedido');
 
 		// Enterprise (sem permissão *:approve): motor barra a decisão -> 403.
-		const noPerm = await POST(new Request(url, { method: 'POST', headers: { ...bearer(enterprise), 'content-type': 'application/json' }, body: JSON.stringify({ id: target.id, approve: true }) }));
-		assert.equal(noPerm.status, 403, 'sem permissão de aprovação');
+		assert.equal((await call({ method: 'POST', token: enterprise, body: { id: target.id, approve: true } })).code, 403, 'sem permissão de aprovação');
 
 		// Admin aprova de fato -> 200, e o item sai do inbox.
-		const decideRes = await POST(new Request(url, { method: 'POST', headers: { ...bearer(admin), 'content-type': 'application/json' }, body: JSON.stringify({ id: target.id, approve: true, reason: 'dentro do orçamento' }) }));
-		assert.equal(decideRes.status, 200);
-		assert.equal((await decideRes.json()).request.status, 'approved');
-		const after = await (await GET(new Request(url, { headers: bearer(admin) }))).json();
-		assert.equal(after.count, list.count - 1, 'pedido decidido saiu do inbox');
+		const decideRes = await call({ method: 'POST', token: admin, body: { id: target.id, approve: true, reason: 'dentro do orçamento' } });
+		assert.equal(decideRes.code, 200);
+		assert.equal(decideRes.body.request.status, 'approved');
+		assert.equal((await call({ token: admin })).body.count, list.count - 1, 'pedido decidido saiu do inbox');
 
 		// Corpo forjado (campo extra) -> 422; pedido inexistente -> 404.
-		const injected = await POST(new Request(url, { method: 'POST', headers: { ...bearer(admin), 'content-type': 'application/json' }, body: JSON.stringify({ id: target.id, approve: true, tenantId: 'tnt_beta' }) }));
-		assert.equal(injected.status, 422);
-		const ghost = await POST(new Request(url, { method: 'POST', headers: { ...bearer(admin), 'content-type': 'application/json' }, body: JSON.stringify({ id: 'apr_inexistente', approve: true }) }));
-		assert.equal(ghost.status, 404);
+		assert.equal((await call({ method: 'POST', token: admin, body: { id: target.id, approve: true, tenantId: 'tnt_beta' } })).code, 422);
+		assert.equal((await call({ method: 'POST', token: admin, body: { id: 'apr_inexistente', approve: true } })).code, 404);
 
 		// Auditoria: a decisão foi registrada; a cadeia verifica íntegra.
-		const auditRes = await GET(new Request(auditUrl, { headers: bearer(admin) }));
-		assert.equal(auditRes.status, 200);
-		const auditBody = await auditRes.json();
-		assert.equal(auditBody.intact, true, 'cadeia de auditoria íntegra');
-		assert.ok(auditBody.count >= 1 && auditBody.records.some(r => r.entityId === target.entityId), 'a aprovação entrou na trilha');
+		const auditRes = await call({ token: admin, resource: 'audit' });
+		assert.equal(auditRes.code, 200);
+		assert.equal(auditRes.body.intact, true, 'cadeia de auditoria íntegra');
+		assert.ok(auditRes.body.count >= 1 && auditRes.body.records.some(r => r.entityId === target.entityId), 'a aprovação entrou na trilha');
 		// Ver a trilha exige audit:view: Enterprise (sem a permissão) -> 403.
-		assert.equal((await GET(new Request(auditUrl, { headers: bearer(enterprise) }))).status, 403);
+		assert.equal((await call({ token: enterprise, resource: 'audit' })).code, 403);
 
 		// resource desconhecido -> 400; método não suportado -> 405.
-		assert.equal((await GET(new Request('https://lidarcore.example/api/governance?resource=foo', { headers: bearer(admin) }))).status, 400);
-		assert.equal((await handler(new Request(url, { method: 'DELETE', headers: bearer(admin) }))).status, 405);
+		assert.equal((await call({ token: admin, resource: 'foo' })).code, 400);
+		const del = makeRes();
+		await handler({ method: 'DELETE', headers: { authorization: `Bearer ${admin}` }, query: { resource: 'approvals' } }, del);
+		assert.equal(del.code, 405);
 	} finally {
 		delete process.env.JWT_SECRET;
 		await rm(dir, { recursive: true, force: true });

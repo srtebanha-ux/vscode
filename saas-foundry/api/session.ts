@@ -1,18 +1,18 @@
 /**
  * /api/session — Ponte de autenticação Firebase → sessão HS256.
  *
- * O front-end faz login no Firebase (ID token RS256) e chama esta rota com o
- * token no Authorization. O servidor VERIFICA o token contra as chaves públicas
- * do Google, deriva o Principal (tenant/role/filial, com defaults fail-safe) e
- * emite um cookie de sessão `__lidar_session` (HS256, HttpOnly) que o apiGuard
- * entende. A partir daí, toda rota guardada reconhece o usuário real — sem o
- * cliente jamais escolher o próprio tenant ou cargo.
+ * Handler Node clássico (req,res) — o estilo que a Vercel realmente invoca neste
+ * projeto Vite. O front-end faz login no Firebase (ID token RS256) e chama esta
+ * rota com o token no Authorization. O servidor VERIFICA o token contra as
+ * chaves públicas do Google, deriva o Principal (tenant/role/filial, com defaults
+ * fail-safe) e emite um cookie `__lidar_session` (HS256, HttpOnly) que o apiGuard
+ * entende. A partir daí, toda rota guardada reconhece o usuário real.
  *
  *   POST   /api/session   (Authorization: Bearer <firebase_id_token>) → seta o cookie
  *   DELETE /api/session                                                → limpa o cookie (logout)
  */
 
-import { buildSessionCookie, clearSessionCookie, extractBearer, mintSessionToken, principalFromFirebaseClaims, verifyFirebaseIdToken } from './lib/security/apiGuard';
+import { buildSessionCookie, clearSessionCookie, extractBearer, mintSessionToken, principalFromFirebaseClaims, verifyFirebaseIdToken, type NodeHeaders } from './lib/security/apiGuard';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
@@ -22,49 +22,57 @@ function firebaseProjectId(): string | null {
 	return process.env['FIREBASE_PROJECT_ID'] ?? process.env['VITE_FIREBASE_PROJECT_ID'] ?? null;
 }
 
-const json = (body: unknown, status: number, cookie?: string): Response =>
-	new Response(JSON.stringify(body), {
-		status,
-		headers: cookie ? { 'content-type': 'application/json', 'set-cookie': cookie } : { 'content-type': 'application/json' }
-	});
+// Interfaces mínimas do handler serverless (evitam a dependência @vercel/node).
+interface ApiRequest {
+	readonly method?: string;
+	readonly headers?: NodeHeaders;
+}
+interface ApiResponse {
+	status(code: number): ApiResponse;
+	json(data: unknown): void;
+	setHeader(name: string, value: string): void;
+}
 
-export async function POST(request: Request): Promise<Response> {
+/** Normaliza um header Node (string | string[] | undefined) para string única. */
+function headerValue(value: string | string[] | undefined): string | null {
+	if (Array.isArray(value)) return value[0] ?? null;
+	return value ?? null;
+}
+
+export default async function handler(req: ApiRequest, res: ApiResponse): Promise<void> {
+	const method = req.method ?? 'GET';
+
+	if (method === 'DELETE') {
+		res.setHeader('Set-Cookie', clearSessionCookie());
+		res.status(200).json({ ok: true });
+		return;
+	}
+	if (method !== 'POST') {
+		res.status(405).json({ error: 'method_not_allowed' });
+		return;
+	}
+
 	const projectId = firebaseProjectId();
 	if (!projectId) {
-		return json({ error: 'server_misconfigured', message: 'Autenticação indisponível (projeto Firebase não configurado).' }, 500);
+		res.status(500).json({ error: 'server_misconfigured', message: 'Autenticação indisponível (projeto Firebase não configurado).' });
+		return;
 	}
 
 	// Firebase ID tokens são JWTs de 3 segmentos base64url — extractBearer valida o formato.
-	const idToken = extractBearer(request.headers.get('authorization'));
+	const idToken = extractBearer(headerValue(req.headers?.['authorization']));
 	if (!idToken) {
-		return json({ error: 'unauthorized', message: 'ID token do Firebase ausente ou malformado.' }, 401);
+		res.status(401).json({ error: 'unauthorized', message: 'ID token do Firebase ausente ou malformado.' });
+		return;
 	}
 
-	let cookie: string;
-	let role: string;
-	let tenantId: string;
 	try {
 		const claims = await verifyFirebaseIdToken(idToken, { projectId });
 		const principal = principalFromFirebaseClaims(claims);
-		cookie = buildSessionCookie(mintSessionToken(principal));
-		role = principal.role;
-		tenantId = principal.tenantId;
+		res.setHeader('Set-Cookie', buildSessionCookie(mintSessionToken(principal)));
+		// Devolve o mínimo (o cookie carrega a autoridade); útil para a UI espelhar o cargo.
+		res.status(200).json({ ok: true, role: principal.role, tenantId: principal.tenantId });
 	} catch {
 		// Token inválido/expirado, kid desconhecido OU JWT_SECRET mal configurado -> nega.
-		return json({ error: 'unauthorized', message: 'Não foi possível estabelecer a sessão.' }, 401);
+		res.status(401).json({ error: 'unauthorized', message: 'Não foi possível estabelecer a sessão.' });
 	}
-
-	// Devolve o mínimo (o cookie carrega a autoridade); útil para a UI espelhar o cargo.
-	return json({ ok: true, role, tenantId }, 200, cookie);
-}
-
-export function DELETE(): Response {
-	return json({ ok: true }, 200, clearSessionCookie());
-}
-
-/** Método não suportado -> 405. */
-export default function handler(request: Request): Promise<Response> {
-	if (request.method === 'POST') return POST(request);
-	if (request.method === 'DELETE') return Promise.resolve(DELETE());
-	return Promise.resolve(json({ error: 'method_not_allowed' }, 405));
 }

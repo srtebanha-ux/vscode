@@ -35,6 +35,8 @@ const claimsSchema = z
 		sub: z.string().min(1).optional(),
 		uid: z.string().min(1).optional(),
 		tenantId: z.string().min(1, { error: 'token sem tenantId' }),
+		// Filial/centro de custo — multi-tenant de 2 níveis. Ausente em contas PME.
+		branchId: z.string().min(1).optional(),
 		role: z.enum(SERVER_ROLES, { error: 'role desconhecido' })
 	})
 	.refine(claims => Boolean(claims.sub ?? claims.uid), { error: 'token sem identidade de usuário' });
@@ -42,8 +44,15 @@ const claimsSchema = z
 export interface Principal {
 	readonly userId: string;
 	readonly tenantId: string;
+	/** Filial/centro de custo (multi-tenant de 2 níveis). Ausente em contas PME. */
+	readonly branchId?: string;
 	readonly role: ServerRole;
 }
+
+/** Resultado de autenticação sem Response (uso Node/handler clássico). */
+export type NodeAuthResult =
+	| { readonly ok: true; readonly principal: Principal }
+	| { readonly ok: false; readonly status: number; readonly error: string; readonly message: string };
 
 export type AuthResult =
 	| { readonly ok: true; readonly principal: Principal }
@@ -124,22 +133,29 @@ export function hasRequiredRole(role: ServerRole, allowedRoles: readonly ServerR
  *   cargo não permitido -> 403
  * Só devolve `principal` quando TUDO passa.
  */
-export function authenticate(
-	request: Request,
+/**
+ * Núcleo de autenticação sem depender do objeto `Request` (Web API). Recebe os
+ * headers crus e devolve um resultado neutro (`NodeAuthResult`) — reaproveitado
+ * tanto pelo `authenticate` (App Router) quanto pelas rotas Node clássicas
+ * (handler(req,res)) que não têm `Request.headers.get`.
+ */
+export function authenticateHeaders(
+	authorization: string | null,
+	cookie: string | null,
 	allowedRoles: readonly ServerRole[],
 	options?: { readonly secret?: string }
-): AuthResult {
+): NodeAuthResult {
 	let secret: string;
 	try {
 		secret = resolveSecret(options?.secret);
 	} catch {
 		// Segredo mal configurado é falha do servidor — não vaza estado, não aceita token.
-		return { ok: false, response: deny(500, 'server_misconfigured', 'Autenticação indisponível.') };
+		return { ok: false, status: 500, error: 'server_misconfigured', message: 'Autenticação indisponível.' };
 	}
 
-	const token = extractToken(request);
+	const token = extractBearer(authorization) ?? extractCookieToken(cookie);
 	if (!token) {
-		return { ok: false, response: deny(401, 'unauthorized', 'Credencial ausente ou malformada.') };
+		return { ok: false, status: 401, error: 'unauthorized', message: 'Credencial ausente ou malformada.' };
 	}
 
 	let rawClaims: unknown;
@@ -147,26 +163,74 @@ export function authenticate(
 		// Verify pinado: valida assinatura E expiração; `alg:none` e RS/HS-confusion barrados.
 		rawClaims = jwt.verify(token, secret, { algorithms: [...ALLOWED_ALGORITHMS] });
 	} catch {
-		return { ok: false, response: deny(401, 'unauthorized', 'Token inválido ou expirado.') };
+		return { ok: false, status: 401, error: 'unauthorized', message: 'Token inválido ou expirado.' };
 	}
 
 	const parsed = claimsSchema.safeParse(rawClaims);
 	if (!parsed.success) {
-		return { ok: false, response: deny(401, 'unauthorized', 'Token fora do contrato de segurança.') };
+		return { ok: false, status: 401, error: 'unauthorized', message: 'Token fora do contrato de segurança.' };
 	}
 
+	// branchId é opcional; com exactOptionalPropertyTypes só entra no objeto se existir.
 	const principal: Principal = {
 		userId: (parsed.data.sub ?? parsed.data.uid) as string,
 		tenantId: parsed.data.tenantId,
+		...(parsed.data.branchId !== undefined ? { branchId: parsed.data.branchId } : {}),
 		role: parsed.data.role
 	};
 
 	if (!hasRequiredRole(principal.role, allowedRoles)) {
 		// 403: autenticado, porém sem o cargo exigido (ex.: ROLE_PME numa rota Enterprise).
-		return { ok: false, response: deny(403, 'forbidden', 'Seu cargo não tem acesso a este recurso.') };
+		return { ok: false, status: 403, error: 'forbidden', message: 'Seu cargo não tem acesso a este recurso.' };
 	}
 
 	return { ok: true, principal };
+}
+
+/**
+ * Autentica e autoriza um request (App Router). Ordem defensiva:
+ *   token ausente/malformado -> 401
+ *   assinatura/expiração inválida -> 401
+ *   claims fora do contrato -> 401
+ *   cargo não permitido -> 403
+ * Só devolve `principal` quando TUDO passa. Delega ao núcleo header-based.
+ */
+export function authenticate(
+	request: Request,
+	allowedRoles: readonly ServerRole[],
+	options?: { readonly secret?: string }
+): AuthResult {
+	const result = authenticateHeaders(
+		request.headers.get('authorization'),
+		request.headers.get('cookie'),
+		allowedRoles,
+		options
+	);
+	if (result.ok) return { ok: true, principal: result.principal };
+	return { ok: false, response: deny(result.status, result.error, result.message) };
+}
+
+/** Headers de um request Node/Vercel clássico (chaves em minúsculas, valor pode ser lista). */
+export type NodeHeaders = Record<string, string | string[] | undefined>;
+
+/** Normaliza um header Node (string | string[] | undefined) para uma string única. */
+function headerValue(value: string | string[] | undefined): string | null {
+	if (Array.isArray(value)) return value[0] ?? null;
+	return value ?? null;
+}
+
+/**
+ * Autentica um request Node clássico (handler(req,res)) a partir do seu objeto
+ * `headers`. Não constrói Response — devolve `NodeAuthResult` para a rota
+ * responder via `res.status(...).json(...)`. Usado pelas Serverless Functions
+ * que não são App Router (oracle-pricing, supply-planner…).
+ */
+export function authenticateNode(
+	headers: NodeHeaders,
+	allowedRoles: readonly ServerRole[],
+	options?: { readonly secret?: string }
+): NodeAuthResult {
+	return authenticateHeaders(headerValue(headers['authorization']), headerValue(headers['cookie']), allowedRoles, options);
 }
 
 export type GuardedHandler = (request: Request, principal: Principal) => Promise<Response> | Response;
@@ -196,12 +260,22 @@ export class TenantIsolationError extends Error {}
  * sobrescrito. O filtro é sempre AND no topo, então nem `OR` do atacante escapa.
  */
 export function scopeWhere<W extends Record<string, unknown>>(principal: Principal, where?: W): W & { tenantId: string } {
-	return { ...(where ?? ({} as W)), tenantId: principal.tenantId };
+	// branchId (2º nível) só é injetado quando o token o traz — contas PME (sem
+	// filial) mantêm o filtro só por tenantId, sem quebrar quem não usa filial.
+	return {
+		...(where ?? ({} as W)),
+		...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+		tenantId: principal.tenantId
+	};
 }
 
-/** Idem para `create`: o dono do registro é sempre o tenant do token. */
+/** Idem para `create`: o dono do registro é sempre o tenant (e a filial, se houver) do token. */
 export function scopeCreate<D extends Record<string, unknown>>(principal: Principal, data: D): D & { tenantId: string } {
-	return { ...data, tenantId: principal.tenantId };
+	return {
+		...data,
+		...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+		tenantId: principal.tenantId
+	};
 }
 
 /** Guarda pós-leitura (quando obrigado a usar findUnique por id): dono ≠ tenant -> bloqueia. */

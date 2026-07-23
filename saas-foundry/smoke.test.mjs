@@ -269,9 +269,7 @@ const forbidden = [
 	'./factory-shell/src/public/SegmentPresentation.tsx',
 	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
 	'./api/lib/security/apiGuard.ts',
-	'./api/lib/security/rbac.ts',
-	'./api/lib/security/audit.ts',
-	'./api/lib/security/approvals.ts',
+	'./api/lib/security/governance.ts',
 	'./api/secure-invoices/route.ts',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
@@ -1390,14 +1388,14 @@ try {
 	const dirs = [];
 	try {
 		const guard = await compileLib('./api/lib/security/apiGuard.ts', 'ent-guard'); dirs.push(guard.dir);
-		const rbacL = await compileLib('./api/lib/security/rbac.ts', 'ent-rbac'); dirs.push(rbacL.dir);
-		const auditL = await compileLib('./api/lib/security/audit.ts', 'ent-audit'); dirs.push(auditL.dir);
-		const apprL = await compileLib('./api/lib/security/approvals.ts', 'ent-appr'); dirs.push(apprL.dir);
+		const govL = await compileLib('./api/lib/security/governance.ts', 'ent-gov'); dirs.push(govL.dir);
 
 		const { scopeWhere, scopeCreate, authenticateHeaders } = await import(pathToFileURL(guard.file).href);
-		const { hasPermission, permissionsOf, ROLE_PERMISSIONS, requirePermission } = await import(pathToFileURL(rbacL.file).href);
-		const { InMemoryAuditSink, hashAuditRecord, GENESIS_HASH } = await import(pathToFileURL(auditL.file).href);
-		const { InMemoryApprovalStore, requiresApproval, ApprovalError } = await import(pathToFileURL(apprL.file).href);
+		const {
+			hasPermission, permissionsOf, ROLE_PERMISSIONS, requirePermission,
+			InMemoryAuditSink, hashAuditRecord, GENESIS_HASH,
+			InMemoryApprovalStore, requiresApproval, ApprovalError
+		} = await import(pathToFileURL(govL.file).href);
 
 		// ── RBAC fino ──────────────────────────────────────────────────────────
 		// PME cria mas não aprova; Enterprise emite NF; Admin tem alçada de aprovação.

@@ -12,6 +12,9 @@
  */
 
 import { authenticateNode, type NodeHeaders, type Principal } from './lib/security/apiGuard';
+
+// Serverless roda em Node; o tsconfig do shell só conhece o browser.
+declare const process: { readonly env: Record<string, string | undefined> };
 import { ApprovalError, FreezeError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, hasPermission, type ApprovalPolicy } from './lib/security/governance';
 
 const ENTERPRISE_ACCESS = ['ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
@@ -84,6 +87,104 @@ function readResource(req: ApiRequest): string {
 	return value ?? 'approvals';
 }
 
+// ── Radar de Prejuízo — Fase 2 (diagnóstico de negócio sobre os desvios) ─────
+//
+// A Fase 1 (determinística, no cliente) já ENCONTROU os desvios no Cubo
+// Financeiro. Aqui a IA só faz o que faz bem: transformar os poucos achados
+// (payload compacto, ~10 linhas) em diagnóstico/hipóteses/ação em linguagem de
+// controladoria. Sem GEMINI_API_KEY cai num diagnóstico determinístico — a
+// tela nunca fica vazia (mesmo padrão do pricing-oracle).
+
+interface RadarFindingInput {
+	readonly filial: string;
+	readonly fornecedor: string;
+	readonly metrica: string;
+	readonly desvio_pp: number;
+	readonly perda_estimada_reais: number;
+}
+
+export interface RadarDiagnosis {
+	readonly diagnostico: string;
+	readonly hipoteses: readonly string[];
+	readonly acao_recomendada: string;
+	readonly engine: 'gemini' | 'simulated';
+}
+
+/** Valida o payload da Fase 1 (compacto: no máx. 10 achados). */
+export function parseRadarFindings(source: unknown): RadarFindingInput[] | null {
+	const body = (typeof source === 'object' && source !== null ? (source as Record<string, unknown>)['findings'] : null) as unknown;
+	if (!Array.isArray(body) || body.length === 0 || body.length > 10) return null;
+	const out: RadarFindingInput[] = [];
+	for (const item of body) {
+		if (typeof item !== 'object' || item === null) return null;
+		const f = item as Record<string, unknown>;
+		if (typeof f['filial'] !== 'string' || typeof f['fornecedor'] !== 'string' || typeof f['metrica'] !== 'string') return null;
+		if (typeof f['desvio_pp'] !== 'number' || typeof f['perda_estimada_reais'] !== 'number') return null;
+		out.push({
+			filial: f['filial'],
+			fornecedor: f['fornecedor'],
+			metrica: f['metrica'],
+			desvio_pp: f['desvio_pp'],
+			perda_estimada_reais: f['perda_estimada_reais']
+		});
+	}
+	return out;
+}
+
+/** Diagnóstico determinístico (fallback sem chave ou com IA indisponível). */
+export function simulatedRadarDiagnosis(findings: readonly RadarFindingInput[]): RadarDiagnosis {
+	const top = findings[0] as RadarFindingInput;
+	const totalLoss = findings.reduce((s, f) => s + f.perda_estimada_reais, 0);
+	const brl = (v: number): string => `R$ ${Math.round(v).toLocaleString('pt-BR')}`;
+	return {
+		diagnostico: `A ${top.filial} paga ${top.desvio_pp.toFixed(1)} p.p. a mais de ${top.metrica} que a mediana das demais filiais no fornecedor ${top.fornecedor} — vazamento estimado de ${brl(top.perda_estimada_reais)} no período (${brl(totalLoss)} somando todos os desvios).`,
+		hipoteses: [
+			`Tabela de ${top.metrica} desatualizada ou renegociada só nas outras filiais no contrato com ${top.fornecedor}.`,
+			'Cobrança de taxas acessórias (re-entrega, ad valorem, praça) aplicadas indevidamente a esta filial.',
+			'Classificação fiscal/rota divergente no cadastro local do ERP da filial.'
+		],
+		acao_recomendada: `Congelar novas aprovações de despesa da ${top.filial} no escopo afetado (Trava de Limite) e exigir do gerente a justificativa com o contrato de ${top.fornecedor} anexado antes de liberar.`,
+		engine: 'simulated'
+	};
+}
+
+const RADAR_SYSTEM_PROMPT = [
+	'Você é o Radar de Prejuízo do Lidar Core, analista de controladoria de uma holding brasileira.',
+	'Receberá desvios de custo JÁ CALCULADOS (aritmética exata, não recalcule nada).',
+	'Responda EXCLUSIVAMENTE com JSON válido nesta interface, sem markdown:',
+	'{ "diagnostico": string, "hipoteses": string[], "acao_recomendada": string }',
+	'diagnostico: 1-2 frases executivas citando filial, fornecedor e a perda em R$.',
+	'hipoteses: 2-4 causas prováveis, concretas e verificáveis.',
+	'acao_recomendada: 1 frase, deve considerar a Trava de Limite (freeze) do escopo afetado.'
+].join('\n');
+
+/** Fase 2 com Gemini; qualquer falha -> fallback determinístico (nunca 500). */
+async function radarDiagnose(findings: readonly RadarFindingInput[]): Promise<RadarDiagnosis> {
+	const apiKey = process.env['GEMINI_API_KEY'];
+	if (!apiKey) return simulatedRadarDiagnosis(findings);
+	try {
+		const { GoogleGenerativeAI } = await import('@google/generative-ai');
+		const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({
+			model: 'gemini-3-flash-preview',
+			systemInstruction: RADAR_SYSTEM_PROMPT,
+			generationConfig: { responseMimeType: 'application/json' }
+		});
+		const result = await model.generateContent(`Desvios detectados pela Fase 1:\n${JSON.stringify(findings)}`);
+		const text = result.response.text();
+		const start = text.indexOf('{');
+		const end = text.lastIndexOf('}');
+		if (start === -1 || end === -1) throw new Error('sem JSON');
+		const raw = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+		const diagnostico = typeof raw['diagnostico'] === 'string' ? raw['diagnostico'] : null;
+		const hipoteses = Array.isArray(raw['hipoteses']) ? raw['hipoteses'].filter((h): h is string => typeof h === 'string') : [];
+		const acao = typeof raw['acao_recomendada'] === 'string' ? raw['acao_recomendada'] : null;
+		if (!diagnostico || hipoteses.length === 0 || !acao) throw new Error('JSON fora do contrato');
+		return { diagnostico, hipoteses, acao_recomendada: acao, engine: 'gemini' };
+	} catch {
+		return simulatedRadarDiagnosis(findings);
+	}
+}
+
 /** Valida o corpo do decide (strict: campo extra -> rejeita, anti-injeção). Substitui o Zod. */
 export function parseDecideBody(source: unknown): { readonly id: string; readonly approve: boolean; readonly reason?: string } | null {
 	if (typeof source !== 'object' || source === null) return null;
@@ -154,6 +255,27 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 			return;
 		}
 		res.status(400).json({ error: 'unknown_resource', message: 'resource deve ser approvals, audit ou freezes.' });
+		return;
+	}
+
+	// ── POST resource=radar: Fase 2 do Radar (diagnóstico da IA sobre desvios) ──
+	if (resource === 'radar') {
+		const findings = parseRadarFindings(typeof req.body === 'string' ? safeJson(req.body) : req.body);
+		if (!findings) {
+			res.status(422).json({ error: 'invalid_body', message: 'Informe { findings: [...] } (1 a 10 desvios da Fase 1).' });
+			return;
+		}
+		const diagnosis = await radarDiagnose(findings);
+		await audit.append({
+			tenantId: principal.tenantId,
+			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+			actorUserId: principal.userId,
+			action: 'radar:diagnose',
+			entityType: 'radar_finding',
+			entityId: `${findings[0]?.filial ?? '-'}|${findings[0]?.fornecedor ?? '-'}`,
+			metadata: { findings: findings.length, engine: diagnosis.engine }
+		});
+		res.status(200).json({ diagnosis });
 		return;
 	}
 

@@ -1,91 +1,25 @@
 /**
  * /api/governance — porta ÚNICA das features de governança Enterprise.
  *
- * Handler Node clássico (req,res) — o estilo que a Vercel realmente invoca neste
- * projeto Vite (o estilo Web Request/Response não é alimentado como função
- * comum). Consolidada num só arquivo (cada .ts sob api/ vira uma função, e há
- * teto de funções). Autentica via cookie de sessão HS256 (ponte /api/session).
+ * Handler Node clássico (req,res). As dependências pesadas (zod, apiGuard,
+ * governance) são carregadas SOB DEMANDA dentro de um try/catch com rastreio de
+ * etapa: se um módulo falhar ao carregar na Vercel, o erro real (e ONDE) volta
+ * como JSON legível — em vez do envelope opaco de crash da plataforma.
  *
  *   GET  ?resource=approvals   → inbox de pendências do tenant/filial do token
  *   POST ?resource=approvals   → decide (aprova/rejeita) — regras no motor
  *   GET  ?resource=audit       → trilha imutável + verificação (perm audit:view)
- *
- * A autoridade é sempre o servidor: authenticateNode verifica o JWT e o cargo; o
- * motor de aprovações revalida escopo (tenant/filial), segregação de função e
- * permissão fina; a trilha registra a decisão com o ator vindo do token.
  */
 
-import { z } from 'zod';
-import { authenticateNode, type NodeHeaders, type Principal } from './lib/security/apiGuard';
-import {
-	ApprovalError,
-	InMemoryApprovalStore,
-	InMemoryAuditSink,
-	hasPermission,
-	type ApprovalPolicy
-} from './lib/security/governance';
+// Serverless roda em Node; o tsconfig do shell só conhece o browser.
+declare const process: { readonly env: Record<string, string | undefined> };
 
 const ENTERPRISE_ACCESS = ['ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
-
-// ── "Banco" mock por instância quente. Em produção: tabelas `approvals` e
-//    `audit_log` escopadas por tenant/filial (Postgres/Firestore). ─────────────
-
-const approvals = new InMemoryApprovalStore();
-const audit = new InMemoryAuditSink();
-
-/** Pedidos de demonstração (em produção nascem do fluxo real de cada módulo). */
-const DEMO_REQUESTS: readonly {
-	readonly entityType: string;
-	readonly entityId: string;
-	readonly amount: number;
-	readonly policy: ApprovalPolicy;
-}[] = [
-	{ entityType: 'purchase_order', entityId: 'po_2041', amount: 84200, policy: { threshold: 20000, approvePermission: 'purchase_order:approve' } },
-	{ entityType: 'quote', entityId: 'orc_1187', amount: 31500, policy: { threshold: 15000, approvePermission: 'quote:approve' } },
-	{ entityType: 'invoice', entityId: 'nf_0925', amount: 47800, policy: { threshold: 25000, approvePermission: 'invoice:approve' } }
-];
-
-const seeded = new Set<string>();
-
-/**
- * Semeia pendências de demonstração para o tenant/filial do token na primeira
- * visita (idempotente por chave tenant:branch). O solicitante é um usuário
- * distinto ('u_maker_demo') para a segregação de função permitir a aprovação.
- */
-async function ensureSeed(principal: Principal): Promise<void> {
-	const key = `${principal.tenantId}:${principal.branchId ?? '-'}`;
-	if (seeded.has(key)) return;
-	seeded.add(key);
-	for (const req of DEMO_REQUESTS) {
-		await approvals.submit({
-			tenantId: principal.tenantId,
-			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
-			entityType: req.entityType,
-			entityId: req.entityId,
-			amount: req.amount,
-			policy: req.policy,
-			requestedBy: { userId: 'u_maker_demo' }
-		});
-	}
-}
-
-const decideSchema = z.strictObject({
-	id: z.string().min(1),
-	approve: z.boolean(),
-	reason: z.string().trim().max(280).optional()
-});
-
-/** Traduz a regra de negócio violada no motor de aprovações para o status HTTP. */
-function approvalErrorStatus(message: string): number {
-	if (message.includes('inexistente')) return 404;
-	if (message.includes('terminal')) return 409;
-	return 403; // escopo, segregação de função ou permissão ausente
-}
 
 // Interfaces mínimas do handler serverless (evitam a dependência @vercel/node).
 interface ApiRequest {
 	readonly method?: string;
-	readonly headers?: NodeHeaders;
+	readonly headers?: Record<string, string | string[] | undefined>;
 	readonly query?: Record<string, string | string[] | undefined>;
 	readonly body?: unknown;
 }
@@ -94,65 +28,93 @@ interface ApiResponse {
 	json(data: unknown): void;
 }
 
-function safeJson(value: string): unknown {
-	try {
-		return JSON.parse(value);
-	} catch {
-		return null;
+interface Deps {
+	readonly authenticateNode: typeof import('./lib/security/apiGuard')['authenticateNode'];
+	readonly gov: typeof import('./lib/security/governance');
+	readonly z: typeof import('zod')['z'];
+	readonly approvals: import('./lib/security/governance').InMemoryApprovalStore;
+	readonly audit: import('./lib/security/governance').InMemoryAuditSink;
+}
+
+let cachedDeps: Deps | null = null;
+
+/** Carrega as dependências uma vez (cache), sinalizando a etapa via `step`. */
+async function loadDeps(step: { at: string }): Promise<Deps> {
+	if (cachedDeps) return cachedDeps;
+	step.at = 'import:zod';
+	const { z } = await import('zod');
+	step.at = 'import:apiGuard';
+	const { authenticateNode } = await import('./lib/security/apiGuard');
+	step.at = 'import:governance';
+	const gov = await import('./lib/security/governance');
+	step.at = 'init:stores';
+	cachedDeps = { authenticateNode, gov, z, approvals: new gov.InMemoryApprovalStore(), audit: new gov.InMemoryAuditSink() };
+	return cachedDeps;
+}
+
+/** Pedidos de demonstração (em produção nascem do fluxo real de cada módulo). */
+const DEMO_REQUESTS = [
+	{ entityType: 'purchase_order', entityId: 'po_2041', amount: 84200, threshold: 20000, approvePermission: 'purchase_order:approve' },
+	{ entityType: 'quote', entityId: 'orc_1187', amount: 31500, threshold: 15000, approvePermission: 'quote:approve' },
+	{ entityType: 'invoice', entityId: 'nf_0925', amount: 47800, threshold: 25000, approvePermission: 'invoice:approve' }
+] as const;
+
+const seeded = new Set<string>();
+
+async function ensureSeed(deps: Deps, principal: { tenantId: string; branchId?: string; userId: string }): Promise<void> {
+	const key = `${principal.tenantId}:${principal.branchId ?? '-'}`;
+	if (seeded.has(key)) return;
+	seeded.add(key);
+	for (const r of DEMO_REQUESTS) {
+		await deps.approvals.submit({
+			tenantId: principal.tenantId,
+			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+			entityType: r.entityType,
+			entityId: r.entityId,
+			amount: r.amount,
+			policy: { threshold: r.threshold, approvePermission: r.approvePermission },
+			requestedBy: { userId: 'u_maker_demo' }
+		});
 	}
 }
 
-/** Lê o `?resource=` da query (Vercel já parseia), default 'approvals'. */
+/** Traduz a regra de negócio violada no motor de aprovações para o status HTTP. */
+function approvalErrorStatus(message: string): number {
+	if (message.includes('inexistente')) return 404;
+	if (message.includes('terminal')) return 409;
+	return 403; // escopo, segregação de função ou permissão ausente
+}
+
 function readResource(req: ApiRequest): string {
 	const raw = req.query?.['resource'];
 	const value = Array.isArray(raw) ? raw[0] : raw;
 	return value ?? 'approvals';
 }
 
-/** Testável: núcleo de decisão exposto para o smoke test sem simular req/res. */
-export async function decideApproval(
-	principal: Principal,
-	input: { readonly id: string; readonly approve: boolean; readonly reason?: string }
-): Promise<{ readonly status: number; readonly body: unknown }> {
-	try {
-		const decided = await approvals.decide(input.id, principal, input.approve, input.reason);
-		await audit.append({
-			tenantId: principal.tenantId,
-			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
-			actorUserId: principal.userId,
-			action: decided.approvePermission,
-			entityType: decided.entityType,
-			entityId: decided.entityId,
-			metadata: { decision: decided.status, amount: decided.amount, ...(decided.reason !== undefined ? { reason: decided.reason } : {}) }
-		});
-		return { status: 200, body: { request: decided } };
-	} catch (error) {
-		if (error instanceof ApprovalError) {
-			return { status: approvalErrorStatus(error.message), body: { error: 'approval_rejected', message: error.message } };
-		}
-		throw error;
-	}
-}
-
-/** Handler: valida cargo (Enterprise) e roteia por método + ?resource=. */
+/** Handler: rastreia a etapa e devolve o erro real se algo falhar. */
 export default async function handler(req: ApiRequest, res: ApiResponse): Promise<void> {
+	const step = { at: 'start' };
 	try {
-		await route(req, res);
+		const deps = await loadDeps(step);
+		step.at = 'route';
+		await route(deps, req, res);
 	} catch (error) {
-		// Rede de segurança: qualquer erro inesperado vira JSON legível (nunca o
-		// envelope opaco de crash da Vercel), com a mensagem real para diagnóstico.
-		res.status(500).json({ error: 'internal_error', message: error instanceof Error ? error.message : String(error) });
+		res.status(500).json({
+			error: 'internal_error',
+			failedAt: step.at,
+			message: error instanceof Error ? error.message : String(error)
+		});
 	}
 }
 
-async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
+async function route(deps: Deps, req: ApiRequest, res: ApiResponse): Promise<void> {
+	const { authenticateNode, gov, z } = deps;
 	const method = req.method ?? 'GET';
 	if (method !== 'GET' && method !== 'POST') {
 		res.status(405).json({ error: 'method_not_allowed' });
 		return;
 	}
 
-	// Zero-Trust: JWT de sessão (cookie) + cargo Enterprise antes de qualquer dado.
 	const auth = await authenticateNode(req.headers ?? {}, ENTERPRISE_ACCESS);
 	if (!auth.ok) {
 		res.status(auth.status).json({ error: auth.error, message: auth.message });
@@ -163,20 +125,18 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 
 	if (method === 'GET') {
 		if (resource === 'approvals') {
-			await ensureSeed(principal);
-			const pending = await approvals.listPending(principal.tenantId, principal.branchId);
-			// O front usa `canApprove` para habilitar o botão; o back revalida no POST.
-			const items = pending.map(item => ({ ...item, canApprove: hasPermission(principal, item.approvePermission) }));
+			await ensureSeed(deps, principal);
+			const pending = await deps.approvals.listPending(principal.tenantId, principal.branchId);
+			const items = pending.map(item => ({ ...item, canApprove: gov.hasPermission(principal, item.approvePermission) }));
 			res.status(200).json({ tenantId: principal.tenantId, branchId: principal.branchId ?? null, count: items.length, items });
 			return;
 		}
 		if (resource === 'audit') {
-			// Ver a trilha é privilégio de controladoria (permissão fina audit:view).
-			if (!hasPermission(principal, 'audit:view')) {
+			if (!gov.hasPermission(principal, 'audit:view')) {
 				res.status(403).json({ error: 'forbidden', message: 'Permissão ausente: audit:view.' });
 				return;
 			}
-			const [records, intact] = await Promise.all([audit.list(principal.tenantId), audit.verify(principal.tenantId)]);
+			const [records, intact] = await Promise.all([deps.audit.list(principal.tenantId), deps.audit.verify(principal.tenantId)]);
 			res.status(200).json({ tenantId: principal.tenantId, intact, count: records.length, records });
 			return;
 		}
@@ -189,16 +149,39 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 		res.status(400).json({ error: 'unknown_resource', message: 'POST só atende resource=approvals.' });
 		return;
 	}
+	const decideSchema = z.strictObject({ id: z.string().min(1), approve: z.boolean(), reason: z.string().trim().max(280).optional() });
 	const source = typeof req.body === 'string' ? safeJson(req.body) : req.body;
 	const parsed = decideSchema.safeParse(source);
 	if (!parsed.success) {
 		res.status(422).json({ error: 'invalid_body', issues: parsed.error.issues });
 		return;
 	}
-	const outcome = await decideApproval(principal, {
-		id: parsed.data.id,
-		approve: parsed.data.approve,
-		...(parsed.data.reason !== undefined ? { reason: parsed.data.reason } : {})
-	});
-	res.status(outcome.status).json(outcome.body);
+
+	try {
+		const decided = await deps.approvals.decide(parsed.data.id, principal, parsed.data.approve, parsed.data.reason);
+		await deps.audit.append({
+			tenantId: principal.tenantId,
+			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+			actorUserId: principal.userId,
+			action: decided.approvePermission,
+			entityType: decided.entityType,
+			entityId: decided.entityId,
+			metadata: { decision: decided.status, amount: decided.amount, ...(decided.reason !== undefined ? { reason: decided.reason } : {}) }
+		});
+		res.status(200).json({ request: decided });
+	} catch (error) {
+		if (error instanceof gov.ApprovalError) {
+			res.status(approvalErrorStatus(error.message)).json({ error: 'approval_rejected', message: error.message });
+			return;
+		}
+		throw error;
+	}
+}
+
+function safeJson(value: string): unknown {
+	try {
+		return JSON.parse(value);
+	} catch {
+		return null;
+	}
 }

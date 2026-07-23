@@ -1,21 +1,19 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import Joyride, { ACTIONS, STATUS, type CallBackProps, type Locale, type Step, type Styles } from 'react-joyride';
 
 /**
- * AppTour — controlador dos "Deep Tours" contextuais do Lidar Core.
+ * AppTour — controlador dos "Deep Tours" contextuais do Lidar Core, com MOTOR DE
+ * AVANÇO POR FASE.
  *
- * O usuário é leigo: tours de 3 passos não bastam. Cada módulo principal tem o
- * seu próprio tour profundo, campo por campo, explicando o PORQUÊ de cada ação e
- * tirando o medo de errar. O <Joyride/> vive no MainLayout (shell persistente) e
- * escolhe o roteiro pela ROTA atual — é contextual. Roda uma vez por módulo
- * (Diário de Bordo por módulo em localStorage) na primeira visita, e pode ser
- * reaberto a qualquer momento pelo botão "Ver tutorial".
+ * Cada módulo principal tem o seu tour profundo, campo por campo. O <Joyride/>
+ * vive no MainLayout (shell persistente) e escolhe o roteiro pela ROTA atual.
  *
- * Robustez: antes de rodar, filtramos os passos para os alvos que REALMENTE
- * existem no DOM. E o auto-start SONDA o DOM até o módulo (chunk lazy) renderizar
- * — nada de janela fixa de tempo. Assim, à medida que a interface de cada módulo
- * recebe as classes-âncora (`.tour-*`), os passos correspondentes acendem, e
- * nenhum alvo ausente quebra o tour (degradação graciosa).
+ * Módulos de tela única (Fiscal, Recibo) mostram todos os passos de uma vez.
+ * Módulos multi-fase (CMO, Planejador) revelam campos conforme o usuário age —
+ * então marcamos os "passos de ação" (`ACTION_STEPS`): neles o holofote deixa o
+ * clique passar (`spotlightClicks`), esconde o "Próximo" e AVANÇA sozinho quando
+ * o alvo do próximo passo surge no DOM (troca de fase). Nos passos informativos,
+ * o botão "Próximo" leva ao passo seguinte (que já está na tela).
  */
 
 // ── Diário de Bordo: estado "já viu" dos 5 módulos ───────────────────────────
@@ -104,7 +102,8 @@ const step = (target: string, title: string, content: string): Step => ({ target
 
 /**
  * Dicionário dos 5 módulos principais. Os `target` são as classes-âncora EXATAS
- * mapeadas na interface de cada módulo. Ordem = ordem do tour.
+ * mapeadas na interface de cada módulo. Ordem = ordem do tour. Só entram passos
+ * que são de fato percorríveis (o alvo existe em alguma fase do módulo).
  */
 export const MODULE_TOURS: readonly ModuleTour[] = [
 	{
@@ -112,10 +111,10 @@ export const MODULE_TOURS: readonly ModuleTour[] = [
 		path: '/plugins/virtual-cmo-v1',
 		steps: [
 			intro('.tour-cmo-intro', 'Seu Diretor de Marketing', 'Bem-vindo ao seu Diretor de Marketing. Esqueça o bloqueio criativo, nós vamos criar suas campanhas por você. Clique em Próximo.'),
-			step('.tour-cmo-objetivo', 'Qual é o seu problema hoje?', 'Primeiro, me diga: qual é o seu problema hoje? Você quer atrair clientes novos ou fazer uma promoção para gerar caixa rápido? Clique na sua opção.'),
-			step('.tour-cmo-produto', 'O que você vende', 'Aqui, digite de forma simples o que você vende. Ex: "Bolo de pote de chocolate" ou "Reforma de banheiro". Não precisa escrever bonito, a Inteligência Artificial vai arrumar tudo.'),
-			step('.tour-cmo-publico', 'Para quem você vende', 'Para quem estamos vendendo? Mães? Donos de carros? Selecione aqui para o texto sair com as palavras certas.'),
-			step('.tour-cmo-gerar', 'Deixe a IA escrever', 'Tudo pronto! Clique neste botão. O sistema vai pensar por 10 segundos e te devolver o texto perfeito, com gatilhos mentais, pronto para você copiar e colar no Instagram.')
+			step('.tour-cmo-objetivo', 'Qual é o seu problema hoje?', 'Primeiro, me diga: qual é o seu problema hoje? Você quer atrair clientes novos ou fazer uma promoção para gerar caixa rápido? Clique na sua opção para continuar.'),
+			step('.tour-cmo-produto', 'O que você vende', 'Agora digite de forma simples o que você vende. Ex.: "Bolo de pote de chocolate" ou "Reforma de banheiro". Não precisa escrever bonito, a IA arruma tudo.'),
+			step('.tour-cmo-publico', 'Para quem você vende', 'Para quem estamos vendendo? Mães? Donos de carros? Descreva aqui para o texto sair com as palavras certas.'),
+			step('.tour-cmo-gerar', 'Deixe a IA escrever', 'Tudo pronto! Clique neste botão. O sistema pensa por 10 segundos e devolve o texto perfeito, com gatilhos mentais, pronto para copiar e colar no Instagram.')
 		]
 	},
 	{
@@ -123,12 +122,8 @@ export const MODULE_TOURS: readonly ModuleTour[] = [
 		path: '/plugins/margin-calculator-v1',
 		steps: [
 			intro('.tour-oraculo-intro', 'O Protetor de Lucro', 'Bem-vindo ao Oráculo. A partir de hoje, você nunca mais vai trabalhar de graça ou tomar prejuízo sem saber.'),
-			step('.tour-oraculo-servico', 'O que vamos precificar', 'Digite aqui o nome do serviço ou produto que você quer precificar.'),
-			step('.tour-oraculo-custo-direto', 'Custo direto (material)', 'Quanto custa o material? Coloque aqui apenas o que você gasta diretamente para entregar este serviço.'),
-			step('.tour-oraculo-custo-oculto', 'Custos ocultos', 'É aqui que a maioria quebra. Coloque os gastos escondidos: gasolina, embalagem, maquininha do cartão. Não deixe nada de fora!'),
-			step('.tour-oraculo-imposto', 'Seus impostos', 'Qual a sua alíquota do Simples Nacional? Se não souber, deixe o padrão. O Oráculo vai somar isso na conta.'),
-			step('.tour-oraculo-margem', 'O seu lucro', 'Quanto de dinheiro limpo você quer no bolso? 20%? 30%? Escolha aqui.'),
-			step('.tour-oraculo-calcular', 'O preço certo', 'Clique em Calcular. O Oráculo vai cuspir o preço exato e inegociável que você deve cobrar do seu cliente para ter lucro de verdade.')
+			step('.tour-oraculo-servico', 'O que vamos precificar', 'Descreva aqui o serviço ou produto que você quer precificar — com o máximo de detalhes. O Oráculo cruza isso com o mercado da sua região.'),
+			step('.tour-oraculo-calcular', 'Descubra o preço certo', 'Clique em "Analisar Mercado". O Oráculo devolve a faixa de preço segura da sua região e os custos ocultos que você não pode esquecer — depois é só ajustar a sua margem na calculadora.')
 		]
 	},
 	{
@@ -136,10 +131,9 @@ export const MODULE_TOURS: readonly ModuleTour[] = [
 		path: '/plugins/construction-calculator-v1',
 		steps: [
 			intro('.tour-planejador-intro', 'Compre a quantidade exata', 'Bem-vindo ao Planejador. Comprar material a mais é jogar dinheiro no lixo. Comprar a menos atrasa tudo. Vamos calcular a quantidade exata.'),
-			step('.tour-planejador-tipo', 'Tipo de projeto', 'O que vamos fazer? Selecione o tipo de projeto. (Ex: Parede de Drywall, Pintura, etc).'),
+			step('.tour-planejador-tipo', 'Escolha o seu nicho', 'O que vamos fazer? Toque no seu nicho de trabalho para continuar — o resto do formulário se abre a partir dele.'),
 			step('.tour-planejador-medidas', 'As medidas', 'Coloque a metragem exata aqui. O resto da matemática pesada é com a nossa IA.'),
-			step('.tour-planejador-perda', 'Margem de segurança', 'Atenção aqui: sempre existe quebra de material (piso quebra, tinta derrama). Escolha a margem de segurança (sugerimos 10%).'),
-			step('.tour-planejador-gerar', 'Sua lista de compras', 'Clique para gerar. Você vai receber a lista de compras perfeita, mastigada, pronta para mandar pro fornecedor.')
+			step('.tour-planejador-gerar', 'Sua lista de compras', 'Clique para gerar. Você recebe a lista de compras perfeita, mastigada, pronta para mandar pro fornecedor.')
 		]
 	},
 	{
@@ -164,6 +158,20 @@ export const MODULE_TOURS: readonly ModuleTour[] = [
 		]
 	}
 ];
+
+/**
+ * Passos de AÇÃO por módulo (índice no roteiro): o usuário precisa interagir com
+ * o elemento destacado para revelar a próxima fase. Nesses passos o footer some,
+ * o clique passa (`spotlightClicks`) e o tour avança quando o próximo alvo surge.
+ * Módulos de tela única não têm passos de ação.
+ */
+export const ACTION_STEPS: Readonly<Record<TourKey, readonly number[]>> = {
+	cmo: [1], // escolher o objetivo revela produto/público/gerar (fase "brief")
+	oraculo: [],
+	planejador: [1], // escolher o nicho abre o formulário de medidas
+	recibo: [],
+	fiscal: []
+};
 
 /** Acha o tour cujo `path` casa com a rota atual. */
 export function tourForPath(path: string): ModuleTour | undefined {
@@ -208,10 +216,18 @@ const TOUR_STYLES: Partial<Styles> = {
 	spotlight: { borderRadius: 12 }
 };
 
-/** Só os passos cujo alvo já existe no DOM (o 'body' é sempre válido). */
-function presentSteps(steps: readonly Step[]): Step[] {
-	if (typeof document === 'undefined') return [];
-	return steps.filter(item => item.target === 'body' || (typeof item.target === 'string' && document.querySelector(item.target) !== null));
+/** O alvo já existe no DOM? ('body' é sempre válido.) */
+function targetInDom(target: Step['target']): boolean {
+	if (target === 'body') return true;
+	return typeof target === 'string' && typeof document !== 'undefined' && document.querySelector(target) !== null;
+}
+
+/** Marca os passos de ação com spotlightClicks + footer oculto (clique obrigatório). */
+function buildSteps(tour: ModuleTour): Step[] {
+	const actions = new Set(ACTION_STEPS[tour.key]);
+	return tour.steps.map((original, index) =>
+		actions.has(index) ? { ...original, spotlightClicks: true, hideFooter: true, disableBeacon: true } : { ...original }
+	);
 }
 
 export interface AppTourProps {
@@ -222,63 +238,107 @@ export interface AppTourProps {
 export function AppTour({ currentPath }: AppTourProps): ReactElement | null {
 	const [run, setRun] = useState(false);
 	const [steps, setSteps] = useState<readonly Step[]>([]);
+	const [stepIndex, setStepIndex] = useState(0);
 	const [activeKey, setActiveKey] = useState<TourKey | null>(null);
+	const observerRef = useRef<MutationObserver | null>(null);
 
-	// Auto-start (primeira visita): ESPERA os alvos aparecerem no DOM antes de
-	// disparar. Cada módulo é um chunk lazy — na primeira visita ele baixa pela
-	// rede e renderiza depois de alguns ms; um setTimeout fixo erraria a janela e
-	// o tour nunca começaria. Por isso sondamos (com teto) até o alvo existir.
+	const stopObserver = useCallback((): void => {
+		observerRef.current?.disconnect();
+		observerRef.current = null;
+	}, []);
+
+	const startTour = useCallback((tour: ModuleTour): void => {
+		const display = buildSteps(tour);
+		const first = display.findIndex(item => targetInDom(item.target));
+		// só roda se houver ao menos um alvo real (além do body) no DOM
+		if (first < 0 || !display.slice(first).some(item => item.target !== 'body' && targetInDom(item.target))) return;
+		setSteps(display);
+		setActiveKey(tour.key);
+		setStepIndex(first);
+		setRun(true);
+	}, []);
+
+	// Auto-start (primeira visita): sonda o DOM até o módulo (chunk lazy) montar.
 	useEffect(() => {
-		if (run) return undefined; // um tour de cada vez
+		if (run) return undefined;
 		const tour = tourForPath(currentPath);
 		if (!tour || isTourSeen(tour.key)) return undefined;
-
 		let cancelled = false;
-		let pending = 0;
 		let attempts = 0;
-		const MAX_ATTEMPTS = 30; // ~6s (200ms) — cobre download do chunk + render
+		let timer = 0;
 		const tryStart = (): void => {
 			if (cancelled) return;
-			const mapped = presentSteps(tour.steps);
-			if (mapped.some(item => item.target !== 'body')) {
-				setSteps(mapped);
-				setActiveKey(tour.key);
-				setRun(true);
+			if (tour.steps.some(item => item.target !== 'body' && targetInDom(item.target))) {
+				startTour(tour);
 				return;
 			}
 			attempts += 1;
-			if (attempts < MAX_ATTEMPTS) pending = window.setTimeout(tryStart, 200);
+			if (attempts < 30) timer = window.setTimeout(tryStart, 200); // ~6s
 		};
-		pending = window.setTimeout(tryStart, 300); // respiro inicial e começa a sondar
+		timer = window.setTimeout(tryStart, 300);
 		return () => {
 			cancelled = true;
-			window.clearTimeout(pending);
+			window.clearTimeout(timer);
 		};
-	}, [currentPath, run]);
+	}, [currentPath, run, startTour]);
 
-	// Disparo manual (botão "Ver tutorial"): roda o tour da rota atual na hora,
-	// sem depender do auto-start nem da flag "já viu" — determinístico.
+	// Disparo manual (botão "Ver tutorial"): roda na hora, ignora a flag "já viu".
 	useEffect(() => {
 		const onManualStart = (): void => {
 			if (run) return;
 			const tour = tourForPath(currentPath);
-			if (!tour) return;
-			const mapped = presentSteps(tour.steps);
-			if (!mapped.some(item => item.target !== 'body')) return;
-			setSteps(mapped);
-			setActiveKey(tour.key);
-			setRun(true);
+			if (tour) startTour(tour);
 		};
 		window.addEventListener(TOUR_START_EVENT, onManualStart);
 		return () => window.removeEventListener(TOUR_START_EVENT, onManualStart);
-	}, [currentPath, run]);
+	}, [currentPath, run, startTour]);
+
+	// Motor de avanço por fase: nos passos de AÇÃO, observa o DOM até o alvo do
+	// próximo passo surgir (o usuário interagiu e trocou de fase) e então avança.
+	useEffect(() => {
+		stopObserver();
+		if (!run || activeKey === null) return undefined;
+		if (!ACTION_STEPS[activeKey].includes(stepIndex)) return undefined; // passo informativo: "Próximo" resolve
+		const nextStep = steps[stepIndex + 1];
+		if (!nextStep) return undefined;
+		const advanceWhenReady = (): void => {
+			if (!targetInDom(nextStep.target)) return;
+			stopObserver();
+			// respiro para a animação de entrada assentar antes de reposicionar o holofote
+			window.setTimeout(() => setStepIndex(current => (current === stepIndex ? stepIndex + 1 : current)), 250);
+		};
+		const observer = new MutationObserver(advanceWhenReady);
+		observer.observe(document.body, { childList: true, subtree: true });
+		observerRef.current = observer;
+		advanceWhenReady(); // caso o alvo já esteja presente
+		return stopObserver;
+	}, [run, activeKey, stepIndex, steps, stopObserver]);
+
+	const finish = (): void => {
+		if (activeKey) markTourSeen(activeKey);
+		stopObserver();
+		setRun(false);
+		setActiveKey(null);
+	};
 
 	const handleJoyrideCallback = (data: CallBackProps): void => {
-		const { status, action } = data;
+		const { status, action, index, type } = data;
 		if (status === STATUS.FINISHED || status === STATUS.SKIPPED || action === ACTIONS.CLOSE) {
-			if (activeKey) markTourSeen(activeKey);
-			setRun(false);
-			setActiveKey(null);
+			finish();
+			return;
+		}
+		// Passos informativos avançam pelo footer; pula alvos ausentes até o próximo presente.
+		if (type === 'step:after') {
+			if (action === ACTIONS.PREV) {
+				let prev = index - 1;
+				while (prev >= 0 && !targetInDom(steps[prev]!.target)) prev -= 1;
+				if (prev >= 0) setStepIndex(prev);
+				return;
+			}
+			let nextIdx = index + 1;
+			while (nextIdx < steps.length && !targetInDom(steps[nextIdx]!.target)) nextIdx += 1;
+			if (nextIdx < steps.length) setStepIndex(nextIdx);
+			else finish();
 		}
 	};
 
@@ -288,6 +348,7 @@ export function AppTour({ currentPath }: AppTourProps): ReactElement | null {
 		<Joyride
 			steps={[...steps]}
 			run={run}
+			stepIndex={stepIndex}
 			continuous
 			showProgress
 			showSkipButton

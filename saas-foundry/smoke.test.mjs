@@ -269,6 +269,7 @@ const forbidden = [
 	'./factory-shell/src/public/SegmentPresentation.tsx',
 	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
 	'./api/lib/security/apiGuard.ts',
+	'./api/lib/security/governance.ts',
 	'./api/secure-invoices/route.ts',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
@@ -1363,6 +1364,193 @@ try {
 	}
 }
 
+// 32b. Fundação de Governança Enterprise: RBAC fino + Auditoria encadeada +
+//      Aprovações (maker-checker) + escopo de filial (branchId) + rotas fechadas.
+{
+	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+	process.env.JWT_SECRET = SECRET;
+	const { default: jsonwebtoken } = await import('jsonwebtoken');
+	const sign = (claims, opts = {}) => jsonwebtoken.sign(claims, SECRET, { algorithm: 'HS256', ...opts });
+	const esbuild = await import('esbuild');
+
+	// Compila cada lib isoladamente (esm/node), mantendo jsonwebtoken/crypto externos.
+	const compileLib = async (rel, prefix) => {
+		const build = await esbuild.build({
+			entryPoints: [new URL(rel, import.meta.url).pathname],
+			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken', 'node:crypto', '@google/generative-ai']
+		});
+		const dir = await mkdtemp(new URL(`./.smoke-${prefix}-`, import.meta.url).pathname);
+		const file = join(dir, `${prefix}.mjs`);
+		await writeFile(file, build.outputFiles[0].text);
+		return { dir, file };
+	};
+
+	const dirs = [];
+	try {
+		const guard = await compileLib('./api/lib/security/apiGuard.ts', 'ent-guard'); dirs.push(guard.dir);
+		const govL = await compileLib('./api/lib/security/governance.ts', 'ent-gov'); dirs.push(govL.dir);
+
+		const { scopeWhere, scopeCreate, authenticateHeaders } = await import(pathToFileURL(guard.file).href);
+		const {
+			hasPermission, permissionsOf, ROLE_PERMISSIONS, requirePermission,
+			InMemoryAuditSink, hashAuditRecord, GENESIS_HASH,
+			InMemoryApprovalStore, requiresApproval, ApprovalError
+		} = await import(pathToFileURL(govL.file).href);
+
+		// ── RBAC fino ──────────────────────────────────────────────────────────
+		// PME cria mas não aprova; Enterprise emite NF; Admin tem alçada de aprovação.
+		assert.equal(hasPermission({ role: 'ROLE_PME' }, 'quote:create'), true);
+		assert.equal(hasPermission({ role: 'ROLE_PME' }, 'quote:approve'), false);
+		assert.equal(hasPermission({ role: 'ROLE_ENTERPRISE_CLIENT' }, 'invoice:emit'), true);
+		assert.equal(hasPermission({ role: 'ROLE_ENTERPRISE_CLIENT' }, 'invoice:approve'), false);
+		assert.equal(hasPermission({ role: 'ROLE_ADMIN_CONTROLLER' }, 'quote:approve'), true);
+		assert.equal(hasPermission({ role: 'ROLE_ADMIN_CONTROLLER' }, 'rbac:manage'), true);
+		// Cargo desconhecido -> fail-closed
+		assert.equal(hasPermission({ role: 'ROLE_HACKER' }, 'quote:create'), false);
+		// Admin é superconjunto de PME (nenhuma permissão do PME falta ao Admin)
+		assert.ok(ROLE_PERMISSIONS.ROLE_PME.every(p => ROLE_PERMISSIONS.ROLE_ADMIN_CONTROLLER.includes(p)));
+		assert.ok(permissionsOf({ role: 'ROLE_PME' }).includes('receipt:create'));
+		// requirePermission: bloqueia sem a permissão (403) e deixa passar com ela
+		let ran = false;
+		const gated = requirePermission('quote:approve', async () => { ran = true; return Response.json({ ok: true }); });
+		const denied = await gated({}, { role: 'ROLE_PME' });
+		assert.equal(denied.status, 403);
+		assert.equal(ran, false);
+		const allowed = await gated({}, { role: 'ROLE_ADMIN_CONTROLLER' });
+		assert.equal(allowed.status, 200);
+		assert.equal(ran, true);
+
+		// ── Auditoria encadeada por hash (append-only, à prova de adulteração) ──
+		const sink = new InMemoryAuditSink();
+		const fixedClock = () => new Date('2026-07-23T12:00:00.000Z');
+		const r0 = await sink.append({ tenantId: 'tnt_alpha', actorUserId: 'u1', action: 'quote:approve', entityType: 'quote', entityId: 'q1' }, fixedClock);
+		const r1 = await sink.append({ tenantId: 'tnt_alpha', branchId: 'fil_sp', actorUserId: 'u2', action: 'invoice:emit', entityType: 'invoice', entityId: 'nf1' }, fixedClock);
+		assert.equal(r0.seq, 0);
+		assert.equal(r0.prevHash, GENESIS_HASH);
+		assert.equal(r1.seq, 1);
+		assert.equal(r1.prevHash, r0.hash, 'cada elo carrega o hash do anterior');
+		assert.equal(await sink.verify('tnt_alpha'), true, 'cadeia íntegra verifica');
+		// Cadeias por tenant são isoladas
+		await sink.append({ tenantId: 'tnt_beta', actorUserId: 'ux', action: 'receipt:create', entityType: 'receipt', entityId: 'rc1' }, fixedClock);
+		assert.equal((await sink.list('tnt_alpha')).length, 2);
+		assert.equal((await sink.list('tnt_beta')).length, 1);
+		// Adulteração retroativa quebra a verificação
+		const chain = await sink.list('tnt_alpha');
+		const tampered = new InMemoryAuditSink();
+		// injeta uma cópia com o primeiro registro alterado (action trocada, hash antigo)
+		tampered.chains = new Map([['tnt_alpha', [{ ...chain[0], action: 'quote:create' }, { ...chain[1] }]]]);
+		assert.equal(await tampered.verify('tnt_alpha'), false, 'alteração de conteúdo é detectada');
+		// hash é determinístico para a mesma entrada
+		const h = hashAuditRecord(GENESIS_HASH, 0, r0.at, { tenantId: 'tnt_alpha', actorUserId: 'u1', action: 'quote:approve', entityType: 'quote', entityId: 'q1' });
+		assert.equal(h, r0.hash);
+
+		// ── Aprovações (maker-checker) ─────────────────────────────────────────
+		const policy = { threshold: 10000, approvePermission: 'quote:approve' };
+		assert.equal(requiresApproval(policy, 9999), false, 'abaixo da alçada não exige aprovação');
+		assert.equal(requiresApproval(policy, 10001), true, 'acima da alçada exige aprovação');
+		const store = new InMemoryApprovalStore();
+		const req = await store.submit({ tenantId: 'tnt_alpha', branchId: 'fil_sp', entityType: 'quote', entityId: 'q9', amount: 25000, policy, requestedBy: { userId: 'u_maker' } });
+		assert.equal(req.status, 'pending');
+		assert.equal((await store.listPending('tnt_alpha')).length, 1);
+		assert.equal((await store.listPending('tnt_alpha', 'fil_rj')).length, 0, 'filtro por filial isola o inbox');
+		const admin = { userId: 'u_admin', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ADMIN_CONTROLLER' };
+		// Segregação de função: o próprio solicitante não aprova
+		await assert.rejects(store.decide(req.id, { ...admin, userId: 'u_maker' }, true), ApprovalError);
+		// Escopo: aprovador de outra filial é barrado
+		await assert.rejects(store.decide(req.id, { ...admin, branchId: 'fil_rj' }, true), ApprovalError);
+		// Escopo: aprovador de outro tenant é barrado
+		await assert.rejects(store.decide(req.id, { ...admin, tenantId: 'tnt_beta' }, true), ApprovalError);
+		// Permissão: cargo sem quote:approve é barrado
+		await assert.rejects(store.decide(req.id, { ...admin, role: 'ROLE_PME' }, true), ApprovalError);
+		// Caminho feliz: admin de mesmo tenant/filial, ≠ solicitante, com permissão -> aprova
+		const decided = await store.decide(req.id, admin, true, 'dentro do orçamento');
+		assert.equal(decided.status, 'approved');
+		assert.equal(decided.decidedBy, 'u_admin');
+		assert.equal(decided.reason, 'dentro do orçamento');
+		assert.equal((await store.listPending('tnt_alpha')).length, 0, 'pedido decidido sai do inbox');
+		// Terminalidade: um pedido já decidido não muda de novo
+		await assert.rejects(store.decide(req.id, admin, false), ApprovalError);
+
+		// ── Escopo de filial (branchId) no isolamento ──────────────────────────
+		const pmePrincipal = { userId: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' };
+		// Sem branchId: comportamento legado intacto (só tenantId)
+		assert.deepEqual(scopeWhere(pmePrincipal, { id: 'x' }), { id: 'x', tenantId: 'tnt_alpha' });
+		assert.deepEqual(scopeCreate(pmePrincipal, { valor: 1 }), { valor: 1, tenantId: 'tnt_alpha' });
+		// Com branchId: injeta filial + tenant, sobrescrevendo o que o cliente mandou
+		const branchPrincipal = { userId: 'u2', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ENTERPRISE_CLIENT' };
+		assert.deepEqual(scopeWhere(branchPrincipal, { id: 'y', branchId: 'fil_rj', tenantId: 'tnt_beta' }), { id: 'y', branchId: 'fil_sp', tenantId: 'tnt_alpha' });
+		assert.deepEqual(scopeCreate(branchPrincipal, { valor: 2 }), { valor: 2, branchId: 'fil_sp', tenantId: 'tnt_alpha' });
+
+		// authenticateHeaders: token com branchId popula o principal; sem branchId, ausente
+		const withBranch = authenticateHeaders(`Bearer ${sign({ uid: 'u2', tenantId: 'tnt_alpha', branchId: 'fil_sp', role: 'ROLE_ENTERPRISE_CLIENT' })}`, null, ['ROLE_ENTERPRISE_CLIENT']);
+		assert.equal(withBranch.ok, true);
+		assert.equal(withBranch.principal.branchId, 'fil_sp');
+		const noBranch = authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_PME']);
+		assert.equal(noBranch.ok, true);
+		assert.equal('branchId' in noBranch.principal, false, 'conta PME não carrega filial');
+		// Cargo não permitido -> resultado neutro 403 (sem Response)
+		const wrongRole = authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_ADMIN_CONTROLLER']);
+		assert.equal(wrongRole.ok, false);
+		assert.equal(wrongRole.status, 403);
+	} finally {
+		delete process.env.JWT_SECRET;
+		for (const d of dirs) await rm(d, { recursive: true, force: true });
+	}
+}
+
+// 32c. Rotas de IA agora FECHADAS: oracle-pricing e supply-planner exigem JWT.
+{
+	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+	process.env.JWT_SECRET = SECRET;
+	const { default: jsonwebtoken } = await import('jsonwebtoken');
+	const sign = (claims) => jsonwebtoken.sign(claims, SECRET, { algorithm: 'HS256' });
+	const esbuild = await import('esbuild');
+
+	const compileRoute = async (rel, prefix) => {
+		const build = await esbuild.build({
+			entryPoints: [new URL(rel, import.meta.url).pathname],
+			bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken', '@google/generative-ai']
+		});
+		const dir = await mkdtemp(new URL(`./.smoke-${prefix}-`, import.meta.url).pathname);
+		const file = join(dir, `${prefix}.mjs`);
+		await writeFile(file, build.outputFiles[0].text);
+		return { dir, file };
+	};
+
+	const makeRes = () => ({ code: 0, body: null, status(c) { this.code = c; return this; }, json(d) { this.body = d; } });
+	const dirs = [];
+	try {
+		const oracle = await compileRoute('./api/oracle-pricing.ts', 'route-oracle'); dirs.push(oracle.dir);
+		const planner = await compileRoute('./api/supply-planner.ts', 'route-planner'); dirs.push(planner.dir);
+		const { default: oracleHandler } = await import(pathToFileURL(oracle.file).href);
+		const { default: plannerHandler } = await import(pathToFileURL(planner.file).href);
+
+		const token = sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' });
+		for (const handler of [oracleHandler, plannerHandler]) {
+			// Sem credencial -> 401 ANTES de tocar em qualquer coisa de IA
+			const anon = makeRes();
+			await handler({ method: 'POST', body: {}, headers: {} }, anon);
+			assert.equal(anon.code, 401, 'rota de IA rejeita anônimo');
+			assert.equal(anon.body.error, 'unauthorized');
+			// Token inválido -> 401
+			const bad = makeRes();
+			await handler({ method: 'POST', body: {}, headers: { authorization: 'Bearer a.b.c' } }, bad);
+			assert.equal(bad.code, 401);
+			// Autenticado, porém corpo inválido -> 400 (prova que a guarda deixou passar)
+			const authed = makeRes();
+			await handler({ method: 'POST', body: {}, headers: { authorization: `Bearer ${token}` } }, authed);
+			assert.equal(authed.code, 400, 'autenticado passa da guarda e cai na validação de corpo');
+			// Método errado -> 405 (curto-circuito antes da guarda, comportamento inalterado)
+			const wrong = makeRes();
+			await handler({ method: 'GET', headers: {} }, wrong);
+			assert.equal(wrong.code, 405);
+		}
+	} finally {
+		delete process.env.JWT_SECRET;
+		for (const d of dirs) await rm(d, { recursive: true, force: true });
+	}
+}
+
 // 33. Configurações Fiscais: validação do Certificado A1 (.pfx/.p12) fail-closed
 {
 	const esbuild = await import('esbuild');
@@ -1451,7 +1639,7 @@ try {
 	const esbuild = await import('esbuild');
 	const { outputFiles } = await esbuild.build({
 		entryPoints: [new URL('./api/oracle-pricing.ts', import.meta.url).pathname],
-		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai']
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai', 'jsonwebtoken']
 	});
 	// Temp dir sob a raiz do repo: '@google/generative-ai' (external) resolve pelo node_modules.
 	const compiled = join(await mkdtemp(new URL('./.smoke-oraclegemini-', import.meta.url).pathname), 'route.mjs');
@@ -1484,23 +1672,32 @@ try {
 		assert.equal(result.marketMax, 520);
 		assert.deepEqual(result.hiddenCosts, ['Biossegurança']);
 
-		// Handler: método, corpo e chave — fail-closed com JSON
+		// Handler: método, AUTH, corpo e chave — fail-closed com JSON
 		const mockRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
 		delete process.env.GEMINI_API_KEY;
+		const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+		process.env.JWT_SECRET = SECRET;
+		const { default: jsonwebtoken } = await import('jsonwebtoken');
+		const auth = { authorization: `Bearer ${jsonwebtoken.sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' }, SECRET, { algorithm: 'HS256' })}` };
 
 		let res = mockRes();
-		await handler({ method: 'GET', body: {} }, res);
-		assert.equal(res.code, 405);
+		await handler({ method: 'GET', body: {}, headers: {} }, res);
+		assert.equal(res.code, 405); // método barra antes da auth
 
 		res = mockRes();
-		await handler({ method: 'POST', body: { location: 'SP' } }, res); // corpo inválido
+		await handler({ method: 'POST', body: {}, headers: {} }, res); // sem credencial
+		assert.equal(res.code, 401);
+
+		res = mockRes();
+		await handler({ method: 'POST', body: { location: 'SP' }, headers: auth }, res); // autenticado, corpo inválido
 		assert.equal(res.code, 400);
 
 		res = mockRes();
-		await handler({ method: 'POST', body: { serviceDescription: 'Pintura residencial', location: 'São Paulo - SP' } }, res);
+		await handler({ method: 'POST', body: { serviceDescription: 'Pintura residencial', location: 'São Paulo - SP' }, headers: auth }, res);
 		assert.equal(res.code, 500); // sem GEMINI_API_KEY -> 500 (front cai no fallback)
 		assert.match(res.payload.error, /GEMINI_API_KEY/);
 	} finally {
+		delete process.env.JWT_SECRET;
 		await rm(join(compiled, '..'), { recursive: true, force: true });
 	}
 }
@@ -1510,7 +1707,7 @@ try {
 	const esbuild = await import('esbuild');
 	const { outputFiles } = await esbuild.build({
 		entryPoints: [new URL('./api/supply-planner.ts', import.meta.url).pathname],
-		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai']
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['@google/generative-ai', 'jsonwebtoken']
 	});
 	const compiled = join(await mkdtemp(new URL('./.smoke-supplyplanner-', import.meta.url).pathname), 'route.mjs');
 	try {
@@ -1562,24 +1759,33 @@ try {
 		assert.equal(result.lista_insumos[1].item, 'Caixa de Pizza 35cm');
 		assert.match(result.lista_insumos[1].motivo_margem_perda, /avarias/);
 
-		// Handler: método, corpo e chave — fail-closed com JSON
+		// Handler: método, AUTH, corpo e chave — fail-closed com JSON
 		const mockRes = () => ({ code: 0, payload: null, status(c) { this.code = c; return this; }, json(d) { this.payload = d; } });
 		delete process.env.GEMINI_API_KEY;
+		const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+		process.env.JWT_SECRET = SECRET;
+		const { default: jsonwebtoken } = await import('jsonwebtoken');
+		const auth = { authorization: `Bearer ${jsonwebtoken.sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' }, SECRET, { algorithm: 'HS256' })}` };
 
 		let res = mockRes();
-		await handler({ method: 'GET', body: {} }, res);
-		assert.equal(res.code, 405);
+		await handler({ method: 'GET', body: {}, headers: {} }, res);
+		assert.equal(res.code, 405); // método barra antes da auth
 
 		res = mockRes();
-		await handler({ method: 'POST', body: { nicho: 'Alimentação' } }, res); // corpo incompleto
+		await handler({ method: 'POST', body: {}, headers: {} }, res); // sem credencial
+		assert.equal(res.code, 401);
+
+		res = mockRes();
+		await handler({ method: 'POST', body: { nicho: 'Alimentação' }, headers: auth }, res); // autenticado, corpo incompleto
 		assert.equal(res.code, 400);
 		assert.match(res.payload.error, /perfil_operacional/);
 
 		res = mockRes();
-		await handler({ method: 'POST', body: fullBody }, res);
+		await handler({ method: 'POST', body: fullBody, headers: auth }, res);
 		assert.equal(res.code, 500); // sem GEMINI_API_KEY
 		assert.match(res.payload.error, /GEMINI_API_KEY/);
 	} finally {
+		delete process.env.JWT_SECRET;
 		await rm(join(compiled, '..'), { recursive: true, force: true });
 	}
 }
@@ -1588,7 +1794,7 @@ try {
 {
 	const esbuild = await import('esbuild');
 	const dir = await mkdtemp(new URL('./.smoke-tour-', import.meta.url).pathname);
-	await writeFile(join(dir, 'entry.tsx'), "export { default as AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } from '../factory-shell/src/AppTour';\n");
+	await writeFile(join(dir, 'entry.tsx'), "export { default as AppTour, MODULE_TOURS, ACTION_STEPS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } from '../factory-shell/src/AppTour';\n");
 	try {
 		const bundled = await esbuild.build({
 			entryPoints: [join(dir, 'entry.tsx')],
@@ -1598,16 +1804,16 @@ try {
 		});
 		const compiled = join(dir, 'bundle.mjs');
 		await writeFile(compiled, bundled.outputFiles[0].text);
-		const { AppTour, MODULE_TOURS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } = await import(pathToFileURL(compiled).href);
+		const { AppTour, MODULE_TOURS, ACTION_STEPS, tourForPath, isTourSeen, markTourSeen, readTourState, DEFAULT_TOUR_STATE, TOUR_STATE_KEY, TOUR_START_EVENT } = await import(pathToFileURL(compiled).href);
 		assert.equal(TOUR_START_EVENT, 'lidar:tour:start', 'evento do botão "Ver tutorial"');
 
-		// Dicionário: 5 módulos principais, cada um com o seu Deep Tour.
+		// Dicionário: 5 módulos principais, cada um com o seu Deep Tour (só passos percorríveis).
 		assert.equal(MODULE_TOURS.length, 5, 'há 5 Deep Tours (um por módulo principal)');
 		const byKey = Object.fromEntries(MODULE_TOURS.map(tour => [tour.key, tour]));
 		const expected = {
 			cmo: { path: '/plugins/virtual-cmo-v1', steps: 5 },
-			oraculo: { path: '/plugins/margin-calculator-v1', steps: 7 },
-			planejador: { path: '/plugins/construction-calculator-v1', steps: 5 },
+			oraculo: { path: '/plugins/margin-calculator-v1', steps: 3 },
+			planejador: { path: '/plugins/construction-calculator-v1', steps: 4 },
 			recibo: { path: '/plugins/quick-receipt-maker-v1', steps: 5 },
 			fiscal: { path: '/plugins/smart-invoice-helper-v1', steps: 4 }
 		};
@@ -1627,12 +1833,17 @@ try {
 		assert.match(byKey.cmo.steps[0].content, /Diretor de Marketing/);
 		assert.equal(byKey.cmo.steps[2].target, '.tour-cmo-produto');
 		assert.equal(byKey.cmo.steps[4].target, '.tour-cmo-gerar');
-		assert.equal(byKey.oraculo.steps[2].target, '.tour-oraculo-custo-direto');
-		assert.equal(byKey.oraculo.steps[3].target, '.tour-oraculo-custo-oculto');
-		assert.match(byKey.oraculo.steps[3].content, /gastos escondidos/);
-		assert.equal(byKey.oraculo.steps[6].target, '.tour-oraculo-calcular');
+		assert.equal(byKey.oraculo.steps[1].target, '.tour-oraculo-servico');
+		assert.equal(byKey.oraculo.steps[2].target, '.tour-oraculo-calcular');
 		assert.equal(byKey.planejador.steps[1].target, '.tour-planejador-tipo');
-		assert.equal(byKey.planejador.steps[4].target, '.tour-planejador-gerar');
+		assert.equal(byKey.planejador.steps[3].target, '.tour-planejador-gerar');
+
+		// Motor de avanço por fase: quais passos exigem interação (revelam a próxima fase).
+		assert.deepEqual(ACTION_STEPS.cmo, [1], 'CMO: escolher o objetivo é passo de ação');
+		assert.deepEqual(ACTION_STEPS.planejador, [1], 'Planejador: escolher o nicho é passo de ação');
+		assert.deepEqual(ACTION_STEPS.oraculo, [], 'Oráculo (discovery, tela única): sem passo de ação');
+		assert.deepEqual(ACTION_STEPS.fiscal, [], 'Fiscal (tela única): sem passo de ação');
+		assert.deepEqual(ACTION_STEPS.recibo, [], 'Recibo (tela única): sem passo de ação');
 		assert.equal(byKey.recibo.steps[1].target, '.tour-recibo-cliente');
 		assert.equal(byKey.recibo.steps[4].target, '.tour-recibo-gerar');
 		assert.equal(byKey.fiscal.steps[1].target, '.tour-fiscal-faturamento');

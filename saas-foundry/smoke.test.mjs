@@ -271,6 +271,7 @@ const forbidden = [
 	'./api/lib/security/apiGuard.ts',
 	'./api/lib/security/governance.ts',
 	'./api/session/route.ts',
+	'./api/governance/route.ts',
 	'./api/secure-invoices/route.ts',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
@@ -1645,6 +1646,84 @@ try {
 		globalThis.fetch = originalFetch;
 		delete process.env.JWT_SECRET;
 		delete process.env.FIREBASE_PROJECT_ID;
+		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+// 32f. Rota /api/governance: inbox de aprovações + auditoria sobre o Zero-Trust.
+{
+	const SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+	process.env.JWT_SECRET = SECRET;
+	const { default: jsonwebtoken } = await import('jsonwebtoken');
+	const sign = (claims) => jsonwebtoken.sign(claims, SECRET, { algorithm: 'HS256' });
+	const esbuild = await import('esbuild');
+
+	const build = await esbuild.build({
+		entryPoints: [new URL('./api/governance/route.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken', 'node:crypto']
+	});
+	const dir = await mkdtemp(new URL('./.smoke-governance-', import.meta.url).pathname);
+	const file = join(dir, 'route.mjs');
+	try {
+		await writeFile(file, build.outputFiles[0].text);
+		const { GET, POST, default: handler } = await import(pathToFileURL(file).href);
+		const url = 'https://lidarcore.example/api/governance?resource=approvals';
+		const auditUrl = 'https://lidarcore.example/api/governance?resource=audit';
+		const bearer = t => ({ authorization: `Bearer ${t}` });
+
+		const admin = sign({ uid: 'u_admin', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
+		const enterprise = sign({ uid: 'u_ent', tenantId: 'tnt_alpha', role: 'ROLE_ENTERPRISE_CLIENT' });
+		const pme = sign({ uid: 'u_pme', tenantId: 'tnt_alpha', role: 'ROLE_PME' });
+
+		// RBAC de rota: PME não acessa a governança Enterprise -> 403; anônimo -> 401.
+		assert.equal((await GET(new Request(url, { headers: bearer(pme) }))).status, 403);
+		assert.equal((await GET(new Request(url, {}))).status, 401);
+
+		// Admin: inbox semeada, todos os itens aprováveis (tem alçada em tudo).
+		const listRes = await GET(new Request(url, { headers: bearer(admin) }));
+		assert.equal(listRes.status, 200);
+		const list = await listRes.json();
+		assert.equal(list.tenantId, 'tnt_alpha');
+		assert.ok(list.count >= 3, 'inbox semeada com pendências de demonstração');
+		assert.ok(list.items.every(i => i.canApprove === true), 'admin tem alçada em todos');
+		const target = list.items[0];
+
+		// Segregação de função: quem SOLICITOU não pode aprovar (mesmo sendo admin).
+		const maker = sign({ uid: 'u_maker_demo', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' });
+		const selfApprove = await POST(new Request(url, { method: 'POST', headers: { ...bearer(maker), 'content-type': 'application/json' }, body: JSON.stringify({ id: target.id, approve: true }) }));
+		assert.equal(selfApprove.status, 403, 'solicitante não aprova o próprio pedido');
+
+		// Enterprise (sem permissão *:approve): motor barra a decisão -> 403.
+		const noPerm = await POST(new Request(url, { method: 'POST', headers: { ...bearer(enterprise), 'content-type': 'application/json' }, body: JSON.stringify({ id: target.id, approve: true }) }));
+		assert.equal(noPerm.status, 403, 'sem permissão de aprovação');
+
+		// Admin aprova de fato -> 200, e o item sai do inbox.
+		const decideRes = await POST(new Request(url, { method: 'POST', headers: { ...bearer(admin), 'content-type': 'application/json' }, body: JSON.stringify({ id: target.id, approve: true, reason: 'dentro do orçamento' }) }));
+		assert.equal(decideRes.status, 200);
+		assert.equal((await decideRes.json()).request.status, 'approved');
+		const after = await (await GET(new Request(url, { headers: bearer(admin) }))).json();
+		assert.equal(after.count, list.count - 1, 'pedido decidido saiu do inbox');
+
+		// Corpo forjado (campo extra) -> 422; pedido inexistente -> 404.
+		const injected = await POST(new Request(url, { method: 'POST', headers: { ...bearer(admin), 'content-type': 'application/json' }, body: JSON.stringify({ id: target.id, approve: true, tenantId: 'tnt_beta' }) }));
+		assert.equal(injected.status, 422);
+		const ghost = await POST(new Request(url, { method: 'POST', headers: { ...bearer(admin), 'content-type': 'application/json' }, body: JSON.stringify({ id: 'apr_inexistente', approve: true }) }));
+		assert.equal(ghost.status, 404);
+
+		// Auditoria: a decisão foi registrada; a cadeia verifica íntegra.
+		const auditRes = await GET(new Request(auditUrl, { headers: bearer(admin) }));
+		assert.equal(auditRes.status, 200);
+		const auditBody = await auditRes.json();
+		assert.equal(auditBody.intact, true, 'cadeia de auditoria íntegra');
+		assert.ok(auditBody.count >= 1 && auditBody.records.some(r => r.entityId === target.entityId), 'a aprovação entrou na trilha');
+		// Ver a trilha exige audit:view: Enterprise (sem a permissão) -> 403.
+		assert.equal((await GET(new Request(auditUrl, { headers: bearer(enterprise) }))).status, 403);
+
+		// resource desconhecido -> 400; método não suportado -> 405.
+		assert.equal((await GET(new Request('https://lidarcore.example/api/governance?resource=foo', { headers: bearer(admin) }))).status, 400);
+		assert.equal((await handler(new Request(url, { method: 'DELETE', headers: bearer(admin) }))).status, 405);
+	} finally {
+		delete process.env.JWT_SECRET;
 		await rm(dir, { recursive: true, force: true });
 	}
 }

@@ -53,11 +53,13 @@ export function ApprovalInbox(): React.JSX.Element {
 		try {
 			const response = await fetch(ENDPOINT, { headers: { accept: 'application/json' } });
 			if (response.status === 401 || response.status === 403) {
-				setState({ kind: 'error', message: 'Sua sessão não tem acesso à central de aprovações. Faça login novamente como controladoria.' });
+				setState({ kind: 'error', message: `Sua sessão não tem acesso à central de aprovações (HTTP ${response.status}). Faça login como controladoria.` });
 				return;
 			}
 			if (!response.ok) {
-				setState({ kind: 'error', message: 'Não foi possível carregar as aprovações agora. Tente novamente.' });
+				// Detalhe do servidor ajuda a distinguir config (500) de rota (404).
+				const detail = await response.json().then((b: { readonly error?: string }) => (b.error ? ` — ${b.error}` : '')).catch(() => '');
+				setState({ kind: 'error', message: `Não foi possível carregar as aprovações (HTTP ${response.status}${detail}).` });
 				return;
 			}
 			const body = (await response.json()) as InboxResponse;

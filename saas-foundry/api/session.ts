@@ -12,7 +12,7 @@
  *   DELETE /api/session                                                → limpa o cookie (logout)
  */
 
-import { buildSessionCookie, clearSessionCookie, extractBearer, mintSessionToken, principalFromFirebaseClaims, verifyFirebaseIdToken } from '../lib/security/apiGuard';
+import { buildSessionCookie, clearSessionCookie, extractBearer, mintSessionToken, principalFromFirebaseClaims, verifyFirebaseIdToken } from './lib/security/apiGuard';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };

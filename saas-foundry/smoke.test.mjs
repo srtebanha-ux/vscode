@@ -270,8 +270,8 @@ const forbidden = [
 	// Middleware Zero-Trust: autoridade de segurança, mas sem acoplar a Firebase.
 	'./api/lib/security/apiGuard.ts',
 	'./api/lib/security/governance.ts',
-	'./api/session/route.ts',
-	'./api/governance/route.ts',
+	'./api/session.ts',
+	'./api/governance.ts',
 	'./api/secure-invoices/route.ts',
 	'./engine-core/src/index.ts',
 	'./engine-core/src/ui.ts',
@@ -1600,7 +1600,7 @@ try {
 	globalThis.fetch = async () => ({ ok: true, json: async () => ({ [KID]: publicKey }), headers: { get: () => 'max-age=3600' } });
 
 	const build = await esbuild.build({
-		entryPoints: [new URL('./api/session/route.ts', import.meta.url).pathname],
+		entryPoints: [new URL('./api/session.ts', import.meta.url).pathname],
 		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken']
 	});
 	const dir = await mkdtemp(new URL('./.smoke-session-', import.meta.url).pathname);
@@ -1659,7 +1659,7 @@ try {
 	const esbuild = await import('esbuild');
 
 	const build = await esbuild.build({
-		entryPoints: [new URL('./api/governance/route.ts', import.meta.url).pathname],
+		entryPoints: [new URL('./api/governance.ts', import.meta.url).pathname],
 		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', external: ['jsonwebtoken', 'node:crypto']
 	});
 	const dir = await mkdtemp(new URL('./.smoke-governance-', import.meta.url).pathname);

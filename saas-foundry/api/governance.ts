@@ -16,14 +16,14 @@
  */
 
 import { z } from 'zod';
-import { withApiGuard, type Principal } from '../lib/security/apiGuard';
+import { withApiGuard, type Principal } from './lib/security/apiGuard';
 import {
 	ApprovalError,
 	InMemoryApprovalStore,
 	InMemoryAuditSink,
 	hasPermission,
 	type ApprovalPolicy
-} from '../lib/security/governance';
+} from './lib/security/governance';
 
 const ENTERPRISE_ACCESS = ['ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
 

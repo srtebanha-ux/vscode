@@ -93,7 +93,26 @@ export function handleMockGovernance(method: string, resource: string, body?: un
 	}
 
 	if (resource === 'approvals' && verb === 'POST') {
-		const input = (typeof body === 'string' ? safeParse(body) : body) as { id?: unknown; approve?: unknown } | null;
+		const input = (typeof body === 'string' ? safeParse(body) : body) as { action?: unknown; id?: unknown; approve?: unknown; entityType?: unknown; entityId?: unknown; amount?: unknown; source?: unknown } | null;
+		// action:submit -> nova OC (automação do Orchestrator) entra no inbox.
+		if (input && input.action === 'submit') {
+			const entityId = typeof input.entityId === 'string' && input.entityId ? input.entityId : `po-auto-${Date.now().toString(36)}`;
+			const amount = typeof input.amount === 'number' ? input.amount : null;
+			const entityType = typeof input.entityType === 'string' && input.entityType ? input.entityType : 'purchase_order';
+			if (amount === null) return { status: 422, body: { error: 'invalid_body', message: 'Informe { action:"submit", entityType, entityId, amount }.' } };
+			const created: MockApproval = {
+				id: entityId,
+				entityType,
+				module: 'Lidar Orchestrator (automação)',
+				requestedBy: typeof input.source === 'string' && input.source ? input.source : 'Orchestrator (automação)',
+				amount,
+				description: 'Rascunho de Ordem de Compra gerado por regra do Orchestrator a partir da previsão do BI.',
+				date: new Date().toISOString(),
+				approvePermission: 'purchase_order:approve'
+			};
+			pending = [created, ...pending];
+			return { status: 201, body: { request: created } };
+		}
 		const id = input && typeof input.id === 'string' ? input.id : null;
 		if (!id) return { status: 422, body: { error: 'invalid_body', message: 'Informe { id, approve }.' } };
 		const target = pending.find(p => p.id === id);

@@ -1293,6 +1293,43 @@ try {
 	assert.equal(loadForecast({ getItem: () => 'lixo{' }), null, 'previsão corrompida -> null');
 }
 
+// 28e. Orchestrator — DSL de automação (SE/ENTÃO): avaliação, idempotência, persistência
+{
+	const { conditionMatches, evaluateRules, forecastKey, describeCondition, loadRules, saveRules, loadForecastSnapshot, nextRuleId } =
+		await import('./modules-library/lidar-orchestrator/dist/automationRules.js');
+
+	// conditionMatches: operador + filtro de commodity
+	const cond = { metric: 'forecast.deltaPct', commodity: 'concreto 35MPa', op: 'gt', value: 0.05 };
+	assert.equal(conditionMatches(cond, { commodity: 'concreto 35MPa', deltaPct: 0.062, horizonLabel: '', confidence: 0.8 }), true);
+	assert.equal(conditionMatches(cond, { commodity: 'concreto 35MPa', deltaPct: 0.04, horizonLabel: '', confidence: 0.8 }), false, 'abaixo do limiar não casa');
+	assert.equal(conditionMatches(cond, { commodity: 'aço estrutural', deltaPct: 0.09, horizonLabel: '', confidence: 0.8 }), false, 'outra commodity não casa');
+	assert.equal(conditionMatches({ metric: 'forecast.deltaPct', op: 'gt', value: 0.05 }, { commodity: 'qualquer', deltaPct: 0.06, horizonLabel: '', confidence: 0.8 }), true, 'sem commodity = qualquer');
+	assert.match(describeCondition(cond), /concreto 35MPa > 5%/);
+
+	// evaluateRules: só habilitadas + casadas + ainda não disparadas para esta previsão
+	const rule = { id: 'r1', name: 'x', condition: cond, action: { type: 'create_po_draft', item: 'concreto', quantity: '7 m³', estimatedAmount: 45000 }, enabled: true, createdAt: 'x' };
+	const forecast = { commodity: 'concreto 35MPa', deltaPct: 0.062, horizonLabel: 'trim', confidence: 0.86 };
+	const fired = evaluateRules([rule], forecast);
+	assert.equal(fired.length, 1);
+	assert.equal(fired[0].action.estimatedAmount, 45000);
+	assert.equal(fired[0].forecastKey, forecastKey(forecast));
+	assert.equal(evaluateRules([{ ...rule, enabled: false }], forecast).length, 0, 'regra pausada não dispara');
+	assert.equal(evaluateRules([{ ...rule, lastFiredKey: forecastKey(forecast) }], forecast).length, 0, 'idempotência: não dispara 2x para a mesma previsão');
+	// Previsão diferente (novo delta) -> a chave muda -> pode disparar de novo
+	assert.equal(evaluateRules([{ ...rule, lastFiredKey: forecastKey(forecast) }], { ...forecast, deltaPct: 0.081 }).length, 1);
+
+	// Persistência de regras + leitura da previsão (contrato de storage com o BI)
+	const mem = new Map();
+	const storage = { getItem: k => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
+	saveRules([rule], storage);
+	assert.equal(loadRules(storage).length, 1);
+	assert.deepEqual(loadRules({ getItem: () => null }), [], 'sem regras -> []');
+	mem.set('lidar_forecast_v1', JSON.stringify({ commodity: 'cimento', deltaPct: 0.07, horizonLabel: 'trim', confidence: 0.8 }));
+	assert.equal(loadForecastSnapshot(storage).commodity, 'cimento');
+	assert.equal(loadForecastSnapshot({ getItem: () => 'lixo{' }), null, 'previsão corrompida -> null');
+	assert.match(nextRuleId(), /^rule_/);
+}
+
 // 29. Central de Descoberta Fiscal: feed proativo (Push) + mineração ativa (Pull)
 {
 	const { FiscalDiscoveryHub, filterRecords, sortRecords, FISCAL_RECORDS } = await import(
@@ -1990,6 +2027,21 @@ try {
 		assert.equal((await call({ method: 'POST', token: admin, resource: 'forecast', body: { commodity: 'x' } })).code, 422);
 		assert.equal((await call({ method: 'POST', resource: 'forecast', body: forecastPayload })).code, 401);
 		assert.ok((await call({ token: admin, resource: 'audit' })).body.records.some(r => r.action === 'forecast:diagnose'), 'previsão auditada');
+
+		// ── Reação em cadeia: Orchestrator submete OC (action:submit) na Central ─
+		const beforeSubmit = (await call({ token: admin })).body.count;
+		const submit = await call({ method: 'POST', token: admin, body: { action: 'submit', entityType: 'purchase_order', entityId: 'po-auto-teste', amount: 45000, source: 'Orchestrator (automação)' } });
+		assert.equal(submit.code, 201, 'OC da automação é criada');
+		assert.equal(submit.body.request.entityType, 'purchase_order');
+		const afterSubmit = await call({ token: admin });
+		assert.equal(afterSubmit.body.count, beforeSubmit + 1, 'a OC aparece na Central de Aprovações');
+		const auto = afterSubmit.body.items.find(i => i.entityId === 'po-auto-teste');
+		assert.ok(auto && auto.canApprove === true, 'admin pode aprovar a OC da automação');
+		// O solicitante é o bot -> um admin humano (≠ bot) aprova sem violar segregação.
+		assert.equal((await call({ method: 'POST', token: admin, body: { id: auto.id, approve: true } })).code, 200, 'aprovação humana da OC automática');
+		// Submit inválido (sem amount) -> 422; auditoria registra o submit.
+		assert.equal((await call({ method: 'POST', token: admin, body: { action: 'submit', entityType: 'purchase_order', entityId: 'x' } })).code, 422);
+		assert.ok((await call({ token: admin, resource: 'audit' })).body.records.some(r => r.action === 'approval:submit'), 'submit auditado');
 	} finally {
 		delete process.env.JWT_SECRET;
 		await rm(dir, { recursive: true, force: true });
@@ -2065,6 +2117,14 @@ try {
 		assert.match(mockFc.body.verdict.resumo, /concreto 35MPa/);
 		assert.match(mockFc.body.verdict.recomendacao, /Orchestrator/);
 		assert.equal(handleMockGovernance('POST', 'forecast', JSON.stringify({ commodity: 'x' })).status, 422);
+
+		// Reação em cadeia no mock: a OC da automação entra no inbox.
+		const countBefore = handleMockGovernance('GET', 'approvals').body.count;
+		const mockSubmit = handleMockGovernance('POST', 'approvals', JSON.stringify({ action: 'submit', entityType: 'purchase_order', entityId: 'po-mock-1', amount: 45000, source: 'Orchestrator (automação)' }));
+		assert.equal(mockSubmit.status, 201);
+		assert.equal(handleMockGovernance('GET', 'approvals').body.count, countBefore + 1, 'OC automática aparece no inbox mock');
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ action: 'submit', entityType: 'purchase_order', entityId: 'x' })).status, 422);
+		resetMockGovernance();
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}

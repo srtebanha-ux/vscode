@@ -44,9 +44,45 @@ bug-bounty-bot/
 | ------------------- | -------------------------------------------- |
 | `npm run dev`       | Executa em modo desenvolvimento (ts-node).   |
 | `npm run build`     | Compila TypeScript para `dist/`.             |
-| `npm start`         | Executa a versão compilada.                  |
+| `npm start`         | Compila e executa a versão de produção.      |
+| `npm run serve`     | Executa `dist/index.js` (sem recompilar).    |
 | `npm run typecheck` | Verifica tipos sem gerar saída.              |
+
+## Deploy (Railway)
+
+Este bot é um **worker de longa duração** (loop com `setInterval` + `sleep` de
+rate limit + cache em disco). Ele **não** deve rodar em plataformas serverless
+(como o Vercel), que matam o processo após alguns segundos e não mantêm o
+`setInterval` nem o filesystem entre invocações. Use um host de processo
+contínuo — o repositório já vem pronto para o **Railway** via `Dockerfile`.
+
+Passos:
+
+1. No [Railway](https://railway.app), crie um projeto a partir deste repositório.
+   Se for um monorepo, defina o **Root Directory** como `bug-bounty-bot`.
+2. O build usa o `Dockerfile` (configurado em `railway.json`); nada além disso
+   é necessário.
+3. Em **Variables**, defina as variáveis de ambiente:
+   - `GITHUB_TOKEN`
+   - `TELEGRAM_BOT_TOKEN`
+   - `TELEGRAM_CHAT_ID`
+   - `POLLING_INTERVAL_MS` (opcional, padrão `60000`)
+4. **Cache persistente (recomendado):** adicione um **Volume** e monte-o em
+   `/data`. A imagem já define `CACHE_FILE_PATH=/data/reported.json`, então o
+   cache de vazamentos já reportados sobrevive a reinícios/deploys e o bot não
+   reenvia alertas duplicados. Sem volume, o cache é efêmero e alertas antigos
+   podem ser reenviados após cada deploy.
+
+O mesmo `Dockerfile` funciona em **Render (Background Worker)**, **Fly.io** ou
+qualquer host Docker. Localmente:
+
+```bash
+docker build -t bug-bounty-bot .
+docker run --env-file .env -v "$(pwd)/.cache:/data" bug-bounty-bot
+```
 
 ## Status
 
-Etapa atual: **base estrutural** concluída. A lógica de varredura e as notificações serão implementadas nas próximas etapas.
+Sistema completo: scanner (`githubScanner`), notificador (`telegramNotifier`),
+cache persistente (`reportCache`) e loop de execução (`index.ts`). Pronto para
+deploy como worker contínuo.

@@ -17,9 +17,13 @@ export class ReportCache {
   private readonly filePath: string;
   private readonly reported: Set<string>;
 
-  constructor(filePath = resolve(process.cwd(), '.cache', 'reported.json')) {
-    this.filePath = filePath;
-    this.reported = ReportCache.load(filePath);
+  constructor(filePath?: string) {
+    // Prioridade: argumento explícito > env CACHE_FILE_PATH > padrão local.
+    // Em produção (ex: volume do Railway), aponte CACHE_FILE_PATH para o volume
+    // persistente (ex: /data/reported.json) para não reenviar alertas após deploy.
+    this.filePath =
+      filePath ?? process.env.CACHE_FILE_PATH ?? resolve(process.cwd(), '.cache', 'reported.json');
+    this.reported = ReportCache.load(this.filePath);
   }
 
   /** Gera a chave de deduplicação para um vazamento. */

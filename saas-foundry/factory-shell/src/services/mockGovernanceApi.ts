@@ -62,9 +62,25 @@ function seed(): MockApproval[] {
 // Estado em memória da sessão dev — aprovar/rejeitar remove do inbox.
 let pending: MockApproval[] = seed();
 
+interface MockFreeze {
+	readonly id: string;
+	readonly branchId?: string;
+	readonly costCenter?: string;
+	readonly reason: string;
+	readonly createdBy: string;
+	readonly createdAt: string;
+	status: 'active' | 'lifted';
+	liftedBy?: string;
+}
+
+let freezes: MockFreeze[] = [];
+let freezeSeq = 0;
+
 /** Reinicia o estado do mock (útil para testes). */
 export function resetMockGovernance(): void {
 	pending = seed();
+	freezes = [];
+	freezeSeq = 0;
 }
 
 /** Núcleo testável: resolve uma "requisição" à governança mockada. */
@@ -82,9 +98,49 @@ export function handleMockGovernance(method: string, resource: string, body?: un
 		if (!id) return { status: 422, body: { error: 'invalid_body', message: 'Informe { id, approve }.' } };
 		const target = pending.find(p => p.id === id);
 		if (!target) return { status: 404, body: { error: 'not_found', message: 'Pedido inexistente.' } };
+		// Trava Financeira (semântica do servidor): escopo congelado -> 423 no aprovar.
+		const activeFreeze = freezes.find(f => f.status === 'active');
+		if (input && input.approve !== false && activeFreeze) {
+			return { status: 423, body: { error: 'frozen', message: `Escopo sob Trava Financeira: ${activeFreeze.reason}`, freezeId: activeFreeze.id } };
+		}
 		pending = pending.filter(p => p.id !== id);
 		const status = input && input.approve === false ? 'rejected' : 'approved';
 		return { status: 200, body: { request: { id, status } } };
+	}
+
+	if (resource === 'freezes' && verb === 'GET') {
+		return { status: 200, body: { tenantId: 'tnt_demo', count: freezes.length, items: [...freezes], activeForMe: freezes.find(f => f.status === 'active') ?? null } };
+	}
+
+	if (resource === 'freezes' && verb === 'POST') {
+		const input = (typeof body === 'string' ? safeParse(body) : body) as { action?: unknown; id?: unknown; reason?: unknown; branchId?: unknown; costCenter?: unknown } | null;
+		const action = input && typeof input.action === 'string' ? input.action : 'create';
+		if (action === 'create') {
+			const reason = input && typeof input.reason === 'string' ? input.reason.trim() : '';
+			if (!reason) return { status: 422, body: { error: 'invalid_body', message: 'Informe um motivo (reason).' } };
+			freezeSeq += 1;
+			const freeze: MockFreeze = {
+				id: `frz-demo-${freezeSeq}`,
+				...(input && typeof input.branchId === 'string' && input.branchId ? { branchId: input.branchId } : {}),
+				...(input && typeof input.costCenter === 'string' && input.costCenter ? { costCenter: input.costCenter } : {}),
+				reason,
+				createdBy: 'Você (Controladoria)',
+				createdAt: new Date().toISOString(),
+				status: 'active'
+			};
+			freezes = [freeze, ...freezes];
+			return { status: 201, body: { freeze } };
+		}
+		if (action === 'lift') {
+			const id = input && typeof input.id === 'string' ? input.id : null;
+			const freeze = freezes.find(f => f.id === id);
+			if (!freeze) return { status: 404, body: { error: 'freeze_rejected', message: 'trava inexistente' } };
+			if (freeze.status !== 'active') return { status: 409, body: { error: 'freeze_rejected', message: 'trava já levantada (terminal)' } };
+			freeze.status = 'lifted';
+			freeze.liftedBy = 'Controller 2 (demo)';
+			return { status: 200, body: { freeze } };
+		}
+		return { status: 422, body: { error: 'invalid_body', message: 'action deve ser create ou lift.' } };
 	}
 
 	if (resource === 'audit' && verb === 'GET') {

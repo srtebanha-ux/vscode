@@ -32,7 +32,9 @@ export type Permission =
 	| 'invoice:approve' // Fiscal — maker-checker da emissão
 	| 'campaign:create' // Virtual CMO — gerar peça
 	| 'audit:view' // Ver a trilha de auditoria
-	| 'rbac:manage'; // Administrar papéis/permissões por filial
+	| 'rbac:manage' // Administrar papéis/permissões por filial
+	| 'freeze:create' // Criar Trava Financeira (congela despesas de um escopo)
+	| 'freeze:lift'; // Levantar uma Trava Financeira
 
 /**
  * Mapa cargo → permissões. Mantém os 3 cargos do JWT (apiGuard.SERVER_ROLES) e
@@ -56,7 +58,9 @@ export const ROLE_PERMISSIONS: Readonly<Record<ServerRole, readonly Permission[]
 		'invoice:approve',
 		'campaign:create',
 		'audit:view',
-		'rbac:manage'
+		'rbac:manage',
+		'freeze:create',
+		'freeze:lift'
 	]
 };
 
@@ -312,5 +316,124 @@ export class InMemoryApprovalStore implements ApprovalStore {
 		request.decidedAt = now().toISOString();
 		if (reason !== undefined) request.reason = reason;
 		return request;
+	}
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 4) Trava Financeira Global (Freeze) — congela despesas de um escopo
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Governança de crise: ao detectar um vazamento (ex.: Radar aponta custo
+ * invisível numa filial), a Controladoria CONGELA o escopo — nenhuma nova
+ * aprovação de despesa passa até a trava ser levantada. Regras cravadas:
+ *   1) Escopo: filial inteira ou cirúrgico (centro de custo).
+ *   2) Permissões finas: freeze:create para travar, freeze:lift para levantar.
+ *   3) Segregação: quem criou a trava NÃO a levanta sozinho.
+ *   4) Enforcement no servidor: despesa em escopo travado -> 423 Locked,
+ *      ANTES do maker-checker — o front apenas espelha o cadeado.
+ */
+
+export type FreezeStatus = 'active' | 'lifted';
+
+/** Uma Trava Financeira persistida. */
+export interface Freeze {
+	readonly id: string;
+	readonly tenantId: string;
+	/** Filial congelada. Ausente = trava do tenant inteiro. */
+	readonly branchId?: string;
+	/** Centro de custo específico. Ausente = escopo inteiro da filial/tenant. */
+	readonly costCenter?: string;
+	/** Motivo obrigatório — vira o texto do cadeado na tela do gerente. */
+	readonly reason: string;
+	readonly createdBy: string;
+	readonly createdAt: string;
+	status: FreezeStatus;
+	liftedBy?: string;
+	liftedAt?: string;
+}
+
+export class FreezeError extends Error {}
+
+export interface CreateFreezeInput {
+	readonly tenantId: string;
+	readonly branchId?: string;
+	readonly costCenter?: string;
+	readonly reason: string;
+	readonly createdBy: Pick<Principal, 'userId'>;
+}
+
+/** Porta de armazenamento (produção: tabela `freezes` escopada por tenant). */
+export interface FreezeStore {
+	create(input: CreateFreezeInput, now?: () => Date): Promise<Freeze>;
+	list(tenantId: string): Promise<readonly Freeze[]>;
+	/** A trava ativa que cobre este escopo (se houver). */
+	activeFor(tenantId: string, branchId?: string, costCenter?: string): Promise<Freeze | null>;
+	lift(id: string, lifter: Principal, now?: () => Date): Promise<Freeze>;
+}
+
+let freezeCounter = 0;
+const nextFreezeId = (): string => {
+	freezeCounter += 1;
+	return `frz_${Date.now().toString(36)}_${freezeCounter.toString(36)}`;
+};
+
+/**
+ * Uma trava cobre uma despesa quando o escopo da trava é IGUAL ou MAIS AMPLO:
+ * trava sem branchId congela o tenant inteiro; trava de filial sem costCenter
+ * congela todos os centros de custo da filial.
+ */
+export function freezeCovers(freeze: Pick<Freeze, 'branchId' | 'costCenter' | 'status'>, branchId?: string, costCenter?: string): boolean {
+	if (freeze.status !== 'active') return false;
+	if (freeze.branchId !== undefined && freeze.branchId !== branchId) return false;
+	if (freeze.costCenter !== undefined && freeze.costCenter !== costCenter) return false;
+	return true;
+}
+
+/** MOCK em memória — mesma semântica da porta de produção. */
+export class InMemoryFreezeStore implements FreezeStore {
+	private readonly items = new Map<string, Freeze>();
+
+	async create(input: CreateFreezeInput, now: () => Date = () => new Date()): Promise<Freeze> {
+		if (!input.reason.trim()) throw new FreezeError('trava exige um motivo');
+		const freeze: Freeze = {
+			id: nextFreezeId(),
+			tenantId: input.tenantId,
+			...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
+			...(input.costCenter !== undefined ? { costCenter: input.costCenter } : {}),
+			reason: input.reason.trim(),
+			createdBy: input.createdBy.userId,
+			createdAt: now().toISOString(),
+			status: 'active'
+		};
+		this.items.set(freeze.id, freeze);
+		return freeze;
+	}
+
+	async list(tenantId: string): Promise<readonly Freeze[]> {
+		return [...this.items.values()].filter(f => f.tenantId === tenantId);
+	}
+
+	async activeFor(tenantId: string, branchId?: string, costCenter?: string): Promise<Freeze | null> {
+		for (const freeze of this.items.values()) {
+			if (freeze.tenantId === tenantId && freezeCovers(freeze, branchId, costCenter)) return freeze;
+		}
+		return null;
+	}
+
+	async lift(id: string, lifter: Principal, now: () => Date = () => new Date()): Promise<Freeze> {
+		const freeze = this.items.get(id);
+		if (!freeze) throw new FreezeError('trava inexistente');
+		if (freeze.status !== 'active') throw new FreezeError('trava já levantada (terminal)');
+		// Isolamento: só o próprio tenant.
+		if (lifter.tenantId !== freeze.tenantId) throw new FreezeError('trava fora do escopo do tenant');
+		// Segregação de função: quem travou não destrava sozinho.
+		if (lifter.userId === freeze.createdBy) throw new FreezeError('segregação de função: quem criou a trava não pode levantá-la');
+		// Permissão fina.
+		if (!hasPermission(lifter, 'freeze:lift')) throw new FreezeError('sem a permissão freeze:lift');
+		freeze.status = 'lifted';
+		freeze.liftedBy = lifter.userId;
+		freeze.liftedAt = now().toISOString();
+		return freeze;
 	}
 }

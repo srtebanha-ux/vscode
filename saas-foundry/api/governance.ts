@@ -24,7 +24,7 @@ function governanceRatePolicy(): RateLimitPolicy {
 	const windowMs = Number(process.env['GOVERNANCE_RATE_WINDOW_MS'] ?? '60000');
 	return { limit: Number.isFinite(limit) && limit > 0 ? limit : 240, windowMs: Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60000 };
 }
-import { ApprovalError, FreezeError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, getGovernanceKv, hasPermission, type ApprovalPolicy } from './lib/security/governance';
+import { ApprovalError, FreezeError, IngestError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, InMemoryIngestStore, getGovernanceKv, hasPermission, type ApprovalPolicy } from './lib/security/governance';
 
 const ENTERPRISE_ACCESS = ['ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
 
@@ -38,6 +38,7 @@ const kv = getGovernanceKv();
 const approvals = new InMemoryApprovalStore(kv);
 const audit = new InMemoryAuditSink(kv);
 const freezes = new InMemoryFreezeStore(kv);
+const ingestStore = new InMemoryIngestStore(kv);
 
 /** Pedidos de demonstração (em produção nascem do fluxo real de cada módulo). */
 const DEMO_REQUESTS: readonly { readonly entityType: string; readonly entityId: string; readonly amount: number; readonly policy: ApprovalPolicy }[] = [
@@ -379,7 +380,20 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 			res.status(200).json({ tenantId: principal.tenantId, count: items.length, items, activeForMe: active });
 			return;
 		}
-		res.status(400).json({ error: 'unknown_resource', message: 'resource deve ser approvals, audit ou freezes.' });
+		if (resource === 'cube') {
+			// O Cube financeiro server-side (produto da ingestão). Requer data:ingest.
+			if (!hasPermission(principal, 'data:ingest')) {
+				res.status(403).json({ error: 'forbidden', message: 'Permissão ausente: data:ingest.' });
+				return;
+			}
+			const cube = await ingestStore.getCube(principal.tenantId);
+			res.status(200).json({
+				tenantId: principal.tenantId,
+				cube: cube ? { generatedAt: cube.generatedAt, recordCount: cube.recordCount, cellCount: cube.cells.length, cells: cube.cells } : null
+			});
+			return;
+		}
+		res.status(400).json({ error: 'unknown_resource', message: 'resource deve ser approvals, audit, freezes ou cube.' });
 		return;
 	}
 
@@ -422,6 +436,43 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 			metadata: { findings: findings.length, engine: diagnosis.engine }
 		});
 		res.status(200).json({ diagnosis });
+		return;
+	}
+
+	// ── POST resource=ingest: ingestão server-side de um lote do ERP no Cube ───
+	// Humanos com data:ingest OU o Cron (identidade de máquina) alimentam o Cube
+	// durável. O teto de payload (guardrail) já barrou lotes gigantes; aqui o lote
+	// é agregado de forma idempotente (id repetido não reconta) e atômica.
+	if (resource === 'ingest') {
+		if (!hasPermission(principal, 'data:ingest')) {
+			res.status(403).json({ error: 'forbidden', message: 'Permissão ausente: data:ingest.' });
+			return;
+		}
+		const body = (typeof req.body === 'string' ? safeJson(req.body) : req.body) as Record<string, unknown> | null;
+		const rows = body && Array.isArray(body['records']) ? (body['records'] as unknown[]) : null;
+		if (!rows || rows.length === 0 || rows.length > 5000) {
+			res.status(422).json({ error: 'invalid_body', message: 'Informe { records: [...] } com 1 a 5000 registros do ERP.' });
+			return;
+		}
+		try {
+			const summary = await ingestStore.ingest(principal.tenantId, rows);
+			await audit.append({
+				tenantId: principal.tenantId,
+				...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+				actorUserId: principal.userId,
+				action: 'data:ingest',
+				entityType: 'financial_cube',
+				entityId: principal.tenantId,
+				metadata: { accepted: summary.accepted, duplicates: summary.duplicates, errors: summary.errors.length, recordCount: summary.recordCount, via: principal.isMachine ? 'cron' : 'user' }
+			});
+			res.status(200).json({ tenantId: principal.tenantId, ...summary });
+		} catch (error) {
+			if (error instanceof IngestError) {
+				res.status(422).json({ error: 'invalid_body', message: error.message });
+				return;
+			}
+			throw error;
+		}
 		return;
 	}
 

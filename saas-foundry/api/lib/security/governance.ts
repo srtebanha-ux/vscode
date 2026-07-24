@@ -172,7 +172,8 @@ export type Permission =
 	| 'audit:view' // Ver a trilha de auditoria
 	| 'rbac:manage' // Administrar papéis/permissões por filial
 	| 'freeze:create' // Criar Trava Financeira (congela despesas de um escopo)
-	| 'freeze:lift'; // Levantar uma Trava Financeira
+	| 'freeze:lift' // Levantar uma Trava Financeira
+	| 'data:ingest'; // Ingerir lote do ERP no servidor (Cube durável) — humanos e o Cron
 
 /**
  * Mapa cargo → permissões. Mantém os 3 cargos do JWT (apiGuard.SERVER_ROLES) e
@@ -198,7 +199,8 @@ export const ROLE_PERMISSIONS: Readonly<Record<ServerRole, readonly Permission[]
 		'audit:view',
 		'rbac:manage',
 		'freeze:create',
-		'freeze:lift'
+		'freeze:lift',
+		'data:ingest'
 	]
 };
 
@@ -609,5 +611,162 @@ export class InMemoryFreezeStore implements FreezeStore {
 			return store;
 		});
 		return map[id]!;
+	}
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 5) Ingestão server-side do ERP — Cube financeiro durável e idempotente
+// ════════════════════════════════════════════════════════════════════════════
+//
+// A ingestão do ERP nascia SÓ no cliente (erpIngest.ts -> localStorage): frágil,
+// não-auditável e invisível ao Cron. Aqui o servidor recebe lotes de registros
+// (JSON compacto; o parse do CSV segue no cliente/worker), agrega no CUBE por
+// tenant e PERSISTE no KV — idempotente por id (reingestão não dobra números) e
+// atômico (mutate/CAS). O Cron (identidade de máquina) reingere de madrugada sem
+// sessão de usuário. O produto é o mesmo agregado que o Radar de Prejuízo lê.
+
+export interface IngestRecord {
+	readonly id: string;
+	readonly branchId: string;
+	readonly supplier: string;
+	readonly category: string;
+	readonly valor: number;
+	readonly frete: number;
+	readonly imposto: number;
+	readonly date: string;
+}
+
+export interface CubeCell {
+	readonly branchId: string;
+	readonly supplier: string;
+	readonly category: string;
+	count: number;
+	total: number;
+	freteTotal: number;
+	impostoTotal: number;
+}
+
+/** Cube persistido por tenant: agregado + ids aceitos p/ idempotência entre lotes. */
+export interface PersistedCube {
+	readonly tenantId: string;
+	generatedAt: string;
+	recordCount: number;
+	/** Ids já contabilizados — dedupe entre chamadas (mock; produção: unique constraint). */
+	acceptedIds: string[];
+	cells: CubeCell[];
+}
+
+export interface IngestRowError {
+	readonly index: number;
+	readonly reason: string;
+}
+
+export interface IngestSummary {
+	readonly accepted: number;
+	readonly duplicates: number;
+	readonly errors: readonly IngestRowError[];
+	/** Total de registros no cube depois deste lote. */
+	readonly recordCount: number;
+	readonly cellCount: number;
+	readonly branches: readonly string[];
+}
+
+export class IngestError extends Error {}
+
+/** Valida/tipa um registro cru do JSON (mesmo contrato do CSV do ERP). */
+export function parseIngestRecord(raw: unknown, index: number): IngestRecord | IngestRowError {
+	if (typeof raw !== 'object' || raw === null) return { index, reason: 'registro não é objeto' };
+	const r = raw as Record<string, unknown>;
+	const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+	const id = str(r['id']);
+	const branchId = str(r['branchId']);
+	const supplier = str(r['supplier']);
+	const category = str(r['category']) || 'geral';
+	const date = str(r['date']);
+	if (!id) return { index, reason: 'id vazio' };
+	if (!branchId) return { index, reason: 'branchId vazio' };
+	if (!supplier) return { index, reason: 'supplier vazio' };
+	const valor = Number(r['valor']);
+	const frete = Number(r['frete']);
+	const imposto = Number(r['imposto']);
+	if (!Number.isFinite(valor) || valor < 0) return { index, reason: 'valor inválido' };
+	if (!Number.isFinite(frete) || frete < 0) return { index, reason: 'frete inválido' };
+	if (!Number.isFinite(imposto) || imposto < 0) return { index, reason: 'imposto inválido' };
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { index, reason: 'data inválida' };
+	return { id, branchId, supplier, category, valor, frete, imposto, date };
+}
+
+/** Teto do set de ids de idempotência no mock (o histórico antigo já está agregado). */
+export const MAX_ACCEPTED_IDS = 200000;
+
+/** Store do Cube financeiro persistido no KV, por tenant, atômico e idempotente. */
+export class InMemoryIngestStore {
+	constructor(private readonly kv: KvPort = new InMemoryKv()) {}
+	private key(tenantId: string): string {
+		return `gov:cube:${tenantId}`;
+	}
+
+	async getCube(tenantId: string): Promise<PersistedCube | null> {
+		return this.kv.getJson<PersistedCube>(this.key(tenantId));
+	}
+
+	/**
+	 * Agrega um lote no cube do tenant e persiste (mutate/CAS). Idempotente: id já
+	 * aceito vira `duplicate` e não reconta. Registro inválido vai em `errors` sem
+	 * abortar o lote (ingestão resiliente — um CSV sujo não perde o lote inteiro).
+	 */
+	async ingest(tenantId: string, rows: readonly unknown[], now: () => Date = () => new Date()): Promise<IngestSummary> {
+		if (rows.length === 0) throw new IngestError('lote vazio');
+		// Valida FORA do mutate (puro, sem I/O); o mutate só faz a fusão atômica.
+		const parsed: IngestRecord[] = [];
+		const errors: IngestRowError[] = [];
+		for (let i = 0; i < rows.length; i += 1) {
+			const rec = parseIngestRecord(rows[i], i);
+			if ('reason' in rec) errors.push(rec);
+			else parsed.push(rec);
+		}
+		let accepted = 0;
+		let duplicates = 0;
+		const cube = await mutate<PersistedCube>(this.kv, this.key(tenantId), current => {
+			const base: PersistedCube = current ?? { tenantId, generatedAt: now().toISOString(), recordCount: 0, acceptedIds: [], cells: [] };
+			const seen = new Set(base.acceptedIds);
+			const cells = new Map(base.cells.map(c => [`${c.branchId}|${c.supplier}|${c.category}`, { ...c }]));
+			accepted = 0; // recomputado a cada tentativa do CAS (o vencedor manda)
+			duplicates = 0;
+			const newIds: string[] = [];
+			for (const rec of parsed) {
+				if (seen.has(rec.id)) {
+					duplicates += 1;
+					continue;
+				}
+				seen.add(rec.id);
+				newIds.push(rec.id);
+				accepted += 1;
+				const k = `${rec.branchId}|${rec.supplier}|${rec.category}`;
+				const cell = cells.get(k) ?? { branchId: rec.branchId, supplier: rec.supplier, category: rec.category, count: 0, total: 0, freteTotal: 0, impostoTotal: 0 };
+				cell.count += 1;
+				cell.total += rec.valor;
+				cell.freteTotal += rec.frete;
+				cell.impostoTotal += rec.imposto;
+				cells.set(k, cell);
+			}
+			const allIds = [...base.acceptedIds, ...newIds];
+			const trimmedIds = allIds.length > MAX_ACCEPTED_IDS ? allIds.slice(allIds.length - MAX_ACCEPTED_IDS) : allIds;
+			return {
+				tenantId,
+				generatedAt: now().toISOString(),
+				recordCount: base.recordCount + accepted,
+				acceptedIds: trimmedIds,
+				cells: [...cells.values()]
+			};
+		});
+		return {
+			accepted,
+			duplicates,
+			errors,
+			recordCount: cube.recordCount,
+			cellCount: cube.cells.length,
+			branches: [...new Set(cube.cells.map(c => c.branchId))].sort()
+		};
 	}
 }

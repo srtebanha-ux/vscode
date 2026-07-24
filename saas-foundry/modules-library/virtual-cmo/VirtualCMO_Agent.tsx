@@ -51,6 +51,15 @@ export const CMO_GOALS: readonly CmoGoal[] = [
 	}
 ];
 
+/** Teto dos campos livres do CMO — barra prompt-injection colada em produto/cliente. */
+export const MAX_CMO_FIELD = 80;
+
+/** Campo válido: 3 a 80 chars. O curto/estruturado é a defesa contra jailbreak (sem prompt aberto). */
+export function validCmoField(value: string): boolean {
+	const trimmed = value.trim();
+	return trimmed.length >= 3 && trimmed.length <= MAX_CMO_FIELD;
+}
+
 /** Kit de campanha entregue pelo CMO (formato único para qualquer objetivo). */
 export interface CampaignKit {
 	readonly diagnostico: string;
@@ -248,8 +257,8 @@ function CmoAgent(): React.JSX.Element {
 
 	const run = async (): Promise<void> => {
 		if (!goal) return;
-		if (product.trim().length < 3 || customer.trim().length < 3) {
-			toast.error('Conta pra gente o que você vende e para quem — são só esses dois campos.');
+		if (!validCmoField(product) || !validCmoField(customer)) {
+			toast.error(`Conta pra gente o que você vende e para quem — de 3 a ${MAX_CMO_FIELD} caracteres cada.`);
 			return;
 		}
 		setThinking(true);
@@ -360,6 +369,7 @@ function CmoAgent(): React.JSX.Element {
 							type="text"
 							value={product}
 							onChange={event => setProduct(event.target.value)}
+							maxLength={MAX_CMO_FIELD}
 							placeholder="ex.: marmitas fitness, corte de cabelo, tatuagem…"
 							className={`tour-cmo-produto ${inputClasses}`}
 						/>
@@ -371,6 +381,7 @@ function CmoAgent(): React.JSX.Element {
 							type="text"
 							value={customer}
 							onChange={event => setCustomer(event.target.value)}
+							maxLength={MAX_CMO_FIELD}
 							placeholder="ex.: mulheres que treinam, moradores do bairro…"
 							className={`tour-cmo-publico ${inputClasses}`}
 						/>

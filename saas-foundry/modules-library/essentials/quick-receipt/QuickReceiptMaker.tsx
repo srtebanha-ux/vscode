@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { GuidedTour, hasScopes, useCoreService, useToast, useTrackEvent, type TourStep } from '@foundry/engine-core/ui';
+import { GuidedTour, hasScopes, onlyDigits, useCoreService, useToast, useTrackEvent, type TourStep } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { motion } from 'framer-motion';
 import { CalendarDays, Download, FileText, ShieldAlert, User, Wrench } from 'lucide-react';
@@ -18,13 +18,74 @@ const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' 
 
 interface ReceiptData {
 	readonly client: string;
+	readonly doc: string;
 	readonly service: string;
 	readonly amount: string;
 	readonly date: string;
 }
 
+/** Teto de sanidade do recibo — barra `1e9` e valores absurdos (fuzzing de tipagem). */
+export const MAX_RECEIPT_AMOUNT = 10_000_000;
+
 function escapeHtml(value: string): string {
 	return value.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
+}
+
+// ── Documento do pagador (CPF/CNPJ) — validade legal do recibo ───────────────
+
+function maskCpf(d: string): string {
+	const p = [d.slice(0, 3), d.slice(3, 6), d.slice(6, 9), d.slice(9, 11)].filter(Boolean);
+	let out = p[0] ?? '';
+	if (p[1]) out += `.${p[1]}`;
+	if (p[2]) out += `.${p[2]}`;
+	if (p[3]) out += `-${p[3]}`;
+	return out;
+}
+
+function maskCnpj(d: string): string {
+	let out = d.slice(0, 2);
+	if (d.length > 2) out += `.${d.slice(2, 5)}`;
+	if (d.length > 5) out += `.${d.slice(5, 8)}`;
+	if (d.length > 8) out += `/${d.slice(8, 12)}`;
+	if (d.length > 12) out += `-${d.slice(12, 14)}`;
+	return out;
+}
+
+/** Máscara progressiva CPF (000.000.000-00) até 11 dígitos; CNPJ acima. Emojis/lixo caem fora. */
+export function maskReceiptDoc(raw: string): string {
+	const d = onlyDigits(raw).slice(0, 14);
+	return d.length <= 11 ? maskCpf(d) : maskCnpj(d);
+}
+
+function validCpf(d: string): boolean {
+	if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return false;
+	const digit = (count: number): number => {
+		let sum = 0;
+		for (let i = 0; i < count; i += 1) sum += Number(d[i]) * (count + 1 - i);
+		const rest = (sum * 10) % 11;
+		return rest >= 10 ? 0 : rest;
+	};
+	return digit(9) === Number(d[9]) && digit(10) === Number(d[10]);
+}
+
+function validCnpj(d: string): boolean {
+	if (d.length !== 14 || /^(\d)\1{13}$/.test(d)) return false;
+	const digit = (count: number): number => {
+		const weights = count === 12 ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2] : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+		let sum = 0;
+		for (let i = 0; i < count; i += 1) sum += Number(d[i]) * (weights[i] ?? 0);
+		const rest = sum % 11;
+		return rest < 2 ? 0 : 11 - rest;
+	};
+	return digit(12) === Number(d[12]) && digit(13) === Number(d[13]);
+}
+
+/** Valida CPF (11) ou CNPJ (14) por dígito verificador — recibo sem documento válido não sai. */
+export function isValidReceiptDoc(raw: string): boolean {
+	const d = onlyDigits(raw);
+	if (d.length === 11) return validCpf(d);
+	if (d.length === 14) return validCnpj(d);
+	return false;
 }
 
 function formatDate(iso: string): string {
@@ -62,6 +123,7 @@ function printReceipt(data: ReceiptData): void {
 			<h1>Recibo de Prestação de Serviço</h1>
 			<div class="value">${escapeHtml(brl.format(value))}</div>
 			<div class="row"><div class="k">Recebemos de</div><div class="v">${escapeHtml(data.client || '—')}</div></div>
+			<div class="row"><div class="k">CPF / CNPJ</div><div class="v">${escapeHtml(maskReceiptDoc(data.doc) || '—')}</div></div>
 			<div class="row"><div class="k">Referente a</div><div class="v">${escapeHtml(data.service || '—')}</div></div>
 			<div class="row"><div class="k">Data</div><div class="v">${escapeHtml(formatDate(data.date))}</div></div>
 			<div class="sign">Assinatura</div>
@@ -72,10 +134,11 @@ function printReceipt(data: ReceiptData): void {
 function ReceiptMaker(): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
-	const [data, setData] = useState<ReceiptData>({ client: '', service: '', amount: '', date: new Date().toISOString().slice(0, 10) });
+	const [data, setData] = useState<ReceiptData>({ client: '', doc: '', service: '', amount: '', date: new Date().toISOString().slice(0, 10) });
 	const [acknowledged, setAcknowledged] = useState(false);
 	const set = (patch: Partial<ReceiptData>): void => setData(prev => ({ ...prev, ...patch }));
 	const value = useMemo(() => amountValue(data.amount), [data.amount]);
+	const docOk = useMemo(() => isValidReceiptDoc(data.doc), [data.doc]);
 
 	const download = (): void => {
 		if (!acknowledged) {
@@ -83,6 +146,14 @@ function ReceiptMaker(): React.JSX.Element {
 		}
 		if (!data.client.trim() || value <= 0) {
 			toast.error('Informe o nome do cliente e um valor válido antes de baixar.');
+			return;
+		}
+		if (value > MAX_RECEIPT_AMOUNT) {
+			toast.error(`Valor acima do limite do recibo (${brl.format(MAX_RECEIPT_AMOUNT)}). Revise o valor.`);
+			return;
+		}
+		if (!docOk) {
+			toast.error('Informe um CPF ou CNPJ válido do pagador — sem ele o recibo não tem validade legal.');
 			return;
 		}
 		printReceipt(data);
@@ -107,6 +178,18 @@ function ReceiptMaker(): React.JSX.Element {
 					<label className="block">
 						<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-700"><User className="h-4 w-4 text-gray-400" aria-hidden /> Nome do Cliente</span>
 						<input value={data.client} onChange={e => set({ client: e.target.value })} placeholder="Ex.: Marcos Andrade" className="tour-recibo-cliente w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm shadow-sm outline-none transition-all focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100" />
+					</label>
+					<label className="block">
+						<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-700"><User className="h-4 w-4 text-gray-400" aria-hidden /> CPF / CNPJ do Cliente</span>
+						<input
+							value={maskReceiptDoc(data.doc)}
+							onChange={e => set({ doc: e.target.value })}
+							inputMode="numeric"
+							placeholder="000.000.000-00"
+							aria-invalid={data.doc.length > 0 && !docOk}
+							className={`w-full rounded-xl border bg-white px-3.5 py-2.5 text-sm shadow-sm outline-none transition-all focus:ring-2 ${data.doc.length > 0 && !docOk ? 'border-rose-300 focus:border-rose-400 focus:ring-rose-100' : 'border-gray-200 focus:border-indigo-400 focus:ring-indigo-100'}`}
+						/>
+						{data.doc.length > 0 && !docOk ? <span className="mt-1 block text-xs text-rose-500">CPF/CNPJ inválido — confira os dígitos.</span> : <span className="mt-1 block text-xs text-gray-400">Obrigatório para a validade legal do recibo.</span>}
 					</label>
 					<label className="block">
 						<span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-gray-700"><Wrench className="h-4 w-4 text-gray-400" aria-hidden /> Descrição do Serviço</span>
@@ -165,6 +248,10 @@ function ReceiptMaker(): React.JSX.Element {
 						<div className="py-3">
 							<dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-gray-400">Recebemos de</dt>
 							<dd className="mt-0.5 text-sm font-semibold text-gray-900">{data.client || '—'}</dd>
+						</div>
+						<div className="py-3">
+							<dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-gray-400">CPF / CNPJ</dt>
+							<dd className="mt-0.5 text-sm font-semibold text-gray-900">{maskReceiptDoc(data.doc) || '—'}</dd>
 						</div>
 						<div className="py-3">
 							<dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-gray-400">Referente a</dt>

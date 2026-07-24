@@ -24,7 +24,7 @@ function governanceRatePolicy(): RateLimitPolicy {
 	const windowMs = Number(process.env['GOVERNANCE_RATE_WINDOW_MS'] ?? '60000');
 	return { limit: Number.isFinite(limit) && limit > 0 ? limit : 240, windowMs: Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60000 };
 }
-import { ApprovalError, FreezeError, IngestError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, InMemoryIngestStore, getGovernanceKv, hasPermission, sanitizeAiList, sanitizeAiText, type ApprovalPolicy } from './lib/security/governance';
+import { ApprovalError, FreezeError, IngestError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, InMemoryIngestStore, ROLE_PERMISSIONS, getGovernanceKv, hasPermission, permissionsOf, sanitizeAiList, sanitizeAiText, type ApprovalPolicy } from './lib/security/governance';
 
 const ENTERPRISE_ACCESS = ['ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
 
@@ -395,7 +395,21 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 			});
 			return;
 		}
-		res.status(400).json({ error: 'unknown_resource', message: 'resource deve ser approvals, audit, freezes ou cube.' });
+		if (resource === 'rbac') {
+			// Matriz cargo×permissão (o servidor é a autoridade; o front só a espelha).
+			// Administrar RBAC exige rbac:manage — não é qualquer Enterprise.
+			if (!hasPermission(principal, 'rbac:manage')) {
+				res.status(403).json({ error: 'forbidden', message: 'Permissão ausente: rbac:manage.' });
+				return;
+			}
+			res.status(200).json({
+				tenantId: principal.tenantId,
+				roles: ROLE_PERMISSIONS,
+				me: { userId: principal.userId, role: principal.role, permissions: permissionsOf(principal) }
+			});
+			return;
+		}
+		res.status(400).json({ error: 'unknown_resource', message: 'resource deve ser approvals, audit, freezes, cube ou rbac.' });
 		return;
 	}
 

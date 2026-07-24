@@ -62,7 +62,8 @@ export const MODULE_DIRECTIVES: Readonly<Record<LidarModule, string>> = {
 		'ESCOPO: você entrega APENAS TEXTO de marketing. Você NÃO gera imagens, vídeos, animações 3D nem código, e não mantém "consistência de aparência de personagem". Se o usuário pedir imagem/3D/aparência de personagem, entregue os textos e oriente a usar uma ferramenta de imagem à parte — não tente descrever ou gerar a imagem.'
 	].join(' '),
 	FISCAL: [
-		'[ASSISTENTE FISCAL] Explique a diferença dos impostos (ISS, IBS/CBS) de forma simples, focando no valor LÍQUIDO que sobra no bolso do empreendedor.'
+		'[ASSISTENTE FISCAL] Explique a diferença dos impostos (ISS, IBS/CBS) de forma simples, focando no valor LÍQUIDO que sobra no bolso do empreendedor.',
+		'Você é um GUIA de referência, NÃO substitui o contador: nunca afirme alíquota como definitiva. Se um NCM ou dado não existir na tabela fornecida, diga que NÃO encontrou — é proibido inventar classificação fiscal.'
 	].join(' ')
 };
 

@@ -419,6 +419,13 @@ try {
 		assert.match(SYSTEM_PROMPTS.CMO, /APENAS TEXTO/);
 		assert.match(SYSTEM_PROMPTS.CMO, /NÃO gera imagens/);
 		assert.match(SYSTEM_PROMPTS.CMO, /consistência de aparência de personagem/);
+		// P3 — diretriz FISCAL: guia de referência, NCM inexistente não inventa classificação
+		const { buildSystemPrompt } = await import('@foundry/engine-core/ai');
+		const fiscalPrompt = buildSystemPrompt('FISCAL');
+		assert.match(fiscalPrompt, /SEGURANÇA/, 'FISCAL também herda a trava sistêmica');
+		assert.match(fiscalPrompt, /GUIA de referência/);
+		assert.match(fiscalPrompt, /proibido inventar classificação fiscal/);
+		assert.match(buildSystemPrompt('ORACULO'), /SEGURANÇA/, 'Oráculo (via persona) herda a trava sistêmica');
 		// P0 — trava de compliance CVM no cérebro do CFO.
 		assert.match(SYSTEM_PROMPTS.CFO, /CVM/);
 		assert.match(SYSTEM_PROMPTS.CFO, /PROIBIDO recomendar a compra\/venda de ativos/);
@@ -814,7 +821,7 @@ try {
 // 30. Assistente Fiscal Inteligente: motor ISS/ICMS por localização + Reforma IBS/CBS
 {
 	const mod = await import('./modules-library/essentials/smart-invoice/dist/SmartInvoiceHelper.js');
-	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, ISS_REFERENCE, IBGE_BASE, REFORM_REFERENCE, maskCpfCnpj, isValidCpfCnpj, computeSettlement, buildRpsXml } = mod;
+	const { default: SmartInvoiceHelper, computeInvoiceTax, resolveScope, interstateIcms, MERCHANT_PROFILE, ISS_REFERENCE, IBGE_BASE, REFORM_REFERENCE, maskCpfCnpj, isValidCpfCnpj, computeSettlement, buildRpsXml, maskNcm, lookupNcm, NCM_TABLE } = mod;
 
 	const withServices = (Component, grantedScopes) =>
 		renderToStaticMarkup(createElement(CoreServicesContext.Provider, { value: { namespace: 'ns_ess', grantedScopes, api: fakeApi } }, createElement(Component)));
@@ -890,6 +897,19 @@ try {
 	assert.equal(isValidCpfCnpj('111.444.777-35'), true);
 	assert.equal(isValidCpfCnpj('111.444.777-00'), false); // DV errado
 	assert.equal(isValidCpfCnpj('111.111.111-11'), false); // todos iguais
+
+	// ── NCM (P3): máscara + classificação por tabela (inexistente é sinalizado) ──
+	assert.equal(maskNcm('25232910'), '2523.29.10', 'máscara 0000.00.00');
+	assert.equal(maskNcm('🔥🚀2523'), '2523', 'emoji cai fora, só dígitos entram');
+	const ncmOk = lookupNcm('2523.29.10');
+	assert.equal(ncmOk.complete, true);
+	assert.equal(ncmOk.found, true);
+	assert.match(ncmOk.label, /Cimento/);
+	const ncmGhost = lookupNcm('9999.99.99');
+	assert.equal(ncmGhost.complete, true);
+	assert.equal(ncmGhost.found, false, 'NCM inexistente -> found:false (a UI avisa e trava)');
+	assert.equal(lookupNcm('2523').complete, false, 'NCM incompleto não classifica');
+	assert.ok(Object.keys(NCM_TABLE).length >= 5, 'tabela de referência semeada');
 	assert.equal(isValidCpfCnpj('11.222.333/0001-81'), true);
 	assert.equal(isValidCpfCnpj('11.222.333/0001-99'), false); // DV errado
 	assert.equal(isValidCpfCnpj('123'), false); // tamanho inválido

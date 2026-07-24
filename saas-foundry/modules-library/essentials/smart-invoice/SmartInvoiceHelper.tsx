@@ -87,6 +87,44 @@ export function resolveScope(origin: MerchantProfile, client: City): OperationSc
 	return origin.city === client.name && origin.uf === client.uf ? 'interna' : 'externa';
 }
 
+// ── NCM (Nomenclatura Comum do Mercosul): máscara + validação por tabela ──────
+
+/** Tabela de referência de NCMs comuns (mock — produção: base oficial completa). */
+export const NCM_TABLE: Readonly<Record<string, string>> = {
+	'25232910': 'Cimento Portland comum',
+	'72142000': 'Barras de aço (vergalhão)',
+	'85234990': 'Suportes de software/mídia',
+	'27160000': 'Energia elétrica',
+	'39172300': 'Tubos de PVC',
+	'44071000': 'Madeira em bruto (pinho)',
+	'94036000': 'Móveis de madeira',
+	'22021000': 'Águas e refrigerantes'
+};
+
+/** Máscara 0000.00.00 (8 dígitos) do NCM. Emojis/lixo caem fora (só dígitos). */
+export function maskNcm(raw: string): string {
+	const d = onlyDigits(raw).slice(0, 8);
+	let out = d.slice(0, 4);
+	if (d.length > 4) out += `.${d.slice(4, 6)}`;
+	if (d.length > 6) out += `.${d.slice(6, 8)}`;
+	return out;
+}
+
+export interface NcmLookup {
+	/** 8 dígitos preenchidos (código completo). */
+	readonly complete: boolean;
+	readonly found: boolean;
+	readonly label: string | null;
+}
+
+/** Classifica um NCM contra a tabela. NCM inexistente -> found:false (a UI avisa e trava a emissão). */
+export function lookupNcm(raw: string): NcmLookup {
+	const d = onlyDigits(raw);
+	if (d.length < 8) return { complete: false, found: false, label: null };
+	const label = NCM_TABLE[d] ?? null;
+	return { complete: true, found: label !== null, label };
+}
+
 export interface TaxLine {
 	readonly label: string;
 	readonly rate: number; // %
@@ -412,7 +450,9 @@ function Helper(): React.JSX.Element {
 	const [client, setClient] = useState<City | null>(null);
 	const [kind, setKind] = useState<OperationKind>('servico');
 	const [doc, setDoc] = useState('');
+	const [ncm, setNcm] = useState('');
 	const [valor, setValor] = useState('');
+	const ncmInfo = useMemo(() => lookupNcm(ncm), [ncm]);
 	const [descricao, setDescricao] = useState('');
 	const [emitting, setEmitting] = useState(false);
 	const [emitted, setEmitted] = useState<string | null>(null);
@@ -622,6 +662,27 @@ function Helper(): React.JSX.Element {
 							))}
 						</div>
 					</div>
+
+					{kind === 'produto' && (
+						<Field icon={ReceiptText} label="NCM do Produto">
+							<input
+								type="text"
+								inputMode="numeric"
+								aria-label="NCM do Produto"
+								value={maskNcm(ncm)}
+								onChange={event => setNcm(event.target.value)}
+								placeholder="0000.00.00"
+								className={`${inputBase} font-mono ${ncmInfo.complete && !ncmInfo.found ? 'border-red-300 focus:border-red-400 focus:ring-2 focus:ring-red-100' : ncmInfo.found ? 'border-emerald-300 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100' : 'border-gray-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'}`}
+							/>
+							{ncmInfo.complete && !ncmInfo.found ? (
+								<span role="alert" className="mt-1.5 block text-xs font-medium text-red-500">NCM não encontrado na tabela — confira o código antes de emitir.</span>
+							) : ncmInfo.found ? (
+								<span className="mt-1.5 block text-xs font-medium text-emerald-600">{ncmInfo.label}</span>
+							) : (
+								<span className="mt-1.5 block text-xs text-gray-400">8 dígitos do NCM — recomendado para produtos.</span>
+							)}
+						</Field>
+					)}
 
 					<Field icon={User} label="CPF/CNPJ do Cliente">
 						<input

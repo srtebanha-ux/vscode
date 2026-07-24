@@ -1298,7 +1298,8 @@ try {
 	const {
 		conditionMatches, evaluateRules, forecastKey, describeCondition, loadRules, saveRules, loadForecastSnapshot, nextRuleId,
 		quantizeDelta, evaluateWithBreaker, DEFAULT_ORCHESTRATOR_CONFIG,
-		loadOrchestratorConfig, saveOrchestratorConfig, loadFireLedger, saveFireLedger
+		loadOrchestratorConfig, saveOrchestratorConfig, loadFireLedger, saveFireLedger,
+		describeAction, ACTION_LABELS
 	} = await import('./modules-library/lidar-orchestrator/dist/automationRules.js');
 
 	// conditionMatches: operador + filtro de commodity
@@ -1382,6 +1383,18 @@ try {
 	saveFireLedger({ r1: ['2026-01-01T00:00:00.000Z'] }, storageO);
 	assert.deepEqual(loadFireLedger(storageO), { r1: ['2026-01-01T00:00:00.000Z'] }, 'ledger persiste');
 	assert.deepEqual(loadFireLedger({ getItem: () => '[1,2]' }), {}, 'ledger não-objeto -> {}');
+
+	// ── RuleActions novas: união discriminada (OC / Congelar / Auditoria) ──────
+	assert.deepEqual(Object.keys(ACTION_LABELS).sort(), ['create_po_draft', 'freeze_supplier', 'open_audit_case'], 'três tipos de ação');
+	assert.match(describeAction({ type: 'create_po_draft', item: 'brita', quantity: '7 m³', estimatedAmount: 45000 }), /OC de 7 m³ · brita · R\$/);
+	assert.match(describeAction({ type: 'freeze_supplier', supplier: 'TransLog Sul', reason: 'x' }), /congelar o fornecedor TransLog Sul/);
+	assert.match(describeAction({ type: 'freeze_supplier', supplier: 'TransLog Sul', reason: 'x', branchId: 'filial-sul' }), /\(filial-sul\)/);
+	assert.match(describeAction({ type: 'open_audit_case', note: 'revisar contrato' }), /abrir caso de auditoria: revisar contrato/);
+	// O disjuntor/avaliador é agnóstico ao tipo: uma regra de congelar dispara igual.
+	const freezeRule = { id: 'rf', name: 'congela', condition: cond, action: { type: 'freeze_supplier', supplier: 'TransLog Sul', reason: 'auto' }, enabled: true, createdAt: 'x' };
+	const firedFreeze = evaluateWithBreaker([freezeRule], { commodity: 'concreto 35MPa', deltaPct: 0.09, horizonLabel: '', confidence: 0.8 }, DEFAULT_ORCHESTRATOR_CONFIG, {});
+	assert.equal(firedFreeze.fired.length, 1, 'regra de congelar passa pelo disjuntor como qualquer outra');
+	assert.equal(firedFreeze.fired[0].action.type, 'freeze_supplier', 'a ação disparada preserva o tipo');
 }
 
 // 29. Central de Descoberta Fiscal: feed proativo (Push) + mineração ativa (Pull)
@@ -2323,6 +2336,19 @@ try {
 		assert.equal((await call({ method: 'POST', token: admin, body: { action: 'submit', entityType: 'purchase_order', entityId: 'x' } })).code, 422);
 		assert.ok((await call({ token: admin, resource: 'audit' })).body.records.some(r => r.action === 'approval:submit'), 'submit auditado');
 
+		// ── RuleAction open_audit_case via rota: abre caso na trilha imutável ──
+		const caseRes = await call({ method: 'POST', token: admin, resource: 'audit', body: { note: 'Revisar contrato de frete da Filial Sul após gatilho de alta' } });
+		assert.equal(caseRes.code, 201, 'admin abre um caso de auditoria');
+		assert.ok(caseRes.body.case && caseRes.body.case.id, 'caso tem id');
+		// Nota obrigatória (vazia/gigante) -> 422; Enterprise (sem audit:view) -> 403.
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'audit', body: { note: '   ' } })).code, 422);
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'audit', body: { note: 'x'.repeat(281) } })).code, 422);
+		assert.equal((await call({ method: 'POST', token: enterprise, resource: 'audit', body: { note: 'tentativa' } })).code, 403);
+		// O caso entrou na trilha (action audit:case_opened) e ela segue íntegra.
+		const auditWithCase = await call({ token: admin, resource: 'audit' });
+		assert.ok(auditWithCase.body.records.some(r => r.action === 'audit:case_opened'), 'caso registrado na trilha');
+		assert.equal(auditWithCase.body.intact, true, 'trilha continua íntegra após abrir caso');
+
 		// ── Ingestão server-side via rota: Cron (máquina) alimenta, humano lê ──
 		// Token de serviço (identidade de máquina) com cargo Admin -> tem data:ingest.
 		const machine = sign({ sub: 'service:cron-ingest', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER', machine: true });
@@ -2415,6 +2441,11 @@ try {
 
 		// audit: envelope íntegro; resource desconhecido -> 400.
 		assert.equal(handleMockGovernance('GET', 'audit').body.intact, true);
+		// Mock do open_audit_case (preview): nota válida -> 201 com caso; vazia -> 422.
+		const mkCase = handleMockGovernance('POST', 'audit', JSON.stringify({ note: 'Revisar contrato de frete' }));
+		assert.equal(mkCase.status, 201);
+		assert.ok(mkCase.body.case.id, 'mock devolve o caso aberto');
+		assert.equal(handleMockGovernance('POST', 'audit', JSON.stringify({ note: '  ' })).status, 422);
 		assert.equal(handleMockGovernance('GET', 'foo').status, 400);
 
 		resetMockGovernance();

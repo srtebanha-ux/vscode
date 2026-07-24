@@ -39,13 +39,35 @@ export interface RuleCondition {
 	readonly value: number;
 }
 
-export interface RuleAction {
-	readonly type: 'create_po_draft';
-	readonly item: string;
-	readonly quantity: string;
-	/** Valor estimado (R$) do rascunho de OC. */
-	readonly estimatedAmount: number;
-}
+/**
+ * A ação (ENTÃO) é uma UNIÃO DISCRIMINADA: cada tipo carrega só os campos que
+ * fazem sentido para ele. A reação em cadeia deixa de ser só "gerar OC" — agora
+ * a mesma DSL pode CONGELAR um fornecedor (Trava Financeira) ou ABRIR um caso de
+ * auditoria, cada um caindo no motor de governança correspondente no servidor.
+ */
+export type RuleActionType = 'create_po_draft' | 'freeze_supplier' | 'open_audit_case';
+
+export type RuleAction =
+	| {
+			readonly type: 'create_po_draft';
+			readonly item: string;
+			readonly quantity: string;
+			/** Valor estimado (R$) do rascunho de OC. */
+			readonly estimatedAmount: number;
+	  }
+	| {
+			readonly type: 'freeze_supplier';
+			/** Fornecedor a congelar (vira o motivo/escopo da Trava). */
+			readonly supplier: string;
+			readonly reason: string;
+			/** Filial do escopo da trava; ausente = tenant inteiro. */
+			readonly branchId?: string;
+	  }
+	| {
+			readonly type: 'open_audit_case';
+			/** Nota do caso — entra na trilha imutável de auditoria. */
+			readonly note: string;
+	  };
 
 export interface AutomationRule {
 	readonly id: string;
@@ -207,6 +229,25 @@ export function describeCondition(condition: RuleCondition): string {
 	const alvo = condition.commodity ?? 'qualquer insumo';
 	return `previsão de ${alvo} ${ops[condition.op]} ${(condition.value * 100).toFixed(0)}%`;
 }
+
+/** Texto humano da ação (para a UI e o log) — cobre todos os tipos da união. */
+export function describeAction(action: RuleAction): string {
+	switch (action.type) {
+		case 'create_po_draft':
+			return `gerar OC de ${action.quantity} · ${action.item} · R$ ${Math.round(action.estimatedAmount).toLocaleString('pt-BR')}`;
+		case 'freeze_supplier':
+			return `congelar o fornecedor ${action.supplier}${action.branchId ? ` (${action.branchId})` : ''}`;
+		case 'open_audit_case':
+			return `abrir caso de auditoria: ${action.note}`;
+	}
+}
+
+/** Rótulo curto do tipo de ação (para chips/selects na UI). */
+export const ACTION_LABELS: Readonly<Record<RuleActionType, string>> = {
+	create_po_draft: 'Gerar Ordem de Compra',
+	freeze_supplier: 'Congelar Fornecedor',
+	open_audit_case: 'Abrir Caso de Auditoria'
+};
 
 // ── Persistência (localStorage; produção: tabela automation_rules) ───────────
 

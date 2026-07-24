@@ -4,6 +4,8 @@ import type { SecurityScope } from '@foundry/shared';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, ArrowRight, CheckCircle2, Database, GitBranch, Hexagon, Landmark, Lock, Play, Plus, ShieldAlert, Trash2, Webhook, Zap, type LucideIcon } from 'lucide-react';
 import {
+	ACTION_LABELS,
+	describeAction,
 	describeCondition,
 	evaluateWithBreaker,
 	loadFireLedger,
@@ -15,7 +17,9 @@ import {
 	saveOrchestratorConfig,
 	saveRules,
 	type AutomationRule,
-	type OrchestratorConfig
+	type OrchestratorConfig,
+	type RuleAction,
+	type RuleActionType
 } from './automationRules.js';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['read:integrations', 'write:integrations'];
@@ -101,6 +105,50 @@ interface FireLog {
  * persistida que casa a previsão do BI e submete o rascunho de OC direto na
  * Central de Aprovações da Controladoria.
  */
+/** Extrai a mensagem de erro do corpo da resposta (ou cai no status). */
+async function responseMessage(response: Response): Promise<string> {
+	const body = (await response.json().catch(() => ({}))) as { readonly message?: string };
+	return body.message ?? String(response.status);
+}
+
+/**
+ * Despacha UMA ação disparada para o motor de governança correspondente no
+ * servidor. Cada tipo da união cai numa rota diferente — é a reação em cadeia
+ * indo além da OC: congelar fornecedor (Trava) e abrir caso (Auditoria).
+ */
+async function dispatchRuleAction(action: RuleAction): Promise<{ readonly ok: boolean; readonly message: string }> {
+	const headers = { 'content-type': 'application/json' };
+	if (action.type === 'create_po_draft') {
+		const response = await fetch('/api/governance?resource=approvals', {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({ action: 'submit', entityType: 'purchase_order', entityId: `po-auto-${Date.now().toString(36)}`, amount: action.estimatedAmount, source: 'Orchestrator (automação)' })
+		});
+		return response.status === 201
+			? { ok: true, message: `OC de ${action.quantity} (${brl.format(action.estimatedAmount)}) enviada à Central de Aprovações.` }
+			: { ok: false, message: `falha ao submeter a OC (${await responseMessage(response)}).` };
+	}
+	if (action.type === 'freeze_supplier') {
+		const response = await fetch('/api/governance?resource=freezes', {
+			method: 'POST',
+			headers,
+			body: JSON.stringify({ action: 'create', reason: action.reason, ...(action.branchId ? { branchId: action.branchId } : {}) })
+		});
+		return response.status === 201
+			? { ok: true, message: `fornecedor ${action.supplier} congelado — Trava Financeira criada.` }
+			: { ok: false, message: `falha ao congelar (${await responseMessage(response)}).` };
+	}
+	// open_audit_case
+	const response = await fetch('/api/governance?resource=audit', {
+		method: 'POST',
+		headers,
+		body: JSON.stringify({ note: action.note })
+	});
+	return response.status === 201
+		? { ok: true, message: 'caso de auditoria aberto na trilha imutável.' }
+		: { ok: false, message: `falha ao abrir caso (${await responseMessage(response)}).` };
+}
+
 function AutomationStudio(): React.JSX.Element {
 	const toast = useToast();
 	const [rules, setRules] = useState<AutomationRule[]>(() => loadRules());
@@ -118,9 +166,13 @@ function AutomationStudio(): React.JSX.Element {
 	// Form
 	const [commodity, setCommodity] = useState<string>('concreto 35MPa');
 	const [threshold, setThreshold] = useState('5');
+	const [actionType, setActionType] = useState<RuleActionType>('create_po_draft');
 	const [item, setItem] = useState('concreto 35MPa + brita mista');
 	const [qty, setQty] = useState('7 m³');
 	const [amount, setAmount] = useState('45000');
+	const [supplier, setSupplier] = useState('TransLog Sul');
+	const [branchId, setBranchId] = useState('');
+	const [note, setNote] = useState('Revisar contrato de frete após gatilho de alta');
 
 	const persist = useCallback((next: AutomationRule[]) => {
 		setRules(next);
@@ -129,22 +181,47 @@ function AutomationStudio(): React.JSX.Element {
 
 	const addRule = useCallback(() => {
 		const value = Number(threshold) / 100;
-		const amt = Number(amount);
-		if (!Number.isFinite(value) || !item.trim() || !Number.isFinite(amt) || amt < 0) {
-			toast.error('Preencha limiar, item e valor válidos.');
+		if (!Number.isFinite(value)) {
+			toast.error('Informe um limiar válido.');
 			return;
+		}
+		let action: RuleAction;
+		if (actionType === 'create_po_draft') {
+			const amt = Number(amount);
+			if (!item.trim() || !Number.isFinite(amt) || amt < 0) {
+				toast.error('Preencha item e valor válidos.');
+				return;
+			}
+			action = { type: 'create_po_draft', item: item.trim(), quantity: qty.trim(), estimatedAmount: amt };
+		} else if (actionType === 'freeze_supplier') {
+			if (!supplier.trim()) {
+				toast.error('Informe o fornecedor a congelar.');
+				return;
+			}
+			action = {
+				type: 'freeze_supplier',
+				supplier: supplier.trim(),
+				reason: `Congelamento automático: ${supplier.trim()} após gatilho de ${threshold}% em ${commodity}`,
+				...(branchId.trim() ? { branchId: branchId.trim() } : {})
+			};
+		} else {
+			if (!note.trim()) {
+				toast.error('Informe a nota do caso de auditoria.');
+				return;
+			}
+			action = { type: 'open_audit_case', note: note.trim() };
 		}
 		const rule: AutomationRule = {
 			id: nextRuleId(),
-			name: `Alta de ${commodity} > ${threshold}% → OC ${qty}`,
+			name: `${commodity} > ${threshold}% → ${ACTION_LABELS[actionType]}`,
 			condition: { metric: 'forecast.deltaPct', commodity, op: 'gt', value },
-			action: { type: 'create_po_draft', item: item.trim(), quantity: qty.trim(), estimatedAmount: amt },
+			action,
 			enabled: true,
 			createdAt: new Date().toISOString()
 		};
 		persist([rule, ...rules]);
 		toast.success('Regra de automação criada e ativa.');
-	}, [threshold, amount, item, commodity, qty, rules, persist, toast]);
+	}, [threshold, actionType, amount, item, qty, supplier, branchId, note, commodity, rules, persist, toast]);
 
 	const toggle = useCallback((id: string) => persist(rules.map(r => (r.id === id ? { ...r, enabled: !r.enabled } : r))), [rules, persist]);
 	const remove = useCallback((id: string) => persist(rules.filter(r => r.id !== id)), [rules, persist]);
@@ -187,30 +264,20 @@ function AutomationStudio(): React.JSX.Element {
 		const updated = [...rules];
 		try {
 			for (const f of fired) {
-				const response = await fetch('/api/governance?resource=approvals', {
-					method: 'POST',
-					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({
-						action: 'submit',
-						entityType: 'purchase_order',
-						entityId: `po-auto-${Date.now().toString(36)}`,
-						amount: f.action.estimatedAmount,
-						source: 'Orchestrator (automação)'
-					})
-				});
-				if (response.status === 201) {
+				// Cada tipo de ação cai no motor de governança certo (OC, Trava ou Auditoria).
+				const result = await dispatchRuleAction(f.action);
+				if (result.ok) {
 					const idx = updated.findIndex(r => r.id === f.rule.id);
 					if (idx >= 0) updated[idx] = { ...updated[idx], lastFiredKey: f.forecastKey } as AutomationRule;
-					addFire(`✓ ${f.rule.name} — OC de ${f.action.quantity} (${brl.format(f.action.estimatedAmount)}) enviada à Central de Aprovações.`, true);
+					addFire(`✓ ${f.rule.name} — ${result.message}`, true);
 				} else {
-					const body = (await response.json().catch(() => ({}))) as { readonly message?: string };
-					addFire(`✗ ${f.rule.name} — falha ao submeter a OC (${body.message ?? response.status}).`, false);
+					addFire(`✗ ${f.rule.name} — ${result.message}`, false);
 				}
 			}
 			persist(updated);
-			toast.success(`${fired.length} automação(ões) disparada(s) — verifique a Central de Aprovações.`);
+			toast.success(`${fired.length} automação(ões) disparada(s) — verifique os módulos de governança.`);
 		} catch {
-			addFire('✗ Falha de conexão ao submeter a Ordem de Compra.', false);
+			addFire('✗ Falha de conexão ao disparar a automação.', false);
 			toast.error('Falha de conexão ao disparar a automação.');
 		} finally {
 			setRunning(false);
@@ -247,10 +314,27 @@ function AutomationStudio(): React.JSX.Element {
 				<div>
 					<span className="text-[11px] font-semibold uppercase tracking-wide text-emerald-300">ENTÃO</span>
 					<div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-zinc-300">
-						gerar OC de
-						<input value={qty} onChange={e => setQty(e.target.value)} data-testid="rule-qty" className="w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-emerald-500/60 focus:outline-none" />
-						<input value={item} onChange={e => setItem(e.target.value)} data-testid="rule-item" className="min-w-[10rem] flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-emerald-500/60 focus:outline-none" />
-						<span className="inline-flex items-center">R$<input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" data-testid="rule-amount" className="ml-1 w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-right text-xs text-zinc-200 focus:border-emerald-500/60 focus:outline-none" /></span>
+						<select value={actionType} onChange={e => setActionType(e.target.value as RuleActionType)} data-testid="rule-action-type" className="rounded-lg border border-emerald-700/50 bg-zinc-900 px-2 py-1 text-xs font-semibold text-emerald-200 focus:border-emerald-500/60 focus:outline-none">
+							{(Object.keys(ACTION_LABELS) as RuleActionType[]).map(t => <option key={t} value={t}>{ACTION_LABELS[t]}</option>)}
+						</select>
+						{actionType === 'create_po_draft' ? (
+							<>
+								<input value={qty} onChange={e => setQty(e.target.value)} aria-label="quantidade" data-testid="rule-qty" className="w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-emerald-500/60 focus:outline-none" />
+								<input value={item} onChange={e => setItem(e.target.value)} aria-label="item" data-testid="rule-item" className="min-w-[9rem] flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-emerald-500/60 focus:outline-none" />
+								<span className="inline-flex items-center">R$<input value={amount} onChange={e => setAmount(e.target.value)} inputMode="decimal" aria-label="valor" data-testid="rule-amount" className="ml-1 w-20 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-right text-xs text-zinc-200 focus:border-emerald-500/60 focus:outline-none" /></span>
+							</>
+						) : actionType === 'freeze_supplier' ? (
+							<>
+								fornecedor
+								<input value={supplier} onChange={e => setSupplier(e.target.value)} aria-label="fornecedor" data-testid="rule-supplier" className="min-w-[9rem] flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-emerald-500/60 focus:outline-none" />
+								<input value={branchId} onChange={e => setBranchId(e.target.value)} placeholder="filial (opcional)" aria-label="filial" data-testid="rule-branch" className="w-28 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-emerald-500/60 focus:outline-none" />
+							</>
+						) : (
+							<>
+								nota
+								<input value={note} onChange={e => setNote(e.target.value)} aria-label="nota do caso" data-testid="rule-note" className="min-w-[12rem] flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 focus:border-emerald-500/60 focus:outline-none" />
+							</>
+						)}
 					</div>
 				</div>
 			</div>
@@ -294,7 +378,7 @@ function AutomationStudio(): React.JSX.Element {
 								<p className="flex flex-wrap items-center gap-1.5 text-zinc-300">
 									<span className="rounded bg-indigo-500/15 px-1.5 py-0.5 font-semibold text-indigo-300">SE</span> {describeCondition(rule.condition)}
 									<ArrowRight className="h-3 w-3 text-zinc-600" aria-hidden />
-									<span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-300">ENTÃO</span> OC {rule.action.quantity} · {rule.action.item} · {brl.format(rule.action.estimatedAmount)}
+									<span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-semibold text-emerald-300">ENTÃO</span> {describeAction(rule.action)}
 								</p>
 								{rule.lastFiredKey ? <p className="mt-0.5 text-[10px] text-zinc-600">já disparada para a previsão atual (idempotente)</p> : null}
 							</div>

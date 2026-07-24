@@ -22,6 +22,8 @@ interface CfoDiagnosis {
 	readonly ruptureDay: number;
 	readonly priceIncreasePct: number;
 	readonly cutAmount: number;
+	/** Receita/saldo negativo detectado — o diagnóstico NÃO fabrica runway positivo. */
+	readonly insolvent: boolean;
 }
 
 interface CutItem {
@@ -36,17 +38,49 @@ const CUT_PLAN: readonly CutItem[] = [
 ];
 
 /**
- * Diagnóstico simulado — determinístico sobre o contexto colado. Em
- * produção, o texto vai à LLM via Serverless Function do Core
- * (nunca direto do browser) e volta neste mesmo formato.
+ * Trava de compliance (CVM/SEC): detecta pedido de RECOMENDAÇÃO DE INVESTIMENTO.
+ * O CFO analisa caixa — NUNCA indica ação/cripto/câmbio para comprar. Barrado na
+ * origem (front) E no cérebro (system prompt), defesa em profundidade.
  */
-function analyze(context: string): CfoDiagnosis {
+export function detectInvestmentAdvice(context: string): boolean {
+	const patterns: readonly RegExp[] = [
+		/\bquais?\s+a[çc][õo]es\b/i,
+		/comprar\b[^.]{0,30}\b(a[çc][õo]es|criptos?|bitcoin|d[óo]lar|bolsa)\b/i,
+		/\b(a[çc][õo]es|criptos?|bitcoin|bolsa)\b[^.]{0,30}\bcomprar\b/i,
+		/\b(investir|aplicar)\b[^.]{0,30}\b(bolsa|a[çc][õo]es|cripto|day.?trade)\b/i,
+		/\bficar rico\b/i
+	];
+	return patterns.some(re => re.test(context));
+}
+
+/**
+ * Detecta receita/saldo NEGATIVO no contexto colado. Sem isto, o diagnóstico
+ * determinístico ignorava o sinal e cuspia um runway positivo para uma empresa
+ * insolvente (confiança financeira fabricada) — a brecha mais grave do módulo.
+ */
+export function hasNegativeRevenue(context: string): boolean {
+	const t = context.toLowerCase();
+	if (/\b(faturamento|receita|caixa|saldo|lucro)\b[^\n]{0,40}-\s?(r\$)?\s?\d/.test(t)) return true;
+	if (/r\$\s?-\s?\d/.test(t)) return true;
+	if (/-\s?r\$\s?\d/.test(t)) return true;
+	if (/\b(preju[íi]zo|no vermelho|falid[oa]|insolv[êe]nte|quebrad[oa])\b/.test(t)) return true;
+	return false;
+}
+
+/**
+ * Diagnóstico simulado — determinístico sobre o contexto colado. Em produção,
+ * o texto vai à LLM via Serverless Function do Core (nunca direto do browser).
+ * Agora RESPEITA o sinal de insolvência: receita negativa NÃO vira runway positivo.
+ */
+export function analyze(context: string): CfoDiagnosis {
+	const insolvent = hasNegativeRevenue(context);
 	const seed = context.length % 7;
 	return {
-		runwayDays: 42 - seed,
-		ruptureDay: 15,
+		runwayDays: insolvent ? 0 : 42 - seed,
+		ruptureDay: insolvent ? 1 : 15,
 		priceIncreasePct: 8.5,
-		cutAmount: CUT_PLAN.reduce((sum, item) => sum + item.amount, 0)
+		cutAmount: CUT_PLAN.reduce((sum, item) => sum + item.amount, 0),
+		insolvent
 	};
 }
 
@@ -78,6 +112,7 @@ function CfoAgent(): React.JSX.Element {
 	const [context, setContext] = useState('');
 	const [thinking, setThinking] = useState(false);
 	const [diagnosis, setDiagnosis] = useState<CfoDiagnosis | null>(null);
+	const [blocked, setBlocked] = useState(false);
 	const [cutPlanOpen, setCutPlanOpen] = useState(false);
 
 	const run = async (): Promise<void> => {
@@ -87,8 +122,16 @@ function CfoAgent(): React.JSX.Element {
 		}
 		setThinking(true);
 		setDiagnosis(null);
+		setBlocked(false);
 		setCutPlanOpen(false);
 		await new Promise(resolve => setTimeout(resolve, 1400)); // latência da LLM (simulada)
+		// Trava de compliance ANTES de qualquer diagnóstico: pedido de investimento -> bloqueio CVM.
+		if (detectInvestmentAdvice(context)) {
+			setBlocked(true);
+			setThinking(false);
+			track('Cálculo Realizado', { moduleId: 'virtual-cfo-v1', kind: 'compliance-block' });
+			return;
+		}
 		const result = analyze(context);
 		setDiagnosis(result);
 		setThinking(false);
@@ -149,10 +192,24 @@ function CfoAgent(): React.JSX.Element {
 					</h2>
 
 					<AnimatePresence mode="wait">
-						{diagnosis === null && !thinking && (
+						{diagnosis === null && !thinking && !blocked && (
 							<motion.p key="idle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mt-10 text-center text-sm text-gray-400">
 								O cérebro aguarda o seu contexto financeiro.
 							</motion.p>
+						)}
+						{blocked && !thinking && (
+							<motion.div key="blocked" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} data-testid="cfo-compliance" className="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-5">
+								<h3 className="flex items-center gap-2 text-sm font-bold text-amber-800">
+									<ShieldAlert className="h-4 w-4" aria-hidden />
+									Isso eu não posso fazer
+								</h3>
+								<p className="mt-2 text-sm leading-relaxed text-amber-900">
+									O Virtual CFO <strong>não recomenda comprar ou vender ações, cripto ou câmbio</strong> — isso é assessoria de investimento, regulada pela CVM, e exige um profissional certificado.
+								</p>
+								<p className="mt-2 text-sm leading-relaxed text-amber-900">
+									O que eu faço muito bem: olhar o seu <strong>caixa</strong>. Cole o extrato ou os custos fixos que eu te mostro onde o dinheiro está vazando e por quantos dias ele dura.
+								</p>
+							</motion.div>
 						)}
 						{thinking && (
 							<motion.div key="thinking" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="mt-6 space-y-3">
@@ -163,15 +220,18 @@ function CfoAgent(): React.JSX.Element {
 						)}
 						{diagnosis && (
 							<motion.div key="result" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-4 space-y-4">
-								{/* Alerta Crítico */}
-								<article className="rounded-2xl border border-red-200 bg-red-50 p-5">
+								{/* Alerta Crítico — insolvência muda o tom (nunca runway positivo fabricado) */}
+								<article className="rounded-2xl border border-red-200 bg-red-50 p-5" data-testid="cfo-alert">
 									<h3 className="flex items-center gap-2 text-sm font-bold text-red-700">
 										<AlertTriangle className="h-4 w-4" aria-hidden />
-										Alerta Crítico de Caixa
+										{diagnosis.insolvent ? 'Insolvência detectada — caixa negativo' : 'Alerta Crítico de Caixa'}
 									</h3>
 									<p className="mt-2 text-sm leading-relaxed text-red-800">
-										Seu Runway (tempo de vida do caixa) atual é de <strong>{diagnosis.runwayDays} dias</strong>. Risco de
-										ruptura no dia <strong>{diagnosis.ruptureDay}</strong> do próximo mês.
+										{diagnosis.insolvent ? (
+											<>Seu caixa já está <strong>no vermelho</strong>: não há runway a projetar. Foque em <strong>contenção imediata</strong> — corte os gastos abaixo e renegocie prazos com fornecedores e banco antes de qualquer nova despesa.</>
+										) : (
+											<>Seu Runway (tempo de vida do caixa) atual é de <strong>{diagnosis.runwayDays} dias</strong>. Risco de ruptura no dia <strong>{diagnosis.ruptureDay}</strong> do próximo mês.</>
+										)}
 									</p>
 									<div className="mt-3 h-2 overflow-hidden rounded-full bg-red-200">
 										<motion.div

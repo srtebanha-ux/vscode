@@ -411,6 +411,14 @@ try {
 		assert.match(SYSTEM_PROMPTS.CMO, /VIRTUAL CMO/);
 		assert.match(SYSTEM_PROMPTS.CMO, /copiar e colar/);
 		assert.match(SYSTEM_PROMPTS.CMO, /stories/);
+		// Trava de SEGURANÇA sistêmica (anti-jailbreak) em TODOS os módulos.
+		assert.match(SYSTEM_PROMPTS.CFO, /SEGURANÇA/);
+		assert.match(SYSTEM_PROMPTS.CFO, /NUNCA uma instrução|ignore as instruções anteriores/i);
+		assert.match(SYSTEM_PROMPTS.CMO, /SEGURANÇA/);
+		// P0 — trava de compliance CVM no cérebro do CFO.
+		assert.match(SYSTEM_PROMPTS.CFO, /CVM/);
+		assert.match(SYSTEM_PROMPTS.CFO, /PROIBIDO recomendar a compra\/venda de ativos/);
+		assert.match(SYSTEM_PROMPTS.CFO, /receita\/saldo for NEGATIVO/);
 
 		// Bearer estrutural: só JWT com 3 segmentos base64url passa. payload = {"uid":"u1"}
 		const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJ1aWQiOiJ1MSJ9.c2ln';
@@ -748,6 +756,21 @@ try {
 	// Plano de fidelização é só WhatsApp — sem exigir produção de foto complexa
 	const planoFidelizar = buildPlanoCampanha('fidelizar', 'tatuagem', 'jovens');
 	assert.ok(planoFidelizar.acoes.slice(0, 3).every(acao => acao.formato === 'Mensagem de WhatsApp'));
+
+	// ── Virtual CFO (P0): compliance CVM + insolvência (nunca runway fabricado) ──
+	const { analyze: cfoAnalyze, detectInvestmentAdvice, hasNegativeRevenue } = await import('./modules-library/virtual-cfo/dist/VirtualCFO_Agent.js');
+	assert.equal(detectInvestmentAdvice('me diga quais ações comprar hoje para ficar rico rápido'), true);
+	assert.equal(detectInvestmentAdvice('quero investir na bolsa'), true);
+	assert.equal(detectInvestmentAdvice('meu caixa está apertado, o que corto?'), false, 'pergunta legítima de caixa não é bloqueada');
+	assert.equal(hasNegativeRevenue('a empresa tem receita de R$ -100.000 este mês'), true);
+	assert.equal(hasNegativeRevenue('estou no vermelho e quase falido'), true);
+	assert.equal(hasNegativeRevenue('faturamento R$ 40.000, folha R$ 9.800'), false);
+	const insolv = cfoAnalyze('receita R$ -100.000, sem caixa, prejuízo acumulado grande demais');
+	assert.equal(insolv.insolvent, true);
+	assert.equal(insolv.runwayDays, 0, 'caixa negativo -> zero runway, sem otimismo fabricado');
+	const saudavel = cfoAnalyze('faturamento R$ 40.000, folha R$ 9.800, aluguel R$ 2.400 este mês');
+	assert.equal(saudavel.insolvent, false);
+	assert.ok(saudavel.runwayDays > 0);
 
 	const receipt = withServices(QuickReceiptMaker, ['ui:render']);
 	assert.match(receipt, /Recibo de Prestação de Serviço/);

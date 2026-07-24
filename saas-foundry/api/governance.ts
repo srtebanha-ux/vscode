@@ -24,7 +24,7 @@ function governanceRatePolicy(): RateLimitPolicy {
 	const windowMs = Number(process.env['GOVERNANCE_RATE_WINDOW_MS'] ?? '60000');
 	return { limit: Number.isFinite(limit) && limit > 0 ? limit : 240, windowMs: Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60000 };
 }
-import { ApprovalError, FreezeError, IngestError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, InMemoryIngestStore, getGovernanceKv, hasPermission, type ApprovalPolicy } from './lib/security/governance';
+import { ApprovalError, FreezeError, IngestError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, InMemoryIngestStore, getGovernanceKv, hasPermission, sanitizeAiList, sanitizeAiText, type ApprovalPolicy } from './lib/security/governance';
 
 const ENTERPRISE_ACCESS = ['ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
 
@@ -189,9 +189,10 @@ async function radarDiagnose(findings: readonly RadarFindingInput[]): Promise<Ra
 		const end = text.lastIndexOf('}');
 		if (start === -1 || end === -1) throw new Error('sem JSON');
 		const raw = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
-		const diagnostico = typeof raw['diagnostico'] === 'string' ? raw['diagnostico'] : null;
-		const hipoteses = Array.isArray(raw['hipoteses']) ? raw['hipoteses'].filter((h): h is string => typeof h === 'string') : [];
-		const acao = typeof raw['acao_recomendada'] === 'string' ? raw['acao_recomendada'] : null;
+		// Guardrail de saída: o texto da IA é NÃO-confiável — sanitiza antes de devolver.
+		const diagnostico = sanitizeAiText(raw['diagnostico']);
+		const hipoteses = sanitizeAiList(raw['hipoteses']);
+		const acao = sanitizeAiText(raw['acao_recomendada']);
 		if (!diagnostico || hipoteses.length === 0 || !acao) throw new Error('JSON fora do contrato');
 		return { diagnostico, hipoteses, acao_recomendada: acao, engine: 'gemini' };
 	} catch {
@@ -272,8 +273,9 @@ async function forecastVerdict(input: ForecastInput): Promise<ForecastVerdict> {
 		const end = text.lastIndexOf('}');
 		if (start === -1 || end === -1) throw new Error('sem JSON');
 		const raw = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
-		const resumo = typeof raw['resumo'] === 'string' ? raw['resumo'] : null;
-		const recomendacao = typeof raw['recomendacao'] === 'string' ? raw['recomendacao'] : null;
+		// Guardrail de saída: sanitiza o texto da IA (não-confiável) antes de devolver.
+		const resumo = sanitizeAiText(raw['resumo']);
+		const recomendacao = sanitizeAiText(raw['recomendacao']);
 		if (!resumo || !recomendacao) throw new Error('JSON fora do contrato');
 		return { resumo, recomendacao, engine: 'gemini' };
 	} catch {

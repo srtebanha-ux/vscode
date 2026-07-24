@@ -770,3 +770,53 @@ export class InMemoryIngestStore {
 		};
 	}
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 6) Guardrails de SAÍDA da IA — o texto do Gemini é conteúdo NÃO-CONFIÁVEL
+// ════════════════════════════════════════════════════════════════════════════
+//
+// O parecer da IA (Fase 2) vira texto na tela do gestor. Duas ameaças: (1) a
+// Fase 1 carrega dados do ERP (nome de fornecedor, filial) — um valor
+// envenenado pode virar prompt-injection que o modelo ECOA na resposta; (2) o
+// próprio modelo pode devolver markup, esquema perigoso em link markdown,
+// caracteres de controle ou um texto gigante. Sanitizar a SAÍDA (não só validar
+// o tipo) contém o raio de ação: sem markup, sem controle, tamanho e contagem
+// limitados. O React já escapa por padrão — isto é defesa em profundidade para
+// o dia em que alguém renderizar como markdown/HTML.
+
+/** Teto de uma frase/parágrafo executivo da IA. */
+export const AI_TEXT_MAX = 600;
+/** Teto de itens numa lista da IA (ex.: hipóteses). */
+export const AI_LIST_MAX_ITEMS = 6;
+
+/**
+ * Sanitiza uma string vinda da IA: descarta não-string, remove controles e
+ * angle-brackets (vetor de markup/HTML), neutraliza esquema perigoso em link
+ * markdown, colapsa espaços e limita o tamanho (com reticências).
+ */
+export function sanitizeAiText(value: unknown, maxLen: number = AI_TEXT_MAX): string {
+	if (typeof value !== 'string') return '';
+	let s = value
+		.replace(/[\u0000-\u001F\u007F]/g, ' ') // caracteres de controle
+		.replace(/[<>]/g, ' ') // fecha o vetor de markup/HTML
+		.replace(/\]\(\s*(?:javascript|data|vbscript):/gi, '](') // esquema perigoso em link markdown
+		.replace(/\s+/g, ' ')
+		.trim();
+	if (s.length > maxLen) s = `${s.slice(0, maxLen - 1).trimEnd()}…`;
+	return s;
+}
+
+/**
+ * Sanitiza uma lista de strings da IA: limita a CONTAGEM, sanitiza cada item e
+ * descarta os que ficam vazios (não-string ou só espaço/markup).
+ */
+export function sanitizeAiList(value: unknown, maxItems: number = AI_LIST_MAX_ITEMS, maxLen: number = AI_TEXT_MAX): string[] {
+	if (!Array.isArray(value)) return [];
+	const out: string[] = [];
+	for (const item of value) {
+		const clean = sanitizeAiText(item, maxLen);
+		if (clean) out.push(clean);
+		if (out.length >= maxItems) break;
+	}
+	return out;
+}

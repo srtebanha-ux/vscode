@@ -1617,7 +1617,8 @@ try {
 			InMemoryApprovalStore, requiresApproval, ApprovalError,
 			InMemoryFreezeStore, freezeCovers, FreezeError,
 			InMemoryKv, RestKv, getGovernanceKv, mutate, KvConflictError,
-			InMemoryIngestStore, parseIngestRecord, IngestError
+			InMemoryIngestStore, parseIngestRecord, IngestError,
+			sanitizeAiText, sanitizeAiList, AI_TEXT_MAX, AI_LIST_MAX_ITEMS
 		} = await import(pathToFileURL(govL.file).href);
 
 		// ── RBAC fino ──────────────────────────────────────────────────────────
@@ -1955,6 +1956,30 @@ try {
 		const concIngest = new InMemoryIngestStore(concKvI);
 		await Promise.all(Array.from({ length: 10 }, (_, i) => concIngest.ingest('tnt_c', [{ ...rec, id: `c-${i}` }])));
 		assert.equal((await concIngest.getCube('tnt_c')).recordCount, 10, 'ingestões concorrentes não perdem registros (mutate/CAS)');
+
+		// ── Guardrails de SAÍDA da IA (texto do Gemini é não-confiável) ────────
+		// Não-string -> vazio; texto limpo passa intacto.
+		assert.equal(sanitizeAiText(42), '', 'não-string vira vazio');
+		assert.equal(sanitizeAiText(null), '');
+		assert.equal(sanitizeAiText('  Custo da filial subiu 14%.  '), 'Custo da filial subiu 14%.', 'trim + preserva o conteúdo');
+		// Markup/angle-brackets neutralizados (defesa contra render como HTML/markdown).
+		assert.equal(sanitizeAiText('<script>alert(1)</script> ok').includes('<'), false, 'remove angle-brackets');
+		assert.equal(sanitizeAiText('<b>x</b>').includes('>'), false);
+		// Caracteres de controle viram espaço e colapsam.
+		assert.equal(sanitizeAiText('linha1\n\t linha2'), 'linha1 linha2', 'controles colapsam em espaço');
+		// Esquema perigoso em link markdown é neutralizado.
+		assert.equal(/\]\(\s*javascript:/i.test(sanitizeAiText('clique [aqui](javascript:alert(1))')), false, 'javascript: em link é neutralizado');
+		assert.equal(/\]\(\s*data:/i.test(sanitizeAiText('[x](data:text/html,abc)')), false);
+		// Tamanho limitado com reticências.
+		const long = sanitizeAiText('a'.repeat(AI_TEXT_MAX + 200));
+		assert.ok(long.length <= AI_TEXT_MAX, `texto limitado a ${AI_TEXT_MAX}`);
+		assert.ok(long.endsWith('…'), 'texto truncado ganha reticências');
+		assert.equal(sanitizeAiText('curto', 3), 'cu…', 'maxLen custom respeitado');
+		// Listas: limita a contagem, sanitiza item a item e descarta vazios.
+		assert.deepEqual(sanitizeAiList(['  a ', 42, '', ' c ']), ['a', 'c'], 'não-string/vazio descartados, itens limpos');
+		assert.deepEqual(sanitizeAiList(['<>', '   ', 'ok']), ['ok'], 'itens que ficam vazios após sanitizar são removidos');
+		assert.equal(sanitizeAiList(Array.from({ length: 20 }, (_, i) => `h${i}`)).length, AI_LIST_MAX_ITEMS, 'contagem limitada');
+		assert.deepEqual(sanitizeAiList('não é lista'), [], 'não-array vira []');
 	} finally {
 		delete process.env.JWT_SECRET;
 		for (const d of dirs) await rm(d, { recursive: true, force: true });

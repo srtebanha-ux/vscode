@@ -549,9 +549,37 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 		return;
 	}
 
+	// ── POST resource=audit: abrir um CASO de auditoria (RuleAction open_audit_case) ─
+	// Grava um marco na trilha imutável (não altera registros anteriores). Requer
+	// audit:view — quem enxerga a trilha pode abrir um caso sobre ela.
+	if (resource === 'audit') {
+		if (!hasPermission(principal, 'audit:view')) {
+			res.status(403).json({ error: 'forbidden', message: 'Permissão ausente: audit:view.' });
+			return;
+		}
+		const body = (typeof req.body === 'string' ? safeJson(req.body) : req.body) as Record<string, unknown> | null;
+		const note = body && typeof body['note'] === 'string' ? body['note'].trim() : '';
+		if (!note || note.length > 280) {
+			res.status(422).json({ error: 'invalid_body', message: 'Informe { note } de até 280 caracteres.' });
+			return;
+		}
+		const entityId = body && typeof body['entityId'] === 'string' && body['entityId'] ? body['entityId'].slice(0, 120) : `case-${Date.now().toString(36)}`;
+		const record = await audit.append({
+			tenantId: principal.tenantId,
+			...(principal.branchId !== undefined ? { branchId: principal.branchId } : {}),
+			actorUserId: principal.userId,
+			action: 'audit:case_opened',
+			entityType: 'audit_case',
+			entityId,
+			metadata: { note, via: principal.isMachine ? 'orchestrator' : 'user' }
+		});
+		res.status(201).json({ case: { id: record.entityId, seq: record.seq, at: record.at, note } });
+		return;
+	}
+
 	// ── POST resource=approvals: decidir OU submeter (automação do Orchestrator) ─
 	if (resource !== 'approvals') {
-		res.status(400).json({ error: 'unknown_resource', message: 'POST atende resource=approvals ou freezes.' });
+		res.status(400).json({ error: 'unknown_resource', message: 'POST atende resource=approvals, freezes ou audit.' });
 		return;
 	}
 	const approvalsBody = (typeof req.body === 'string' ? safeJson(req.body) : req.body) as Record<string, unknown> | null;

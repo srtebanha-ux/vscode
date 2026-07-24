@@ -166,6 +166,16 @@ export function handleMockGovernance(method: string, resource: string, body?: un
 		return { status: 200, body: { tenantId: 'tnt_demo', intact: true, count: 0, records: [] } };
 	}
 
+	if (resource === 'audit' && verb === 'POST') {
+		// RuleAction open_audit_case: abre um caso (marco na trilha) no preview.
+		const input = (typeof body === 'string' ? safeParse(body) : body) as { note?: unknown } | null;
+		const note = input && typeof input.note === 'string' ? input.note.trim() : '';
+		if (!note || note.length > 280) {
+			return { status: 422, body: { error: 'invalid_body', message: 'Informe { note } de até 280 caracteres.' } };
+		}
+		return { status: 201, body: { case: { id: `case-${Date.now().toString(36)}`, seq: 0, at: new Date().toISOString(), note } } };
+	}
+
 	if (resource === 'forecast' && verb === 'POST') {
 		const input = (typeof body === 'string' ? safeParse(body) : body) as { commodity?: unknown; horizonte?: unknown; delta_pct?: unknown; confianca?: unknown; drivers?: unknown } | null;
 		if (!input || typeof input.commodity !== 'string' || typeof input.delta_pct !== 'number' || !Array.isArray(input.drivers)) {

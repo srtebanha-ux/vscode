@@ -1086,6 +1086,18 @@ try {
 	assert.match(gated(['read:insights']), /Acesso negado/); // precisa dos DOIS
 	// Fora do host do Core -> lança
 	assert.throws(() => renderToStaticMarkup(createElement(EnterpriseControllership)), /outside the Core plugin host/);
+	// Com os dois escopos, o painel renderiza e traz a aba de Auditoria (novo visualizador).
+	assert.match(gated(['read:insights', 'write:insights']), /Auditoria/);
+}
+
+// 26b. Visualizador da Trilha de Auditoria: selo de integridade + estado de carga
+{
+	const { AuditTrailViewer } = await import('./modules-library/enterprise-controllership/dist/AuditTrailViewer.js');
+	// SSR não roda efeitos -> renderiza o estado de carregamento (sem quebrar).
+	const html = renderToStaticMarkup(createElement(AuditTrailViewer));
+	assert.match(html, /Trilha de Auditoria imutável/);
+	assert.match(html, /Carregando a trilha/);
+	assert.match(html, /verificada no servidor/);
 }
 
 // 27. Gerador de Dossiê Executivo: munição de argumentação pronta para o consultor humano
@@ -2440,11 +2452,16 @@ try {
 		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ approve: true })).status, 422);
 
 		// audit: envelope íntegro; resource desconhecido -> 400.
-		assert.equal(handleMockGovernance('GET', 'audit').body.intact, true);
+		const auditGet = handleMockGovernance('GET', 'audit');
+		assert.equal(auditGet.body.intact, true);
+		assert.ok(auditGet.body.count >= 4, 'trilha mockada vem semeada para o visualizador');
+		assert.ok(auditGet.body.records.some(r => r.action === 'data:ingest'), 'trilha inclui eventos variados');
 		// Mock do open_audit_case (preview): nota válida -> 201 com caso; vazia -> 422.
 		const mkCase = handleMockGovernance('POST', 'audit', JSON.stringify({ note: 'Revisar contrato de frete' }));
 		assert.equal(mkCase.status, 201);
 		assert.ok(mkCase.body.case.id, 'mock devolve o caso aberto');
+		// O caso aberto entra na trilha (append) e aparece no próximo GET.
+		assert.equal(handleMockGovernance('GET', 'audit').body.count, auditGet.body.count + 1, 'abrir caso cresce a trilha');
 		assert.equal(handleMockGovernance('POST', 'audit', JSON.stringify({ note: '  ' })).status, 422);
 		assert.equal(handleMockGovernance('GET', 'foo').status, 400);
 

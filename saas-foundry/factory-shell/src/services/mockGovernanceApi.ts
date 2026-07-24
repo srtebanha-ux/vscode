@@ -76,11 +76,40 @@ interface MockFreeze {
 let freezes: MockFreeze[] = [];
 let freezeSeq = 0;
 
+interface MockAuditRecord {
+	readonly seq: number;
+	readonly at: string;
+	readonly action: string;
+	readonly actorUserId: string;
+	readonly entityType: string;
+	readonly entityId: string;
+	readonly note?: string;
+}
+
+/** Trilha de auditoria de demonstração (hash-chain é verificado na rota real). */
+function seedAudit(): MockAuditRecord[] {
+	return [
+		{ seq: 0, at: '2026-07-23T10:05:00Z', action: 'approval:submit', actorUserId: 'u_maker_demo', entityType: 'purchase_order', entityId: 'po_2041' },
+		{ seq: 1, at: '2026-07-23T10:12:00Z', action: 'quote:approve', actorUserId: 'u_admin_demo', entityType: 'quote', entityId: 'orc_1187' },
+		{ seq: 2, at: '2026-07-23T14:30:00Z', action: 'freeze:create', actorUserId: 'u_ctrl_demo', entityType: 'freeze', entityId: 'frz_sul_01', note: 'custo invisível de 14% na Filial Sul' },
+		{ seq: 3, at: '2026-07-24T08:00:00Z', action: 'data:ingest', actorUserId: 'service:cron-ingest', entityType: 'financial_cube', entityId: 'tnt_demo', note: '4.812 registros do ERP' }
+	];
+}
+
+let auditLog: MockAuditRecord[] = seedAudit();
+
+function appendAudit(action: string, actorUserId: string, entityType: string, entityId: string, note?: string): MockAuditRecord {
+	const record: MockAuditRecord = { seq: auditLog.length, at: new Date().toISOString(), action, actorUserId, entityType, entityId, ...(note ? { note } : {}) };
+	auditLog = [...auditLog, record];
+	return record;
+}
+
 /** Reinicia o estado do mock (útil para testes). */
 export function resetMockGovernance(): void {
 	pending = seed();
 	freezes = [];
 	freezeSeq = 0;
+	auditLog = seedAudit();
 }
 
 /** Núcleo testável: resolve uma "requisição" à governança mockada. */
@@ -163,7 +192,7 @@ export function handleMockGovernance(method: string, resource: string, body?: un
 	}
 
 	if (resource === 'audit' && verb === 'GET') {
-		return { status: 200, body: { tenantId: 'tnt_demo', intact: true, count: 0, records: [] } };
+		return { status: 200, body: { tenantId: 'tnt_demo', intact: true, count: auditLog.length, records: [...auditLog] } };
 	}
 
 	if (resource === 'audit' && verb === 'POST') {
@@ -173,7 +202,9 @@ export function handleMockGovernance(method: string, resource: string, body?: un
 		if (!note || note.length > 280) {
 			return { status: 422, body: { error: 'invalid_body', message: 'Informe { note } de até 280 caracteres.' } };
 		}
-		return { status: 201, body: { case: { id: `case-${Date.now().toString(36)}`, seq: 0, at: new Date().toISOString(), note } } };
+		const entityId = `case-${Date.now().toString(36)}`;
+		const record = appendAudit('audit:case_opened', 'u_admin_demo', 'audit_case', entityId, note);
+		return { status: 201, body: { case: { id: entityId, seq: record.seq, at: record.at, note } } };
 	}
 
 	if (resource === 'forecast' && verb === 'POST') {

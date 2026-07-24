@@ -32,15 +32,14 @@ function num(value: unknown): number {
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
-/** Percentual obrigatório, não-negativo, teto configurável. */
+/** Percentual obrigatório, numérico, não-negativo, teto configurável. */
 function pctString(max: number) {
 	return z
 		.string()
 		.refine(value => value.trim().length > 0, { error: 'Campo obrigatório' })
-		.refine(value => {
-			const n = Number(value.replace(',', '.'));
-			return Number.isFinite(n) && n >= 0;
-		}, { error: 'Não pode ser negativo' })
+		// Mensagem distinta para lixo não-numérico (ex.: 3 parágrafos colados) vs. negativo.
+		.refine(value => Number.isFinite(Number(value.replace(',', '.'))), { error: 'Use apenas números' })
+		.refine(value => Number(value.replace(',', '.')) >= 0, { error: 'Não pode ser negativo' })
 		.refine(value => num(value) <= max, { error: `Máximo de ${max}%` });
 }
 

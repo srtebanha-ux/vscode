@@ -1608,14 +1608,16 @@ try {
 		const {
 			scopeWhere, scopeCreate, authenticateHeaders,
 			enforcePayloadLimit, parseContentLength, MAX_PAYLOAD_BYTES,
-			checkRateLimit, InMemoryRateLimitStore, rateLimitKey, clientIp
+			checkRateLimit, InMemoryRateLimitStore, rateLimitKey, clientIp,
+			mintServiceToken
 		} = await import(pathToFileURL(guard.file).href);
 		const {
 			hasPermission, permissionsOf, ROLE_PERMISSIONS, requirePermission,
 			InMemoryAuditSink, hashAuditRecord, GENESIS_HASH,
 			InMemoryApprovalStore, requiresApproval, ApprovalError,
 			InMemoryFreezeStore, freezeCovers, FreezeError,
-			InMemoryKv, RestKv, getGovernanceKv, mutate, KvConflictError
+			InMemoryKv, RestKv, getGovernanceKv, mutate, KvConflictError,
+			InMemoryIngestStore, parseIngestRecord, IngestError
 		} = await import(pathToFileURL(govL.file).href);
 
 		// ── RBAC fino ──────────────────────────────────────────────────────────
@@ -1902,6 +1904,57 @@ try {
 		// Fail-open: store que lança NÃO derruba a API (limiter indisponível libera).
 		const brokenStore = { hit: async () => { throw new Error('kv down'); } };
 		assert.equal((await checkRateLimit(brokenStore, 'k', pol, 1000)).allowed, true, 'store quebrado -> fail-open');
+
+		// ── RBAC: nova permissão data:ingest (Admin sim; Enterprise não) ───────
+		assert.equal(hasPermission({ role: 'ROLE_ADMIN_CONTROLLER' }, 'data:ingest'), true);
+		assert.equal(hasPermission({ role: 'ROLE_ENTERPRISE_CLIENT' }, 'data:ingest'), false, 'Enterprise não ingere no servidor');
+
+		// ── Identidade de máquina: token de serviço (Cron) ─────────────────────
+		process.env.JWT_SECRET = 'test-jwt-secret-queeh-32-chars-min!!';
+		const svc = await mintServiceToken({ serviceId: 'cron-ingest', tenantId: 'tnt_alpha' });
+		const svcAuth = await authenticateHeaders(`Bearer ${svc}`, null, ['ROLE_ADMIN_CONTROLLER']);
+		assert.equal(svcAuth.ok, true, 'token de serviço autentica');
+		assert.equal(svcAuth.principal.isMachine, true, 'principal marcado como máquina');
+		assert.equal(svcAuth.principal.role, 'ROLE_ADMIN_CONTROLLER', 'serviço herda o cargo com data:ingest');
+		assert.match(svcAuth.principal.userId, /^service:cron-ingest$/, 'sub prefixado service:');
+		// Token humano NÃO carrega isMachine.
+		const humanAuth = await authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER' })}`, null, ['ROLE_ADMIN_CONTROLLER']);
+		assert.equal('isMachine' in humanAuth.principal, false, 'humano não é máquina');
+
+		// ── Ingestão server-side: parse + agregação idempotente no Cube ────────
+		const rec = { id: 'nfe-1', branchId: 'filial-sul', supplier: 'TransLog Sul', category: 'frete', valor: 1000, frete: 200, imposto: 120, date: '2026-05-10' };
+		assert.equal(parseIngestRecord(rec, 0).id, 'nfe-1', 'registro válido tipa');
+		assert.equal('reason' in parseIngestRecord({ ...rec, valor: -1 }, 0), true, 'valor negativo é erro');
+		assert.equal('reason' in parseIngestRecord({ ...rec, date: '10/05/2026' }, 0), true, 'data fora do ISO é erro');
+		assert.equal('reason' in parseIngestRecord({ ...rec, id: '' }, 0), true, 'id vazio é erro');
+		const ingestKv = new InMemoryKv();
+		const ingStore = new InMemoryIngestStore(ingestKv);
+		await assert.rejects(ingStore.ingest('tnt_alpha', []), IngestError, 'lote vazio é rejeitado');
+		// 1º lote: 2 válidos + 1 inválido -> aceita 2, 1 erro.
+		const s1 = await ingStore.ingest('tnt_alpha', [rec, { ...rec, id: 'nfe-2', valor: 500 }, { ...rec, id: '', valor: 1 }]);
+		assert.equal(s1.accepted, 2);
+		assert.equal(s1.errors.length, 1);
+		assert.equal(s1.recordCount, 2);
+		// 2º lote com nfe-1 repetido + nfe-3 novo -> 1 duplicata, 1 aceito (idempotência entre chamadas).
+		const s2 = await ingStore.ingest('tnt_alpha', [rec, { ...rec, id: 'nfe-3', valor: 300 }]);
+		assert.equal(s2.duplicates, 1, 'id já ingerido não reconta');
+		assert.equal(s2.accepted, 1);
+		assert.equal(s2.recordCount, 3, 'total acumulado sem dobrar a duplicata');
+		// O Cube persiste e agrega por célula (branch|supplier|category).
+		const cube = await ingStore.getCube('tnt_alpha');
+		assert.equal(cube.recordCount, 3);
+		const cell = cube.cells.find(c => c.branchId === 'filial-sul' && c.supplier === 'TransLog Sul' && c.category === 'frete');
+		assert.equal(cell.count, 3, 'três NFes na mesma célula');
+		assert.equal(cell.total, 1800, 'soma dos valores (1000+500+300)');
+		// Isolamento por tenant: outro tenant tem cube próprio (vazio).
+		assert.equal(await ingStore.getCube('tnt_beta'), null, 'cube é por tenant');
+		// Persistência entre instâncias (cold start): outra instância lê o mesmo KV.
+		assert.equal((await new InMemoryIngestStore(ingestKv).getCube('tnt_alpha')).recordCount, 3, 'cube sobrevive ao cold start');
+		// Concorrência: 10 lotes de ids distintos disparados juntos -> nada se perde (CAS).
+		const concKvI = new InMemoryKv();
+		const concIngest = new InMemoryIngestStore(concKvI);
+		await Promise.all(Array.from({ length: 10 }, (_, i) => concIngest.ingest('tnt_c', [{ ...rec, id: `c-${i}` }])));
+		assert.equal((await concIngest.getCube('tnt_c')).recordCount, 10, 'ingestões concorrentes não perdem registros (mutate/CAS)');
 	} finally {
 		delete process.env.JWT_SECRET;
 		for (const d of dirs) await rm(d, { recursive: true, force: true });
@@ -2244,6 +2297,34 @@ try {
 		// Submit inválido (sem amount) -> 422; auditoria registra o submit.
 		assert.equal((await call({ method: 'POST', token: admin, body: { action: 'submit', entityType: 'purchase_order', entityId: 'x' } })).code, 422);
 		assert.ok((await call({ token: admin, resource: 'audit' })).body.records.some(r => r.action === 'approval:submit'), 'submit auditado');
+
+		// ── Ingestão server-side via rota: Cron (máquina) alimenta, humano lê ──
+		// Token de serviço (identidade de máquina) com cargo Admin -> tem data:ingest.
+		const machine = sign({ sub: 'service:cron-ingest', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER', machine: true });
+		const ingestRow = { id: 'nfe-x1', branchId: 'filial-sul', supplier: 'TransLog Sul', category: 'frete', valor: 1000, frete: 320, imposto: 140, date: '2026-05-12' };
+		const ingRes = makeRes();
+		await handler({ method: 'POST', headers: { authorization: `Bearer ${machine}` }, query: { resource: 'ingest' }, body: { records: [ingestRow, { ...ingestRow, id: 'nfe-x2', valor: 500 }] } }, ingRes);
+		assert.equal(ingRes.code, 200, 'o Cron (máquina) ingere o lote');
+		assert.equal(ingRes.body.accepted, 2);
+		assert.equal(ingRes.body.recordCount, 2);
+		// Reingestão idempotente: nfe-x1 repetido não reconta.
+		const ingRes2 = makeRes();
+		await handler({ method: 'POST', headers: { authorization: `Bearer ${machine}` }, query: { resource: 'ingest' }, body: { records: [ingestRow, { ...ingestRow, id: 'nfe-x3', valor: 300 }] } }, ingRes2);
+		assert.equal(ingRes2.body.duplicates, 1, 'id já ingerido não reconta na rota');
+		assert.equal(ingRes2.body.accepted, 1);
+		// Enterprise (sem data:ingest) -> 403; corpo inválido -> 422; lote vazio -> 422.
+		assert.equal((await call({ method: 'POST', token: enterprise, resource: 'ingest', body: { records: [ingestRow] } })).code, 403);
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'ingest', body: { nope: 1 } })).code, 422);
+		assert.equal((await call({ method: 'POST', token: admin, resource: 'ingest', body: { records: [] } })).code, 422);
+		// GET cube: o humano (admin) LÊ o Cube que o Cron alimentou.
+		const cubeRes = await call({ token: admin, resource: 'cube' });
+		assert.equal(cubeRes.code, 200);
+		assert.equal(cubeRes.body.cube.recordCount, 3, 'admin lê o cube durável (2+1 do Cron)');
+		assert.ok(cubeRes.body.cube.cells.some(c => c.supplier === 'TransLog Sul' && c.count === 3), 'célula agregada visível');
+		// Enterprise não vê o cube (sem data:ingest).
+		assert.equal((await call({ token: enterprise, resource: 'cube' })).code, 403);
+		// A ingestão entra na trilha de auditoria (via: cron).
+		assert.ok((await call({ token: admin, resource: 'audit' })).body.records.some(r => r.action === 'data:ingest'), 'ingestão auditada');
 
 		// ── Guardrail na rota: payload gigante -> 413 (antes de tocar no corpo) ──
 		const bigRes = makeRes();

@@ -81,6 +81,8 @@ export interface Principal {
 	/** Filial/centro de custo (multi-tenant de 2 níveis). Ausente em contas PME. */
 	readonly branchId?: string;
 	readonly role: ServerRole;
+	/** Identidade de MÁQUINA (token de serviço/Cron), não um humano logado. */
+	readonly isMachine?: boolean;
 }
 
 /** Resultado de autenticação sem Response (uso Node/handler clássico). */
@@ -210,11 +212,14 @@ export async function authenticateHeaders(
 	}
 
 	// branchId é opcional; com exactOptionalPropertyTypes só entra no objeto se existir.
+	// `machine: true` marca token de serviço (Cron/job) — identidade não-humana.
+	const isMachine = claims['machine'] === true;
 	const principal: Principal = {
 		userId: sub,
 		tenantId,
 		...(branchId !== undefined ? { branchId } : {}),
-		role
+		role,
+		...(isMachine ? { isMachine: true } : {})
 	};
 
 	if (!hasRequiredRole(principal.role, allowedRoles)) {
@@ -519,6 +524,35 @@ export function mintSessionToken(principal: Principal, options?: { readonly secr
 		secret
 	);
 	// Assinatura é síncrona (node:crypto), mas mantemos o contrato assíncrono.
+	return Promise.resolve(token);
+}
+
+/**
+ * Emite um TOKEN DE SERVIÇO (identidade de máquina) para jobs internos e o Vercel
+ * Cron — HS256 assinado com o JWT_SECRET, SEM sessão de usuário. Carrega
+ * `machine: true` (o apiGuard marca o principal) e um `sub` prefixado `service:`.
+ * O Cron guarda esse token (ou o segredo p/ mintar) num env e chama as rotas com
+ * `Authorization: Bearer`. TTL curto por padrão — o job renova a cada execução.
+ */
+export function mintServiceToken(
+	service: { readonly serviceId: string; readonly tenantId: string; readonly role?: ServerRole; readonly branchId?: string; readonly ttlSeconds?: number },
+	options?: { readonly secret?: string }
+): Promise<string> {
+	const secret = resolveSecret(options?.secret);
+	const ttl = service.ttlSeconds ?? SESSION_TTL_SECONDS;
+	const nowSec = Math.floor(Date.now() / 1000);
+	const token = signHs256(
+		{
+			sub: `service:${service.serviceId}`,
+			tenantId: service.tenantId,
+			...(service.branchId !== undefined ? { branchId: service.branchId } : {}),
+			role: service.role ?? 'ROLE_ADMIN_CONTROLLER',
+			machine: true,
+			iat: nowSec,
+			exp: nowSec + ttl
+		},
+		secret
+	);
 	return Promise.resolve(token);
 }
 

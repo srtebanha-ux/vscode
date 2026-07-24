@@ -25,7 +25,8 @@ export type Permission =
 	| 'audit:view'
 	| 'rbac:manage'
 	| 'freeze:create'
-	| 'freeze:lift';
+	| 'freeze:lift'
+	| 'data:ingest';
 
 /** Mapa cargo → permissões. Espelha ROLE_PERMISSIONS do backend. */
 export const PERMISSIONS_BY_ROLE: Readonly<Record<AppRole, readonly Permission[]>> = {
@@ -43,7 +44,8 @@ export const PERMISSIONS_BY_ROLE: Readonly<Record<AppRole, readonly Permission[]
 		'audit:view',
 		'rbac:manage',
 		'freeze:create',
-		'freeze:lift'
+		'freeze:lift',
+		'data:ingest'
 	]
 };
 

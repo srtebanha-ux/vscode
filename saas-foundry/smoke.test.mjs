@@ -1086,8 +1086,9 @@ try {
 	assert.match(gated(['read:insights']), /Acesso negado/); // precisa dos DOIS
 	// Fora do host do Core -> lança
 	assert.throws(() => renderToStaticMarkup(createElement(EnterpriseControllership)), /outside the Core plugin host/);
-	// Com os dois escopos, o painel renderiza e traz a aba de Auditoria (novo visualizador).
+	// Com os dois escopos, o painel renderiza e traz as abas de Auditoria e RBAC (novos).
 	assert.match(gated(['read:insights', 'write:insights']), /Auditoria/);
+	assert.match(gated(['read:insights', 'write:insights']), /Papéis &amp; Acessos/);
 }
 
 // 26b. Visualizador da Trilha de Auditoria: selo de integridade + estado de carga
@@ -1098,6 +1099,15 @@ try {
 	assert.match(html, /Trilha de Auditoria imutável/);
 	assert.match(html, /Carregando a trilha/);
 	assert.match(html, /verificada no servidor/);
+}
+
+// 26c. Admin de RBAC: matriz cargo×permissão (estado de carga no SSR)
+{
+	const { RbacAdminPanel } = await import('./modules-library/enterprise-controllership/dist/RbacAdminPanel.js');
+	const html = renderToStaticMarkup(createElement(RbacAdminPanel));
+	assert.match(html, /Administração de Papéis/);
+	assert.match(html, /Carregando a matriz de permissões/);
+	assert.match(html, /apenas espelha/);
 }
 
 // 27. Gerador de Dossiê Executivo: munição de argumentação pronta para o consultor humano
@@ -2361,6 +2371,15 @@ try {
 		assert.ok(auditWithCase.body.records.some(r => r.action === 'audit:case_opened'), 'caso registrado na trilha');
 		assert.equal(auditWithCase.body.intact, true, 'trilha continua íntegra após abrir caso');
 
+		// ── RBAC admin via rota: matriz cargo×permissão (requer rbac:manage) ──
+		const rbacRes = await call({ token: admin, resource: 'rbac' });
+		assert.equal(rbacRes.code, 200, 'admin lê a matriz de RBAC');
+		assert.ok(rbacRes.body.roles.ROLE_ADMIN_CONTROLLER.includes('data:ingest'), 'matriz traz as permissões do Admin');
+		assert.equal(rbacRes.body.me.role, 'ROLE_ADMIN_CONTROLLER', 'me reflete o cargo do token');
+		assert.ok(rbacRes.body.me.permissions.includes('rbac:manage'), 'me traz as permissões efetivas');
+		// Enterprise (sem rbac:manage) -> 403.
+		assert.equal((await call({ token: enterprise, resource: 'rbac' })).code, 403);
+
 		// ── Ingestão server-side via rota: Cron (máquina) alimenta, humano lê ──
 		// Token de serviço (identidade de máquina) com cargo Admin -> tem data:ingest.
 		const machine = sign({ sub: 'service:cron-ingest', tenantId: 'tnt_alpha', role: 'ROLE_ADMIN_CONTROLLER', machine: true });
@@ -2463,6 +2482,11 @@ try {
 		// O caso aberto entra na trilha (append) e aparece no próximo GET.
 		assert.equal(handleMockGovernance('GET', 'audit').body.count, auditGet.body.count + 1, 'abrir caso cresce a trilha');
 		assert.equal(handleMockGovernance('POST', 'audit', JSON.stringify({ note: '  ' })).status, 422);
+		// Mock do RBAC: matriz cargo×permissão espelhando o front.
+		const rbacMock = handleMockGovernance('GET', 'rbac');
+		assert.equal(rbacMock.status, 200);
+		assert.ok(rbacMock.body.roles.ROLE_ADMIN_CONTROLLER.includes('rbac:manage'), 'mock RBAC traz a matriz do Admin');
+		assert.equal(rbacMock.body.me.role, 'ROLE_ADMIN_CONTROLLER');
 		assert.equal(handleMockGovernance('GET', 'foo').status, 400);
 
 		resetMockGovernance();

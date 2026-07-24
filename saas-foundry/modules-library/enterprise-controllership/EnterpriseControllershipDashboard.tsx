@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react';
 import { hasScopes, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
 import { motion } from 'framer-motion';
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, FileClock, FlaskConical, LayoutDashboard, Landmark, Radar, ScanSearch, Server, ShieldAlert, ShieldCheck, Sparkles, Terminal, Users } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, FileBarChart, FileClock, FlaskConical, LayoutDashboard, Landmark, Radar, ScanSearch, Server, ShieldAlert, ShieldCheck, Sparkles, Terminal, UserCog, Users } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ApprovalInbox } from './ApprovalInbox.js';
 import { AuditTrailViewer } from './AuditTrailViewer.js';
+import { RbacAdminPanel } from './RbacAdminPanel.js';
 import { FreezeControl } from './FreezeControl.js';
 import { LossRadar } from './LossRadar.js';
 import { ExecutiveBriefingGenerator } from './ExecutiveBriefingGenerator.js';
@@ -93,7 +94,7 @@ function Dashboard(): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [exporting, setExporting] = useState(false);
-	const [view, setView] = useState<'painel' | 'aprovacoes' | 'auditoria' | 'radar' | 'dossie' | 'erp' | 'simulador' | 'descoberta'>('painel');
+	const [view, setView] = useState<'painel' | 'aprovacoes' | 'auditoria' | 'rbac' | 'radar' | 'dossie' | 'erp' | 'simulador' | 'descoberta'>('painel');
 
 	const totals = useMemo(() => {
 		const folha = SECTORS.reduce((s, r) => s + r.custoFolha, 0);
@@ -147,6 +148,7 @@ function Dashboard(): React.JSX.Element {
 					['painel', 'Painel', LayoutDashboard],
 						['aprovacoes', 'Aprovações', ShieldCheck],
 						['auditoria', 'Auditoria', FileClock],
+						['rbac', 'Papéis & Acessos', UserCog],
 						['radar', 'Radar de Prejuízo', Radar],
 						['descoberta', 'Descoberta Fiscal', ScanSearch],
 					['erp', 'Ingestão ERP', Server],
@@ -176,6 +178,8 @@ function Dashboard(): React.JSX.Element {
 				</div>
 			) : view === 'auditoria' ? (
 				<AuditTrailViewer />
+			) : view === 'rbac' ? (
+				<RbacAdminPanel />
 			) : view === 'radar' ? (
 				<LossRadar />
 			) : view === 'dossie' ? (

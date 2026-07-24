@@ -10,6 +10,8 @@
  * superconjunto (module/description/date) que a UI aproveita quando presente.
  */
 
+import { PERMISSIONS_BY_ROLE } from '../security/permissions';
+
 export interface MockApproval {
 	readonly id: string;
 	readonly entityType: string;
@@ -193,6 +195,15 @@ export function handleMockGovernance(method: string, resource: string, body?: un
 
 	if (resource === 'audit' && verb === 'GET') {
 		return { status: 200, body: { tenantId: 'tnt_demo', intact: true, count: auditLog.length, records: [...auditLog] } };
+	}
+
+	if (resource === 'rbac' && verb === 'GET') {
+		// Matriz cargo×permissão (o preview espelha o front, que espelha o back).
+		const roles: Record<string, string[]> = Object.fromEntries(Object.entries(PERMISSIONS_BY_ROLE).map(([role, perms]) => [role, [...perms]]));
+		return {
+			status: 200,
+			body: { tenantId: 'tnt_demo', roles, me: { userId: 'u_admin_demo', role: 'ROLE_ADMIN_CONTROLLER', permissions: roles['ROLE_ADMIN_CONTROLLER'] ?? [] } }
+		};
 	}
 
 	if (resource === 'audit' && verb === 'POST') {

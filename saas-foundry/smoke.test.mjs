@@ -1295,8 +1295,11 @@ try {
 
 // 28e. Orchestrator — DSL de automação (SE/ENTÃO): avaliação, idempotência, persistência
 {
-	const { conditionMatches, evaluateRules, forecastKey, describeCondition, loadRules, saveRules, loadForecastSnapshot, nextRuleId } =
-		await import('./modules-library/lidar-orchestrator/dist/automationRules.js');
+	const {
+		conditionMatches, evaluateRules, forecastKey, describeCondition, loadRules, saveRules, loadForecastSnapshot, nextRuleId,
+		quantizeDelta, evaluateWithBreaker, DEFAULT_ORCHESTRATOR_CONFIG,
+		loadOrchestratorConfig, saveOrchestratorConfig, loadFireLedger, saveFireLedger
+	} = await import('./modules-library/lidar-orchestrator/dist/automationRules.js');
 
 	// conditionMatches: operador + filtro de commodity
 	const cond = { metric: 'forecast.deltaPct', commodity: 'concreto 35MPa', op: 'gt', value: 0.05 };
@@ -1328,6 +1331,57 @@ try {
 	assert.equal(loadForecastSnapshot(storage).commodity, 'cimento');
 	assert.equal(loadForecastSnapshot({ getItem: () => 'lixo{' }), null, 'previsão corrompida -> null');
 	assert.match(nextRuleId(), /^rule_/);
+
+	// ── Quantização do delta: ruído de float NÃO redispara (idempotência real) ──
+	assert.equal(quantizeDelta(0.062), quantizeDelta(0.0609), '6,20% e 6,09% caem na mesma banda de 0,5 p.p.');
+	assert.equal(forecastKey({ ...forecast, deltaPct: 0.062 }), forecastKey({ ...forecast, deltaPct: 0.0609 }), '6,20% e 6,09% -> mesma chave (banda 6,0%)');
+	assert.notEqual(forecastKey({ ...forecast, deltaPct: 0.062 }), forecastKey({ ...forecast, deltaPct: 0.081 }), 'delta bem diferente -> chave diferente');
+	// A regra já disparada não redispara com ruído dentro da banda...
+	assert.equal(evaluateRules([{ ...rule, lastFiredKey: forecastKey(forecast) }], { ...forecast, deltaPct: 0.0609 }).length, 0, 'ruído dentro da banda não redispara');
+	// ...mas dispara quando a previsão realmente muda de banda.
+	assert.equal(evaluateRules([{ ...rule, lastFiredKey: forecastKey(forecast) }], { ...forecast, deltaPct: 0.081 }).length, 1, 'mudança real de banda redispara');
+
+	// ── Disjuntor: kill-switch mestre ──────────────────────────────────────────
+	const paused = evaluateWithBreaker([rule], forecast, { ...DEFAULT_ORCHESTRATOR_CONFIG, paused: true }, {});
+	assert.equal(paused.fired.length, 0, 'kill-switch: nada dispara');
+	assert.equal(paused.suppressed.length, 1, 'kill-switch: a candidata vira suprimida');
+	assert.equal(paused.suppressed[0].reason, 'paused');
+	assert.deepEqual(paused.ledger, {}, 'kill-switch não credita o ledger');
+
+	// ── Disjuntor: rate limit por regra numa janela deslizante ─────────────────
+	const cfg = { paused: false, maxFiresPerWindow: 3, windowMs: 60 * 60 * 1000 };
+	let ledger = {};
+	// Cada disparo precisa de uma previsão NOVA (senão a idempotência barra antes do rate limit).
+	for (let i = 0; i < 3; i += 1) {
+		const fc = { ...forecast, deltaPct: 0.06 + i * 0.02 }; // acima do limiar e distintos entre si
+		const d = evaluateWithBreaker([rule], fc, cfg, ledger);
+		assert.equal(d.fired.length, 1, `disparo ${i + 1} dentro do teto é liberado`);
+		ledger = d.ledger;
+	}
+	assert.equal((ledger['r1'] ?? []).length, 3, 'ledger creditou os 3 disparos');
+	// 4º disparo (previsão nova) estoura o teto -> suprimido por rate_limited
+	const over = evaluateWithBreaker([rule], { ...forecast, deltaPct: 0.20 }, cfg, ledger);
+	assert.equal(over.fired.length, 0, 'acima do teto não dispara');
+	assert.equal(over.suppressed[0].reason, 'rate_limited');
+
+	// Janela deslizante: com disparos ANTIGOS (fora da janela), o teto zera e libera de novo.
+	const stale = { r1: [new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()] }; // 2h atrás, janela de 1h
+	const revived = evaluateWithBreaker([rule], { ...forecast, deltaPct: 0.20 }, cfg, stale);
+	assert.equal(revived.fired.length, 1, 'disparo velho saiu da janela -> teto zera e libera');
+	assert.equal((revived.ledger['r1'] ?? []).length, 1, 'ledger podou o antigo e creditou o novo');
+
+	// Crédito por TENTATIVA: mesmo sem checar sucesso, o ledger avança (contém o loop de falha).
+	// Persistência do disjuntor (config + ledger) com fallback fail-safe.
+	const memO = new Map();
+	const storageO = { getItem: k => memO.get(k) ?? null, setItem: (k, v) => memO.set(k, v) };
+	assert.deepEqual(loadOrchestratorConfig(storageO), DEFAULT_ORCHESTRATOR_CONFIG, 'sem config salva -> default');
+	saveOrchestratorConfig({ ...DEFAULT_ORCHESTRATOR_CONFIG, paused: true }, storageO);
+	assert.equal(loadOrchestratorConfig(storageO).paused, true, 'config persiste');
+	assert.equal(loadOrchestratorConfig({ getItem: () => 'lixo{' }).paused, false, 'config corrompida -> default fail-safe');
+	assert.equal(loadOrchestratorConfig({ getItem: () => JSON.stringify({ maxFiresPerWindow: -1 }) }).maxFiresPerWindow, DEFAULT_ORCHESTRATOR_CONFIG.maxFiresPerWindow, 'valor inválido cai no default');
+	saveFireLedger({ r1: ['2026-01-01T00:00:00.000Z'] }, storageO);
+	assert.deepEqual(loadFireLedger(storageO), { r1: ['2026-01-01T00:00:00.000Z'] }, 'ledger persiste');
+	assert.deepEqual(loadFireLedger({ getItem: () => '[1,2]' }), {}, 'ledger não-objeto -> {}');
 }
 
 // 29. Central de Descoberta Fiscal: feed proativo (Push) + mineração ativa (Pull)

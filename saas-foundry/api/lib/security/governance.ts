@@ -32,28 +32,73 @@ declare const fetch: (input: string, init?: { method?: string; headers?: Record<
 // migrações anteriores); no dev/preview (sem env), cai no InMemory. O mesmo
 // padrão "configurado -> durável, senão -> dev" já usado na auth.
 
-/** Armazenamento mínimo por chave (blobs JSON). */
+/** Leitura versionada — a versão é o "carimbo" do compare-and-set (0 = ausente). */
+export interface Versioned<T> {
+	readonly value: T | null;
+	readonly version: number;
+}
+
+/**
+ * Armazenamento por chave com COMPARE-AND-SET (lock otimista). O CAS é o que
+ * blinda os stores contra lost-update e cadeia de auditoria forkada sob
+ * concorrência: só grava se a versão lida ainda for a atual; senão o chamador
+ * relê e tenta de novo (via `mutate`).
+ */
 export interface KvPort {
 	getJson<T>(key: string): Promise<T | null>;
 	setJson<T>(key: string, value: T): Promise<void>;
+	/** Lê valor + versão para o CAS. */
+	read<T>(key: string): Promise<Versioned<T>>;
+	/** Grava só se a versão atual == expectedVersion. `false` = conflito (releia). */
+	compareAndSet<T>(key: string, value: T, expectedVersion: number): Promise<boolean>;
+}
+
+/** Erro de concorrência esgotada (retries do CAS estouraram). */
+export class KvConflictError extends Error {}
+
+/**
+ * Read-modify-write ATÔMICO: lê {valor,versão}, aplica `fn`, grava via CAS e
+ * RETENTA em caso de conflito. `fn` pode lançar (validação de negócio) — isso
+ * aborta sem retentar. Serializa mutações concorrentes na mesma chave.
+ */
+export async function mutate<T>(kv: KvPort, key: string, fn: (current: T | null) => T, retries = 50): Promise<T> {
+	for (let attempt = 0; attempt < retries; attempt += 1) {
+		const { value, version } = await kv.read<T>(key);
+		const next = fn(value);
+		if (await kv.compareAndSet(key, next, version)) return next;
+	}
+	throw new KvConflictError(`CAS falhou após ${retries} tentativas na chave ${key}`);
 }
 
 /** Implementação em memória (dev/preview/testes) — some no cold start, como antes. */
 export class InMemoryKv implements KvPort {
-	private readonly store = new Map<string, string>();
+	private readonly store = new Map<string, { raw: string; version: number }>();
+
 	async getJson<T>(key: string): Promise<T | null> {
-		const raw = this.store.get(key);
-		return raw === undefined ? null : (JSON.parse(raw) as T);
+		const entry = this.store.get(key);
+		return entry === undefined ? null : (JSON.parse(entry.raw) as T);
 	}
 	async setJson<T>(key: string, value: T): Promise<void> {
-		this.store.set(key, JSON.stringify(value));
+		const entry = this.store.get(key);
+		this.store.set(key, { raw: JSON.stringify(value), version: (entry?.version ?? 0) + 1 });
+	}
+	async read<T>(key: string): Promise<Versioned<T>> {
+		const entry = this.store.get(key);
+		return entry === undefined ? { value: null, version: 0 } : { value: JSON.parse(entry.raw) as T, version: entry.version };
+	}
+	async compareAndSet<T>(key: string, value: T, expectedVersion: number): Promise<boolean> {
+		const current = this.store.get(key)?.version ?? 0;
+		if (current !== expectedVersion) return false;
+		this.store.set(key, { raw: JSON.stringify(value), version: current + 1 });
+		return true;
 	}
 }
 
 /**
- * Adaptador DURÁVEL sobre a API REST do Vercel KV / Upstash Redis. Comandos
- * ["GET", k] / ["SET", k, v] via POST autenticado — só `fetch` (builtin), sem
- * SDK, sem risco de bundle. Injetável nos testes (baseUrl/token + fetch stub).
+ * Adaptador DURÁVEL sobre a API REST do Vercel KV / Upstash Redis. Guarda um
+ * envelope { version, data }; o CAS é um EVAL Lua atômico (checa a versão e
+ * grava numa operação só). Só `fetch` (builtin), sem SDK, sem risco de bundle.
+ * Injetável nos testes (baseUrl/token + fetch stub).
  */
 export class RestKv implements KvPort {
 	constructor(private readonly baseUrl: string, private readonly token: string) {}
@@ -69,13 +114,28 @@ export class RestKv implements KvPort {
 		return data.result ?? null;
 	}
 
-	async getJson<T>(key: string): Promise<T | null> {
+	async read<T>(key: string): Promise<Versioned<T>> {
 		const result = await this.cmd(['GET', key]);
-		return typeof result === 'string' ? (JSON.parse(result) as T) : null;
+		if (typeof result !== 'string') return { value: null, version: 0 };
+		const env = JSON.parse(result) as { version: number; data: T };
+		return { value: env.data, version: env.version };
 	}
 
+	async compareAndSet<T>(key: string, value: T, expectedVersion: number): Promise<boolean> {
+		const envelope = JSON.stringify({ version: expectedVersion + 1, data: value });
+		// Atômico no servidor: só grava se a versão gravada ainda for a esperada.
+		const script =
+			"local c=redis.call('GET',KEYS[1]); local v=0; if c then v=tonumber(cjson.decode(c)['version']) end; if v~=tonumber(ARGV[2]) then return 0 end; redis.call('SET',KEYS[1],ARGV[1]); return 1";
+		const result = await this.cmd(['EVAL', script, '1', key, envelope, String(expectedVersion)]);
+		return result === 1 || result === '1';
+	}
+
+	async getJson<T>(key: string): Promise<T | null> {
+		return (await this.read<T>(key)).value;
+	}
 	async setJson<T>(key: string, value: T): Promise<void> {
-		await this.cmd(['SET', key, JSON.stringify(value)]);
+		const { version } = await this.read(key);
+		await this.cmd(['SET', key, JSON.stringify({ version: version + 1, data: value })]);
 	}
 }
 
@@ -249,15 +309,17 @@ export class InMemoryAuditSink implements AuditSink {
 	}
 
 	async append(entry: AuditEntry, now: () => Date = () => new Date()): Promise<AuditRecord> {
-		const chain = (await this.kv.getJson<AuditRecord[]>(this.key(entry.tenantId))) ?? [];
-		const prev = chain[chain.length - 1];
-		const seq = chain.length;
-		const prevHash = prev ? prev.hash : GENESIS_HASH;
-		const at = now().toISOString();
-		const record: AuditRecord = { ...entry, seq, at, prevHash, hash: hashAuditRecord(prevHash, seq, at, entry) };
-		chain.push(record);
-		await this.kv.setJson(this.key(entry.tenantId), chain);
-		return record;
+		// Append ATÔMICO: sob concorrência, o CAF de `mutate` serializa e cada
+		// retentativa recomputa seq/prevHash da cadeia FRESCA — sem fork de hash.
+		const chain = await mutate<AuditRecord[]>(this.kv, this.key(entry.tenantId), current => {
+			const c = current ?? [];
+			const prev = c[c.length - 1];
+			const seq = c.length;
+			const prevHash = prev ? prev.hash : GENESIS_HASH;
+			const at = now().toISOString();
+			return [...c, { ...entry, seq, at, prevHash, hash: hashAuditRecord(prevHash, seq, at, entry) }];
+		});
+		return chain[chain.length - 1]!;
 	}
 
 	async list(tenantId: string): Promise<readonly AuditRecord[]> {
@@ -339,7 +401,8 @@ export interface SubmitInput {
 /** Porta de armazenamento (produção: tabela `approvals` escopada por tenant/filial). */
 export interface ApprovalStore {
 	submit(input: SubmitInput, now?: () => Date): Promise<ApprovalRequest>;
-	get(id: string): Promise<ApprovalRequest | null>;
+	/** Busca por id DENTRO do tenant (chave por tenant — defense-in-depth anti-IDOR). */
+	get(tenantId: string, id: string): Promise<ApprovalRequest | null>;
 	listPending(tenantId: string, branchId?: string): Promise<readonly ApprovalRequest[]>;
 	decide(id: string, decider: Principal, approve: boolean, reason?: string, now?: () => Date): Promise<ApprovalRequest>;
 }
@@ -350,12 +413,19 @@ const nextApprovalId = (): string => {
 	return `apr_${Date.now().toString(36)}_${approvalCounter.toString(36)}`;
 };
 
-/** MOCK em memória — mesma semântica da porta de produção. */
+/**
+ * Store de aprovações persistido na Porta KV, com uma chave POR TENANT
+ * (`gov:approvals:<tenantId>`): reduz a contenção do CAS e isola o raio de
+ * explosão (um bug de filtro não vaza cross-tenant). Mutações via `mutate`
+ * (CAS + retry) — sem lost-update sob concorrência.
+ */
 export class InMemoryApprovalStore implements ApprovalStore {
 	constructor(private readonly kv: KvPort = new InMemoryKv()) {}
-	private readonly key = 'gov:approvals';
-	private async all(): Promise<Record<string, ApprovalRequest>> {
-		return (await this.kv.getJson<Record<string, ApprovalRequest>>(this.key)) ?? {};
+	private key(tenantId: string): string {
+		return `gov:approvals:${tenantId}`;
+	}
+	private async all(tenantId: string): Promise<Record<string, ApprovalRequest>> {
+		return (await this.kv.getJson<Record<string, ApprovalRequest>>(this.key(tenantId))) ?? {};
 	}
 
 	async submit(input: SubmitInput, now: () => Date = () => new Date()): Promise<ApprovalRequest> {
@@ -371,46 +441,44 @@ export class InMemoryApprovalStore implements ApprovalStore {
 			createdAt: now().toISOString(),
 			status: 'pending'
 		};
-		const map = await this.all();
-		map[request.id] = request;
-		await this.kv.setJson(this.key, map);
+		await mutate<Record<string, ApprovalRequest>>(this.kv, this.key(input.tenantId), current => ({ ...(current ?? {}), [request.id]: request }));
 		return request;
 	}
 
-	async get(id: string): Promise<ApprovalRequest | null> {
-		return (await this.all())[id] ?? null;
+	async get(tenantId: string, id: string): Promise<ApprovalRequest | null> {
+		return (await this.all(tenantId))[id] ?? null;
 	}
 
 	async listPending(tenantId: string, branchId?: string): Promise<readonly ApprovalRequest[]> {
-		return Object.values(await this.all()).filter(
-			item => item.status === 'pending' && item.tenantId === tenantId && (branchId === undefined || item.branchId === branchId)
+		return Object.values(await this.all(tenantId)).filter(
+			item => item.status === 'pending' && (branchId === undefined || item.branchId === branchId)
 		);
 	}
 
 	async decide(id: string, decider: Principal, approve: boolean, reason?: string, now: () => Date = () => new Date()): Promise<ApprovalRequest> {
-		const map = await this.all();
-		const request = map[id];
-		if (!request) throw new ApprovalError('pedido de aprovação inexistente');
-		if (request.status !== 'pending') throw new ApprovalError('pedido já decidido (terminal)');
-		// Isolamento: o aprovador precisa ser do MESMO tenant (e filial, se houver).
-		if (decider.tenantId !== request.tenantId || (request.branchId !== undefined && decider.branchId !== request.branchId)) {
-			throw new ApprovalError('aprovador fora do escopo (tenant/filial) do pedido');
-		}
-		// Segregação de função: quem decide não pode ser quem pediu.
-		if (decider.userId === request.requestedBy) {
-			throw new ApprovalError('segregação de função: o solicitante não pode aprovar o próprio pedido');
-		}
-		// Permissão fina de aprovação.
-		if (!hasPermission(decider, request.approvePermission)) {
-			throw new ApprovalError(`aprovador sem a permissão ${request.approvePermission}`);
-		}
-		request.status = approve ? 'approved' : 'rejected';
-		request.decidedBy = decider.userId;
-		request.decidedAt = now().toISOString();
-		if (reason !== undefined) request.reason = reason;
-		map[id] = request;
-		await this.kv.setJson(this.key, map);
-		return request;
+		// Escopo por tenant do DECISOR: um pedido de outro tenant simplesmente não
+		// está neste blob -> "inexistente" (isolamento reforçado pela chave).
+		const map = await mutate<Record<string, ApprovalRequest>>(this.kv, this.key(decider.tenantId), current => {
+			const store = { ...(current ?? {}) };
+			const request = store[id];
+			if (!request) throw new ApprovalError('pedido de aprovação inexistente');
+			if (request.status !== 'pending') throw new ApprovalError('pedido já decidido (terminal)');
+			if (request.branchId !== undefined && decider.branchId !== request.branchId) {
+				throw new ApprovalError('aprovador fora do escopo (tenant/filial) do pedido');
+			}
+			// Segregação de função: quem decide não pode ser quem pediu.
+			if (decider.userId === request.requestedBy) {
+				throw new ApprovalError('segregação de função: o solicitante não pode aprovar o próprio pedido');
+			}
+			// Permissão fina de aprovação.
+			if (!hasPermission(decider, request.approvePermission)) {
+				throw new ApprovalError(`aprovador sem a permissão ${request.approvePermission}`);
+			}
+			const decided: ApprovalRequest = { ...request, status: approve ? 'approved' : 'rejected', decidedBy: decider.userId, decidedAt: now().toISOString(), ...(reason !== undefined ? { reason } : {}) };
+			store[id] = decided;
+			return store;
+		});
+		return map[id]!;
 	}
 }
 
@@ -488,9 +556,12 @@ export function freezeCovers(freeze: Pick<Freeze, 'branchId' | 'costCenter' | 's
 /** Travas persistidas na Porta KV (default InMemoryKv; durável com KvPort real). */
 export class InMemoryFreezeStore implements FreezeStore {
 	constructor(private readonly kv: KvPort = new InMemoryKv()) {}
-	private readonly key = 'gov:freezes';
-	private async all(): Promise<Record<string, Freeze>> {
-		return (await this.kv.getJson<Record<string, Freeze>>(this.key)) ?? {};
+	// Chave por tenant: isola blobs e evita lost-update cruzado entre tenants.
+	private key(tenantId: string): string {
+		return `gov:freezes:${tenantId}`;
+	}
+	private async all(tenantId: string): Promise<Record<string, Freeze>> {
+		return (await this.kv.getJson<Record<string, Freeze>>(this.key(tenantId))) ?? {};
 	}
 
 	async create(input: CreateFreezeInput, now: () => Date = () => new Date()): Promise<Freeze> {
@@ -505,39 +576,38 @@ export class InMemoryFreezeStore implements FreezeStore {
 			createdAt: now().toISOString(),
 			status: 'active'
 		};
-		const map = await this.all();
-		map[freeze.id] = freeze;
-		await this.kv.setJson(this.key, map);
+		await mutate<Record<string, Freeze>>(this.kv, this.key(input.tenantId), current => ({ ...(current ?? {}), [freeze.id]: freeze }));
 		return freeze;
 	}
 
 	async list(tenantId: string): Promise<readonly Freeze[]> {
-		return Object.values(await this.all()).filter(f => f.tenantId === tenantId);
+		return Object.values(await this.all(tenantId));
 	}
 
 	async activeFor(tenantId: string, branchId?: string, costCenter?: string): Promise<Freeze | null> {
-		for (const freeze of Object.values(await this.all())) {
-			if (freeze.tenantId === tenantId && freezeCovers(freeze, branchId, costCenter)) return freeze;
+		for (const freeze of Object.values(await this.all(tenantId))) {
+			if (freezeCovers(freeze, branchId, costCenter)) return freeze;
 		}
 		return null;
 	}
 
 	async lift(id: string, lifter: Principal, now: () => Date = () => new Date()): Promise<Freeze> {
-		const map = await this.all();
-		const freeze = map[id];
-		if (!freeze) throw new FreezeError('trava inexistente');
-		if (freeze.status !== 'active') throw new FreezeError('trava já levantada (terminal)');
-		// Isolamento: só o próprio tenant.
-		if (lifter.tenantId !== freeze.tenantId) throw new FreezeError('trava fora do escopo do tenant');
-		// Segregação de função: quem travou não destrava sozinho.
-		if (lifter.userId === freeze.createdBy) throw new FreezeError('segregação de função: quem criou a trava não pode levantá-la');
-		// Permissão fina.
-		if (!hasPermission(lifter, 'freeze:lift')) throw new FreezeError('sem a permissão freeze:lift');
-		freeze.status = 'lifted';
-		freeze.liftedBy = lifter.userId;
-		freeze.liftedAt = now().toISOString();
-		map[id] = freeze;
-		await this.kv.setJson(this.key, map);
-		return freeze;
+		// Escopo por tenant do LIFTER: a trava de outro tenant nem está neste blob.
+		const map = await mutate<Record<string, Freeze>>(this.kv, this.key(lifter.tenantId), current => {
+			const store = { ...(current ?? {}) };
+			const freeze = store[id];
+			if (!freeze) throw new FreezeError('trava inexistente');
+			if (freeze.status !== 'active') throw new FreezeError('trava já levantada (terminal)');
+			// Isolamento: só o próprio tenant (reforçado pela chave, checado por garantia).
+			if (lifter.tenantId !== freeze.tenantId) throw new FreezeError('trava fora do escopo do tenant');
+			// Segregação de função: quem travou não destrava sozinho.
+			if (lifter.userId === freeze.createdBy) throw new FreezeError('segregação de função: quem criou a trava não pode levantá-la');
+			// Permissão fina.
+			if (!hasPermission(lifter, 'freeze:lift')) throw new FreezeError('sem a permissão freeze:lift');
+			const lifted: Freeze = { ...freeze, status: 'lifted', liftedBy: lifter.userId, liftedAt: now().toISOString() };
+			store[id] = lifted;
+			return store;
+		});
+		return map[id]!;
 	}
 }

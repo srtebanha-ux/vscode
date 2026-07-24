@@ -1557,7 +1557,7 @@ try {
 			InMemoryAuditSink, hashAuditRecord, GENESIS_HASH,
 			InMemoryApprovalStore, requiresApproval, ApprovalError,
 			InMemoryFreezeStore, freezeCovers, FreezeError,
-			InMemoryKv, RestKv, getGovernanceKv
+			InMemoryKv, RestKv, getGovernanceKv, mutate, KvConflictError
 		} = await import(pathToFileURL(govL.file).href);
 
 		// ── RBAC fino ──────────────────────────────────────────────────────────
@@ -1690,7 +1690,8 @@ try {
 		const storeA = new InMemoryApprovalStore(kv);
 		const submitted = await storeA.submit({ tenantId: 'tnt_alpha', entityType: 'quote', entityId: 'q1', amount: 500, policy: { threshold: 0, approvePermission: 'quote:approve' }, requestedBy: { userId: 'u_maker' } });
 		const storeB = new InMemoryApprovalStore(kv); // "outra invocação" lê o mesmo backend
-		assert.equal((await storeB.get(submitted.id))?.id, submitted.id, 'aprovação persiste entre instâncias (não evapora no cold start)');
+		assert.equal((await storeB.get('tnt_alpha', submitted.id))?.id, submitted.id, 'aprovação persiste entre instâncias (não evapora no cold start)');
+		assert.equal(await storeB.get('tnt_beta', submitted.id), null, 'chave por tenant: outro tenant não enxerga o pedido');
 		assert.equal((await storeB.listPending('tnt_alpha')).length, 1);
 		// A trava também persiste entre instâncias.
 		const fA = new InMemoryFreezeStore(kv);
@@ -1698,22 +1699,80 @@ try {
 		const fB = new InMemoryFreezeStore(kv);
 		assert.equal((await fB.activeFor('tnt_alpha'))?.id, persistedFreeze.id, 'trava persiste entre instâncias');
 
-		// ── RestKv (Vercel KV/Upstash via fetch): GET/SET contra um fake REST ──
+		// ── CAS (lock otimista): a base do read-modify-write atômico ───────────
+		// Dois leitores na MESMA versão -> só o primeiro grava; o segundo (stale)
+		// é rejeitado. É exatamente o que impede o lost-update.
+		const ckv = new InMemoryKv();
+		await ckv.setJson('c', { n: 0 }); // versão 1
+		const rA = await ckv.read('c');
+		const rB = await ckv.read('c'); // leitor concorrente, mesma versão
+		assert.equal(rA.version, rB.version, 'ambos leem a mesma versão');
+		assert.equal(await ckv.compareAndSet('c', { n: rA.value.n + 1 }, rA.version), true, 'primeiro CAS vence');
+		assert.equal(await ckv.compareAndSet('c', { n: rB.value.n + 1 }, rB.version), false, 'segundo CAS (stale) é rejeitado — sem lost-update');
+		assert.deepEqual(await ckv.getJson('c'), { n: 1 }, 'gravação perdida não sobrescreveu a vencedora');
+		// read de chave ausente -> versão 0 (sentinela do "ainda não existe").
+		assert.deepEqual(await ckv.read('vazia'), { value: null, version: 0 });
+
+		// mutate: relê e retenta em conflito; estoura KvConflictError se nunca vence.
+		const alwaysConflict = { read: async () => ({ value: 0, version: 1 }), compareAndSet: async () => false };
+		await assert.rejects(mutate(alwaysConflict, 'x', () => 1, 3), KvConflictError);
+		// fn que lança (regra de negócio) aborta o mutate SEM retentar.
+		let attempts = 0;
+		const counting = { read: async () => { attempts += 1; return { value: null, version: 0 }; }, compareAndSet: async () => true };
+		await assert.rejects(mutate(counting, 'x', () => { throw new Error('regra'); }), /regra/);
+		assert.equal(attempts, 1, 'erro de negócio não vira retry');
+
+		// ── Concorrência real: 20 appends de auditoria disparados juntos ───────
+		// Sob getJson/setJson (sem CAS) isso PERDERIA registros e forkaria a cadeia.
+		// Com mutate+CAS, cada um retenta até vencer -> todos entram, cadeia íntegra.
+		const concKv = new InMemoryKv();
+		const concSink = new InMemoryAuditSink(concKv);
+		await Promise.all(Array.from({ length: 20 }, (_, i) =>
+			concSink.append({ tenantId: 'tnt_conc', actorUserId: `u${i}`, action: 'quote:approve', entityType: 'quote', entityId: `q${i}` })));
+		const concChain = await concSink.list('tnt_conc');
+		assert.equal(concChain.length, 20, 'nenhum append perdido sob concorrência (CAS retenta)');
+		assert.equal(await concSink.verify('tnt_conc'), true, 'cadeia continua encadeada e válida sob concorrência');
+		assert.deepEqual(concChain.map(r => r.seq), Array.from({ length: 20 }, (_, i) => i), 'seq contíguo 0..19 sem buracos nem duplicatas');
+
+		// Aprovações concorrentes: 15 submits juntos, nenhum evapora.
+		const concStore = new InMemoryApprovalStore(concKv);
+		await Promise.all(Array.from({ length: 15 }, (_, i) =>
+			concStore.submit({ tenantId: 'tnt_conc', entityType: 'quote', entityId: `qq${i}`, amount: 1, policy: { threshold: 0, approvePermission: 'quote:approve' }, requestedBy: { userId: `m${i}` } })));
+		assert.equal((await concStore.listPending('tnt_conc')).length, 15, 'nenhuma aprovação perdida sob submits concorrentes');
+
+		// ── RestKv (Vercel KV/Upstash via fetch): GET/SET/EVAL contra um fake REST ──
+		// O fake emula um Redis: GET/SET de string + EVAL do script CAS (checa a
+		// versão do envelope e grava atomicamente), espelhando o servidor real.
 		const backing = new Map();
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = async (_url, init) => {
-			const [cmd, key, value] = JSON.parse(init.body);
-			if (cmd === 'SET') { backing.set(key, value); return { ok: true, json: async () => ({ result: 'OK' }) }; }
-			if (cmd === 'GET') { return { ok: true, json: async () => ({ result: backing.has(key) ? backing.get(key) : null }) }; }
+			const args = JSON.parse(init.body);
+			const cmd = args[0];
+			if (cmd === 'SET') { backing.set(args[1], args[2]); return { ok: true, json: async () => ({ result: 'OK' }) }; }
+			if (cmd === 'GET') { const k = args[1]; return { ok: true, json: async () => ({ result: backing.has(k) ? backing.get(k) : null }) }; }
+			if (cmd === 'EVAL') {
+				// ['EVAL', script, '1', key, envelope, expectedVersion]
+				const [, , , key, envelope, expected] = args;
+				const cur = backing.has(key) ? JSON.parse(backing.get(key)).version : 0;
+				if (cur !== Number(expected)) return { ok: true, json: async () => ({ result: 0 }) };
+				backing.set(key, envelope);
+				return { ok: true, json: async () => ({ result: 1 }) };
+			}
 			return { ok: false, json: async () => ({}) };
 		};
 		try {
 			const rest = new RestKv('https://kv.example', 'tok');
 			await rest.setJson('k1', { hello: 'world' });
-			assert.equal(backing.get('k1'), JSON.stringify({ hello: 'world' }), 'SET grava JSON serializado');
-			assert.deepEqual(await rest.getJson('k1'), { hello: 'world' }, 'GET desserializa');
+			assert.equal(backing.get('k1'), JSON.stringify({ version: 1, data: { hello: 'world' } }), 'SET grava o envelope versionado');
+			assert.deepEqual(await rest.getJson('k1'), { hello: 'world' }, 'GET desembrulha o envelope');
 			assert.equal(await rest.getJson('ausente'), null, 'chave ausente -> null');
-			// Um store durável ponta a ponta sobre o RestKv fake.
+			// CAS ponta a ponta sobre o fake: versão certa grava, versão stale falha.
+			const rv = await rest.read('k1');
+			assert.equal(rv.version, 1);
+			assert.equal(await rest.compareAndSet('k1', { hello: 'v2' }, rv.version), true, 'CAS com versão atual grava');
+			assert.equal(await rest.compareAndSet('k1', { hello: 'v3' }, rv.version), false, 'CAS com versão stale é rejeitado no servidor');
+			assert.deepEqual(await rest.getJson('k1'), { hello: 'v2' }, 'só a gravação vencedora vale');
+			// Um store durável ponta a ponta sobre o RestKv fake (usa mutate -> EVAL).
 			const durable = new InMemoryFreezeStore(rest);
 			const df = await durable.create({ tenantId: 'tnt_alpha', reason: 'via REST', createdBy: { userId: 'u' } });
 			assert.equal((await new InMemoryFreezeStore(rest).activeFor('tnt_alpha'))?.id, df.id, 'store sobre RestKv persiste');

@@ -1605,7 +1605,11 @@ try {
 		const guard = await compileLib('./api/lib/security/apiGuard.ts', 'ent-guard'); dirs.push(guard.dir);
 		const govL = await compileLib('./api/lib/security/governance.ts', 'ent-gov'); dirs.push(govL.dir);
 
-		const { scopeWhere, scopeCreate, authenticateHeaders } = await import(pathToFileURL(guard.file).href);
+		const {
+			scopeWhere, scopeCreate, authenticateHeaders,
+			enforcePayloadLimit, parseContentLength, MAX_PAYLOAD_BYTES,
+			checkRateLimit, InMemoryRateLimitStore, rateLimitKey, clientIp
+		} = await import(pathToFileURL(guard.file).href);
 		const {
 			hasPermission, permissionsOf, ROLE_PERMISSIONS, requirePermission,
 			InMemoryAuditSink, hashAuditRecord, GENESIS_HASH,
@@ -1860,6 +1864,44 @@ try {
 		const wrongRole = await authenticateHeaders(`Bearer ${sign({ uid: 'u1', tenantId: 'tnt_alpha', role: 'ROLE_PME' })}`, null, ['ROLE_ADMIN_CONTROLLER']);
 		assert.equal(wrongRole.ok, false);
 		assert.equal(wrongRole.status, 403);
+
+		// ── Guardrail: limite de payload (Content-Length) ──────────────────────
+		assert.equal(parseContentLength({ 'content-length': '1234' }), 1234);
+		assert.equal(parseContentLength({}), null, 'sem Content-Length -> null (não bloqueia)');
+		assert.equal(parseContentLength({ 'content-length': 'abc' }), null, 'Content-Length inválido -> null');
+		assert.equal(enforcePayloadLimit({ 'content-length': String(MAX_PAYLOAD_BYTES + 1) }).ok, false, 'acima do teto é barrado');
+		assert.equal(enforcePayloadLimit({ 'content-length': String(MAX_PAYLOAD_BYTES + 1) }).status, 413);
+		assert.equal(enforcePayloadLimit({ 'content-length': String(MAX_PAYLOAD_BYTES) }).ok, true, 'no limite exato passa');
+		assert.equal(enforcePayloadLimit({}).ok, true, 'sem Content-Length não bloqueia (parser cuida do stream)');
+		assert.equal(enforcePayloadLimit({ 'content-length': '50' }, 10).ok, false, 'teto customizado é respeitado');
+
+		// ── Guardrail: rate limit (janela fixa) ────────────────────────────────
+		const rlStore = new InMemoryRateLimitStore();
+		const pol = { limit: 3, windowMs: 60000 };
+		const rlKey = rateLimitKey({ tenantId: 'tnt_alpha', userId: 'u_x' }, null, 'gov');
+		let last;
+		for (let i = 0; i < 3; i += 1) {
+			last = await checkRateLimit(rlStore, rlKey, pol, 1000);
+			assert.equal(last.allowed, true, `hit ${i + 1} dentro do teto passa`);
+		}
+		assert.equal(last.remaining, 0, 'no 3º hit o saldo zera');
+		const over = await checkRateLimit(rlStore, rlKey, pol, 1000);
+		assert.equal(over.allowed, false, '4º hit na janela é bloqueado');
+		assert.ok(over.retryAfterSeconds >= 1, 'informa Retry-After em segundos');
+		// Janela seguinte (now além do windowMs) zera a contagem.
+		const nextWindow = await checkRateLimit(rlStore, rlKey, pol, 1000 + 60001);
+		assert.equal(nextWindow.allowed, true, 'nova janela reabre o teto');
+		// Chaves distintas não interferem entre si (isolamento por identidade).
+		const otherKey = rateLimitKey({ tenantId: 'tnt_beta', userId: 'u_x' }, null, 'gov');
+		assert.equal((await checkRateLimit(rlStore, otherKey, pol, 1000)).allowed, true, 'outra identidade tem orçamento próprio');
+		// rateLimitKey: anônimo cai no IP; clientIp lê o 1º do x-forwarded-for.
+		assert.match(rateLimitKey(null, '203.0.113.7', 'gov'), /ip:203\.0\.113\.7/);
+		assert.equal(clientIp({ 'x-forwarded-for': '203.0.113.7, 10.0.0.1' }), '203.0.113.7');
+		assert.equal(clientIp({ 'x-real-ip': '198.51.100.4' }), '198.51.100.4');
+		assert.equal(clientIp({}), null, 'sem header de IP -> null');
+		// Fail-open: store que lança NÃO derruba a API (limiter indisponível libera).
+		const brokenStore = { hit: async () => { throw new Error('kv down'); } };
+		assert.equal((await checkRateLimit(brokenStore, 'k', pol, 1000)).allowed, true, 'store quebrado -> fail-open');
 	} finally {
 		delete process.env.JWT_SECRET;
 		for (const d of dirs) await rm(d, { recursive: true, force: true });
@@ -2202,6 +2244,29 @@ try {
 		// Submit inválido (sem amount) -> 422; auditoria registra o submit.
 		assert.equal((await call({ method: 'POST', token: admin, body: { action: 'submit', entityType: 'purchase_order', entityId: 'x' } })).code, 422);
 		assert.ok((await call({ token: admin, resource: 'audit' })).body.records.some(r => r.action === 'approval:submit'), 'submit auditado');
+
+		// ── Guardrail na rota: payload gigante -> 413 (antes de tocar no corpo) ──
+		const bigRes = makeRes();
+		await handler({ method: 'POST', headers: { authorization: `Bearer ${admin}`, 'content-length': String(1024 * 1024) }, query: { resource: 'approvals' }, body: { action: 'submit' } }, bigRes);
+		assert.equal(bigRes.code, 413, 'POST acima do teto de payload é barrado');
+		assert.equal(bigRes.body.error, 'payload_too_large');
+
+		// ── Guardrail na rota: rate limit -> 429 (identidade fresca + teto baixo) ──
+		// Teto baixo por env (lido por request); principal novo tem contador zerado.
+		process.env.GOVERNANCE_RATE_LIMIT = '2';
+		try {
+			const flood = sign({ uid: 'u_flood', tenantId: 'tnt_flood', role: 'ROLE_ADMIN_CONTROLLER' });
+			const floodCall = async () => { const r = makeRes(); await handler({ method: 'GET', headers: { authorization: `Bearer ${flood}` }, query: { resource: 'approvals' } }, r); return r.code; };
+			assert.equal(await floodCall(), 200, '1º hit passa');
+			assert.equal(await floodCall(), 200, '2º hit passa (no teto)');
+			const limited = makeRes();
+			await handler({ method: 'GET', headers: { authorization: `Bearer ${flood}` }, query: { resource: 'approvals' } }, limited);
+			assert.equal(limited.code, 429, '3º hit estoura o teto -> 429');
+			assert.equal(limited.body.error, 'rate_limited');
+			assert.ok(limited.body.retryAfterSeconds >= 1, '429 informa Retry-After');
+		} finally {
+			delete process.env.GOVERNANCE_RATE_LIMIT;
+		}
 	} finally {
 		delete process.env.JWT_SECRET;
 		await rm(dir, { recursive: true, force: true });

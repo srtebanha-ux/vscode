@@ -531,3 +531,111 @@ export function buildSessionCookie(token: string, ttlSeconds: number = SESSION_T
 export function clearSessionCookie(): string {
 	return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
 }
+
+// ── 5) Guardrails de superfície: limite de payload + rate limit ──────────────
+//
+// Zero-Trust não é só QUEM chama — é QUANTO e QUÃO GRANDE. Sem teto de corpo,
+// um POST de 50 MB estoura a memória da função; sem rate limit, um cliente
+// (autenticado ou não) martela as rotas caras de IA e vira custo/negação de
+// serviço. Duas defesas baratas, dependência ZERO, aplicáveis por rota.
+
+/** Teto padrão de corpo de request (256 KB) — barra floods e abuso de memória. */
+export const MAX_PAYLOAD_BYTES = 256 * 1024;
+
+/** Lê o Content-Length (header Node) como número não-negativo, ou null. */
+export function parseContentLength(headers: NodeHeaders): number | null {
+	const raw = headerValue(headers['content-length']);
+	if (raw === null) return null;
+	const n = Number(raw);
+	return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+export type PayloadCheck = { readonly ok: true } | { readonly ok: false; readonly status: 413; readonly error: string; readonly message: string };
+
+/**
+ * Rejeita payloads acima do teto pelo Content-Length ANTES de ler o corpo
+ * (defesa barata). Content-Length ausente NÃO é bloqueado aqui — o parser de
+ * JSON do runtime ainda limita o stream; este guard corta o caso óbvio e barato.
+ */
+export function enforcePayloadLimit(headers: NodeHeaders, maxBytes: number = MAX_PAYLOAD_BYTES): PayloadCheck {
+	const length = parseContentLength(headers);
+	if (length !== null && length > maxBytes) {
+		return { ok: false, status: 413, error: 'payload_too_large', message: `Corpo excede o limite de ${maxBytes} bytes.` };
+	}
+	return { ok: true };
+}
+
+/** Janela + teto de um rate limit. */
+export interface RateLimitPolicy {
+	readonly limit: number;
+	readonly windowMs: number;
+}
+
+export interface RateLimitDecision {
+	readonly allowed: boolean;
+	readonly remaining: number;
+	/** Segundos até a janela reabrir — vira o header Retry-After no 429. */
+	readonly retryAfterSeconds: number;
+	readonly resetAt: number;
+}
+
+/** Estado de contagem de uma chave numa janela fixa. */
+export interface RateWindow {
+	count: number;
+	windowStart: number;
+}
+
+/** Porta de contagem do rate limit (produção: KV/Redis com TTL; dev: memória). */
+export interface RateLimitStore {
+	hit(key: string, windowMs: number, now: number): Promise<RateWindow>;
+}
+
+/**
+ * Store em memória (best-effort POR INSTÂNCIA da função; produção pluga um KV
+ * compartilhado para o limite valer entre instâncias). Janela fixa: ao virar a
+ * janela, zera a contagem.
+ */
+export class InMemoryRateLimitStore implements RateLimitStore {
+	private readonly windows = new Map<string, RateWindow>();
+	async hit(key: string, windowMs: number, now: number): Promise<RateWindow> {
+		const current = this.windows.get(key);
+		if (!current || now - current.windowStart >= windowMs) {
+			const fresh: RateWindow = { count: 1, windowStart: now };
+			this.windows.set(key, fresh);
+			return fresh;
+		}
+		current.count += 1;
+		return current;
+	}
+}
+
+/**
+ * Conta um hit e decide. Janela FIXA (simples, sem relógio monotônico
+ * distribuído; reset em windowStart+windowMs). FAIL-OPEN sob erro do store —
+ * a indisponibilidade do limiter não pode derrubar a API inteira.
+ */
+export async function checkRateLimit(store: RateLimitStore, key: string, policy: RateLimitPolicy, now: number = Date.now()): Promise<RateLimitDecision> {
+	let state: RateWindow;
+	try {
+		state = await store.hit(key, policy.windowMs, now);
+	} catch {
+		return { allowed: true, remaining: policy.limit, retryAfterSeconds: 0, resetAt: now + policy.windowMs };
+	}
+	const resetAt = state.windowStart + policy.windowMs;
+	const remaining = Math.max(0, policy.limit - state.count);
+	const allowed = state.count <= policy.limit;
+	return { allowed, remaining, retryAfterSeconds: allowed ? 0 : Math.max(1, Math.ceil((resetAt - now) / 1000)), resetAt };
+}
+
+/** Chave do rate limit: identidade autenticada quando houver, senão o IP (anônimo). */
+export function rateLimitKey(principal: Pick<Principal, 'tenantId' | 'userId'> | null, ip: string | null, scope: string): string {
+	const who = principal ? `${principal.tenantId}:${principal.userId}` : `ip:${ip ?? 'unknown'}`;
+	return `rl:${scope}:${who}`;
+}
+
+/** IP do cliente pelos headers da Vercel (x-forwarded-for: 1º da lista) — para o rate limit anônimo. */
+export function clientIp(headers: NodeHeaders): string | null {
+	const forwarded = headerValue(headers['x-forwarded-for']);
+	if (forwarded) return forwarded.split(',')[0]?.trim() ?? null;
+	return headerValue(headers['x-real-ip']);
+}

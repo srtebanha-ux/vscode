@@ -11,10 +11,19 @@
  *   GET  ?resource=audit       → trilha imutável + verificação (perm audit:view)
  */
 
-import { authenticateNode, type NodeHeaders, type Principal } from './lib/security/apiGuard';
+import { authenticateNode, checkRateLimit, clientIp, enforcePayloadLimit, InMemoryRateLimitStore, rateLimitKey, type NodeHeaders, type Principal, type RateLimitPolicy } from './lib/security/apiGuard';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
+
+// Rate limit da rota (best-effort por instância; produção pluga um KV compartilhado).
+// Teto generoso por padrão — envs GOVERNANCE_RATE_LIMIT/_WINDOW_MS afinam sem deploy.
+const rateStore = new InMemoryRateLimitStore();
+function governanceRatePolicy(): RateLimitPolicy {
+	const limit = Number(process.env['GOVERNANCE_RATE_LIMIT'] ?? '240');
+	const windowMs = Number(process.env['GOVERNANCE_RATE_WINDOW_MS'] ?? '60000');
+	return { limit: Number.isFinite(limit) && limit > 0 ? limit : 240, windowMs: Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60000 };
+}
 import { ApprovalError, FreezeError, InMemoryApprovalStore, InMemoryAuditSink, InMemoryFreezeStore, getGovernanceKv, hasPermission, type ApprovalPolicy } from './lib/security/governance';
 
 const ENTERPRISE_ACCESS = ['ROLE_ENTERPRISE_CLIENT', 'ROLE_ADMIN_CONTROLLER'] as const;
@@ -326,6 +335,24 @@ async function route(req: ApiRequest, res: ApiResponse): Promise<void> {
 		return;
 	}
 	const principal = auth.principal;
+	const headers = req.headers ?? {};
+
+	// Guardrail 1 — limite de payload: corta POST gigante ANTES de tocar no corpo.
+	if (method === 'POST') {
+		const payload = enforcePayloadLimit(headers);
+		if (!payload.ok) {
+			res.status(payload.status).json({ error: payload.error, message: payload.message });
+			return;
+		}
+	}
+
+	// Guardrail 2 — rate limit por identidade autenticada (fail-open se o store falhar).
+	const rate = await checkRateLimit(rateStore, rateLimitKey(principal, clientIp(headers), 'governance'), governanceRatePolicy());
+	if (!rate.allowed) {
+		res.status(429).json({ error: 'rate_limited', message: `Muitas requisições — tente de novo em ${rate.retryAfterSeconds}s.`, retryAfterSeconds: rate.retryAfterSeconds });
+		return;
+	}
+
 	const resource = readResource(req);
 
 	if (method === 'GET') {

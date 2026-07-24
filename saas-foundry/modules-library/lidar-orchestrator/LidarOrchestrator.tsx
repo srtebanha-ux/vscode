@@ -5,12 +5,17 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Activity, ArrowRight, CheckCircle2, Database, GitBranch, Hexagon, Landmark, Lock, Play, Plus, ShieldAlert, Trash2, Webhook, Zap, type LucideIcon } from 'lucide-react';
 import {
 	describeCondition,
-	evaluateRules,
+	evaluateWithBreaker,
+	loadFireLedger,
 	loadForecastSnapshot,
+	loadOrchestratorConfig,
 	loadRules,
 	nextRuleId,
+	saveFireLedger,
+	saveOrchestratorConfig,
 	saveRules,
-	type AutomationRule
+	type AutomationRule,
+	type OrchestratorConfig
 } from './automationRules.js';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['read:integrations', 'write:integrations'];
@@ -101,6 +106,15 @@ function AutomationStudio(): React.JSX.Element {
 	const [rules, setRules] = useState<AutomationRule[]>(() => loadRules());
 	const [fires, setFires] = useState<readonly FireLog[]>([]);
 	const [running, setRunning] = useState(false);
+	// Disjuntor: kill-switch mestre + orçamento de disparos por janela.
+	const [config, setConfig] = useState<OrchestratorConfig>(() => loadOrchestratorConfig());
+
+	const setPaused = useCallback((paused: boolean) => {
+		const next = { ...config, paused };
+		setConfig(next);
+		saveOrchestratorConfig(next);
+		toast.success(paused ? 'Kill-switch acionado — todas as automações pausadas.' : 'Kill-switch liberado — automações reativadas.');
+	}, [config, toast]);
 	// Form
 	const [commodity, setCommodity] = useState<string>('concreto 35MPa');
 	const [threshold, setThreshold] = useState('5');
@@ -147,10 +161,26 @@ function AutomationStudio(): React.JSX.Element {
 			toast.error('Nenhuma previsão do BI encontrada. Rode o Predictive BI Agent primeiro.');
 			return;
 		}
-		const fired = evaluateRules(rules, forecast);
+		// Disjuntor ANTES da ação: kill-switch e rate limit por janela.
+		const decision = evaluateWithBreaker(rules, forecast, config, loadFireLedger());
+		// Crédito por tentativa liberada: persiste o ledger já, mesmo se o submit falhar.
+		saveFireLedger(decision.ledger);
+		for (const s of decision.suppressed) {
+			addFire(
+				s.reason === 'paused'
+					? `⏸ ${s.rule.name} — contida pelo kill-switch (automações pausadas).`
+					: `⛔ ${s.rule.name} — contida pelo rate limit (teto de disparos na janela atingido).`,
+				false
+			);
+		}
+		const fired = decision.fired;
 		if (fired.length === 0) {
-			addFire(`Previsão de ${forecast.commodity} (${(forecast.deltaPct * 100).toFixed(1)}%) avaliada — nenhuma regra disparou.`, true);
-			toast.success('Avaliação concluída: nenhuma regra casou com a previsão atual.');
+			if (decision.suppressed.length > 0) {
+				toast.error('Nenhuma automação disparou: o disjuntor conteve as regras que casaram.');
+			} else {
+				addFire(`Previsão de ${forecast.commodity} (${(forecast.deltaPct * 100).toFixed(1)}%) avaliada — nenhuma regra disparou.`, true);
+				toast.success('Avaliação concluída: nenhuma regra casou com a previsão atual.');
+			}
 			return;
 		}
 		setRunning(true);
@@ -185,7 +215,7 @@ function AutomationStudio(): React.JSX.Element {
 		} finally {
 			setRunning(false);
 		}
-	}, [running, rules, persist, addFire, toast]);
+	}, [running, rules, config, persist, addFire, toast]);
 
 	const forecast = loadForecastSnapshot();
 
@@ -227,6 +257,20 @@ function AutomationStudio(): React.JSX.Element {
 			<button type="button" onClick={addRule} data-testid="rule-add" className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-500">
 				<Plus className="h-3.5 w-3.5" aria-hidden /> Criar fluxo automatizado
 			</button>
+
+			{/* Disjuntor: kill-switch mestre */}
+			<div className={`mt-4 flex flex-col gap-2 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${config.paused ? 'border-rose-500/40 bg-rose-500/5' : 'border-zinc-800 bg-zinc-950'}`}>
+				<div className="flex items-start gap-2">
+					<ShieldAlert className={`mt-0.5 h-4 w-4 shrink-0 ${config.paused ? 'text-rose-400' : 'text-zinc-500'}`} aria-hidden />
+					<div className="text-xs">
+						<p className={`font-semibold ${config.paused ? 'text-rose-300' : 'text-zinc-300'}`}>{config.paused ? 'Automações pausadas (kill-switch acionado)' : 'Disjuntor armado'}</p>
+						<p className="mt-0.5 text-[11px] text-zinc-500">Freio de emergência global + teto de {config.maxFiresPerWindow} disparos por regra a cada {Math.round(config.windowMs / 60000)} min — contra loops desgovernados.</p>
+					</div>
+				</div>
+				<button type="button" onClick={() => setPaused(!config.paused)} aria-pressed={config.paused} data-testid="orchestrator-killswitch" className={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-xs font-semibold transition-colors ${config.paused ? 'bg-emerald-600 text-white hover:bg-emerald-500' : 'border border-rose-500/50 text-rose-300 hover:bg-rose-500/10'}`}>
+					{config.paused ? <><Play className="h-3.5 w-3.5" aria-hidden /> Reativar automações</> : <><Lock className="h-3.5 w-3.5" aria-hidden /> Pausar tudo (kill-switch)</>}
+				</button>
+			</div>
 
 			{/* Regras + gatilho */}
 			<div className="mt-4 flex flex-col gap-2 rounded-2xl border border-zinc-800 bg-zinc-950 p-4 sm:flex-row sm:items-center sm:justify-between">

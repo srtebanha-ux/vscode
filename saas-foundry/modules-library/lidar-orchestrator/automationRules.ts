@@ -79,9 +79,22 @@ export function conditionMatches(condition: RuleCondition, forecast: ForecastSna
 	return compare(condition.op, forecast.deltaPct, condition.value);
 }
 
-/** Chave idempotente: uma regra dispara no máx. uma vez por previsão (commodity+delta). */
-export function forecastKey(forecast: ForecastSnapshot): string {
-	return `${forecast.commodity}@${forecast.deltaPct.toFixed(4)}`;
+/** Banda de quantização do delta (0,5 ponto percentual) para a chave idempotente. */
+export const DELTA_BAND_PCT = 0.005;
+
+/**
+ * Quantiza o delta numa banda. Sem isso, 6,20% e 6,21% (ruído de float da
+ * previsão) viram chaves diferentes e RE-DISPARAM a mesma regra em loop. Com a
+ * banda, ambos caem em 6,0%/6,5% -> mesma chave -> a idempotência segura o gatilho.
+ */
+export function quantizeDelta(deltaPct: number, bandPct: number = DELTA_BAND_PCT): number {
+	if (!(bandPct > 0)) return deltaPct;
+	return Math.round(deltaPct / bandPct) * bandPct;
+}
+
+/** Chave idempotente: uma regra dispara no máx. uma vez por previsão (commodity+delta quantizado). */
+export function forecastKey(forecast: ForecastSnapshot, bandPct: number = DELTA_BAND_PCT): string {
+	return `${forecast.commodity}@${quantizeDelta(forecast.deltaPct, bandPct).toFixed(4)}`;
 }
 
 export interface FireResult {
@@ -106,6 +119,86 @@ export function evaluateRules(rules: readonly AutomationRule[], forecast: Foreca
 		fired.push({ rule, action: rule.action, forecastKey: key });
 	}
 	return fired;
+}
+
+// ── Disjuntor (circuit breaker): kill-switch mestre + rate limit por regra ───
+//
+// O avaliador roda no submit da previsão E por Cron de madrugada. Sem freio,
+// uma regra mal calibrada — ou uma previsão oscilando na fronteira do limiar —
+// submete OC atrás de OC: loop desgovernado que inunda a Central de Aprovações.
+// O disjuntor põe DOIS freios ANTES de qualquer ação: (1) um kill-switch mestre
+// que pausa TODAS as regras de uma vez (freio de emergência); (2) um teto de
+// disparos por regra numa janela deslizante (o rate limit propriamente dito).
+
+export interface OrchestratorConfig {
+	/** Kill-switch mestre: pausa TODAS as regras de uma vez, ignorando o `enabled`. */
+	readonly paused: boolean;
+	/** Teto de disparos por regra dentro da janela. */
+	readonly maxFiresPerWindow: number;
+	/** Tamanho da janela deslizante do rate limit, em ms. */
+	readonly windowMs: number;
+}
+
+export const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
+	paused: false,
+	maxFiresPerWindow: 5,
+	windowMs: 60 * 60 * 1000 // 1 hora
+};
+
+/** Histórico de disparos por regra (timestamps ISO) — base do rate limit deslizante. */
+export type FireLedger = Record<string, readonly string[]>;
+
+export type SuppressReason = 'paused' | 'rate_limited';
+
+export interface SuppressedFire {
+	readonly rule: AutomationRule;
+	readonly reason: SuppressReason;
+}
+
+export interface BreakerDecision {
+	/** Regras liberadas para disparar agora. */
+	readonly fired: FireResult[];
+	/** Regras que casaram mas o disjuntor barrou (pausa ou teto). */
+	readonly suppressed: SuppressedFire[];
+	/** Ledger atualizado (janela podada + disparos liberados creditados) a persistir. */
+	readonly ledger: FireLedger;
+}
+
+/**
+ * Passa as candidatas (`evaluateRules`) pelo disjuntor. Kill-switch pausa tudo;
+ * senão cada regra só é liberada se ainda não estourou o teto na janela. NÃO
+ * executa a ação — devolve o que PODE disparar + o ledger a persistir. O crédito
+ * no ledger é por TENTATIVA liberada (não por sucesso): uma regra que falha em
+ * loop queima o orçamento e é contida, em vez de martelar o downstream para sempre.
+ */
+export function evaluateWithBreaker(
+	rules: readonly AutomationRule[],
+	forecast: ForecastSnapshot,
+	config: OrchestratorConfig,
+	ledger: FireLedger,
+	now: () => Date = () => new Date()
+): BreakerDecision {
+	const candidates = evaluateRules(rules, forecast);
+	// Kill-switch mestre: nada dispara, sem exceção — todas as candidatas viram suprimidas.
+	if (config.paused) {
+		return { fired: [], suppressed: candidates.map(c => ({ rule: c.rule, reason: 'paused' as const })), ledger };
+	}
+	const cutoff = now().getTime() - config.windowMs;
+	const nextLedger: Record<string, readonly string[]> = { ...ledger };
+	const fired: FireResult[] = [];
+	const suppressed: SuppressedFire[] = [];
+	for (const candidate of candidates) {
+		// Janela deslizante: descarta disparos velhos ANTES de contar contra o teto.
+		const recent = (nextLedger[candidate.rule.id] ?? []).filter(ts => new Date(ts).getTime() > cutoff);
+		if (recent.length >= config.maxFiresPerWindow) {
+			nextLedger[candidate.rule.id] = recent; // poda a janela mesmo suprimindo
+			suppressed.push({ rule: candidate.rule, reason: 'rate_limited' });
+			continue;
+		}
+		nextLedger[candidate.rule.id] = [...recent, now().toISOString()];
+		fired.push(candidate);
+	}
+	return { fired, suppressed, ledger: nextLedger };
 }
 
 /** Texto humano da condição (para a UI e o log). */
@@ -160,4 +253,43 @@ export function loadForecastSnapshot(storage: Pick<Storage, 'getItem'> = window.
 	} catch {
 		return null;
 	}
+}
+
+// ── Persistência do disjuntor (localStorage; produção: config + tabela) ──────
+
+export const ORCHESTRATOR_CONFIG_KEY = 'lidar_orchestrator_config_v1';
+export const FIRE_LEDGER_KEY = 'lidar_orchestrator_ledger_v1';
+
+export function loadOrchestratorConfig(storage: Pick<Storage, 'getItem'> = window.localStorage): OrchestratorConfig {
+	try {
+		const raw = storage.getItem(ORCHESTRATOR_CONFIG_KEY);
+		if (!raw) return DEFAULT_ORCHESTRATOR_CONFIG;
+		const p = JSON.parse(raw) as Partial<OrchestratorConfig>;
+		return {
+			paused: typeof p.paused === 'boolean' ? p.paused : DEFAULT_ORCHESTRATOR_CONFIG.paused,
+			maxFiresPerWindow: typeof p.maxFiresPerWindow === 'number' && p.maxFiresPerWindow > 0 ? p.maxFiresPerWindow : DEFAULT_ORCHESTRATOR_CONFIG.maxFiresPerWindow,
+			windowMs: typeof p.windowMs === 'number' && p.windowMs > 0 ? p.windowMs : DEFAULT_ORCHESTRATOR_CONFIG.windowMs
+		};
+	} catch {
+		return DEFAULT_ORCHESTRATOR_CONFIG;
+	}
+}
+
+export function saveOrchestratorConfig(config: OrchestratorConfig, storage: Pick<Storage, 'setItem'> = window.localStorage): void {
+	storage.setItem(ORCHESTRATOR_CONFIG_KEY, JSON.stringify(config));
+}
+
+export function loadFireLedger(storage: Pick<Storage, 'getItem'> = window.localStorage): FireLedger {
+	try {
+		const raw = storage.getItem(FIRE_LEDGER_KEY);
+		if (!raw) return {};
+		const parsed = JSON.parse(raw) as unknown;
+		return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as FireLedger) : {};
+	} catch {
+		return {};
+	}
+}
+
+export function saveFireLedger(ledger: FireLedger, storage: Pick<Storage, 'setItem'> = window.localStorage): void {
+	storage.setItem(FIRE_LEDGER_KEY, JSON.stringify(ledger));
 }

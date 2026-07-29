@@ -1174,6 +1174,77 @@ try {
 	assert.match(html, /apenas espelha/);
 }
 
+// 26d. Painel refatorado: período global + 6 KPIs + clique/duplo + 6 rotas
+{
+	// ── Modelo puro (período, agregação, delta, formatação, rotas) ──
+	const model = await import('./modules-library/enterprise-controllership/dist/panelModel.js');
+	const { PANEL_PERIODS, periodMonths, slicePeriod, aggregate, windowDeltaPct, formatKpiValue, PANEL_KPIS, PANEL_ROUTES, SECTOR_REVENUE, kpiByRoute } = model;
+	assert.deepEqual(PANEL_PERIODS.map(p => p.id), ['3m', '6m', '12m']);
+	assert.equal(periodMonths('6m'), 6);
+	assert.equal(periodMonths('inexistente'), 12, 'período desconhecido -> 12 (fail-safe)');
+	// slicePeriod recorta os últimos N.
+	const s = [{ mes: 'a', valor: 1 }, { mes: 'b', valor: 2 }, { mes: 'c', valor: 3 }];
+	assert.deepEqual(slicePeriod(s, 2).map(p => p.valor), [2, 3]);
+	// aggregate soma (fluxos) e média (percentuais).
+	assert.equal(aggregate(s, 3, 'sum'), 6);
+	assert.equal(aggregate(s, 2, 'avg'), 2.5);
+	// windowDeltaPct: janela atual vs. anterior de mesmo tamanho.
+	const growth = [{ mes: 'a', valor: 100 }, { mes: 'b', valor: 100 }, { mes: 'c', valor: 150 }, { mes: 'd', valor: 150 }];
+	assert.equal(windowDeltaPct(growth, 2, 'sum'), 50, '(300 vs 200) = +50%');
+	assert.equal(windowDeltaPct(s, 3, 'sum'), 0, 'sem janela anterior -> 0');
+	// formatKpiValue: R$ compacto e %.
+	assert.match(formatKpiValue(1_500_000, 'brl'), /1,50 mi/);
+	assert.match(formatKpiValue(48000, 'brl'), /48 mil/);
+	assert.match(formatKpiValue(22.4, 'pct'), /22\.4%/);
+	assert.match(formatKpiValue(-90000, 'brl'), /^-R\$/, 'prejuízo mantém o sinal negativo');
+	// Integridade dos 6 KPIs + amarração com as 6 rotas.
+	assert.equal(PANEL_KPIS.length, 6);
+	assert.deepEqual(PANEL_KPIS.map(k => k.label), [
+		'Resultado Mensal (Lucro/Prejuízo)', 'Tributos Pagos (no período)', 'Faturamento', 'CMV/CPV (Custos)', 'Margem de Lucro', 'Valores Pagos'
+	]);
+	assert.equal(Object.keys(PANEL_ROUTES).length, 6);
+	for (const kpi of PANEL_KPIS) {
+		assert.ok(PANEL_ROUTES[kpi.route], `KPI ${kpi.id} aponta para uma rota válida`);
+		assert.equal(kpiByRoute(kpi.route).id, kpi.id, 'rota volta ao KPI de origem');
+		assert.equal(PANEL_KPIS.filter(k => k.series.length === 12).length, 6);
+	}
+	assert.ok(SECTOR_REVENUE.length >= 4, 'colunas por setor do card Faturamento');
+	assert.equal(PANEL_ROUTES.fluxo.path, '/controladoria/fluxo-caixa', 'rota mapeia 1:1 p/ um path de app');
+
+	// ── Hook de clique: decisão pura (1 = simples, 2+ = duplo) ──
+	const { resolveClicks, CLICK_WINDOW_MS } = await import('./modules-library/enterprise-controllership/dist/usePanelClick.js');
+	assert.equal(resolveClicks(1), 'single');
+	assert.equal(resolveClicks(2), 'double');
+	assert.equal(resolveClicks(3), 'double');
+	assert.ok(CLICK_WINDOW_MS >= 150 && CLICK_WINDOW_MS <= 400, 'janela de decisão humana');
+
+	// ── As 6 telas do duplo-clique renderizam (SSR) com o conteúdo pedido ──
+	const { renderPanelScreen } = await import('./modules-library/enterprise-controllership/dist/PanelDetailScreens.js');
+	const dre = renderToStaticMarkup(renderPanelScreen('dre', '12m'));
+	assert.match(dre, /Comparativo do período/);
+	assert.match(dre, /Margem líquida/);
+	assert.match(renderToStaticMarkup(renderPanelScreen('tributos', '6m')), /Reforma Tributária/);
+	assert.match(renderToStaticMarkup(renderPanelScreen('produtos', '6m')), /Clientes com maior faturamento/);
+	const custos = renderToStaticMarkup(renderPanelScreen('custos', '12m'));
+	assert.match(custos, /departamentalização/);
+	assert.match(custos, /Custeio variável/);
+	assert.match(custos, /Custeio por absorção/);
+	assert.match(renderToStaticMarkup(renderPanelScreen('precos', '3m')), /Competitividade perante o mercado/);
+	const fluxo = renderToStaticMarkup(renderPanelScreen('fluxo', '12m'));
+	assert.match(fluxo, /Liquidez corrente/);
+	assert.match(fluxo, /A receber/);
+
+	// ── PanelView (SSR): botão Períodos + os 6 cards ──
+	const { PanelView } = await import('./modules-library/enterprise-controllership/dist/PanelView.js');
+	const panel = renderToStaticMarkup(createElement(PanelView));
+	assert.match(panel, /Períodos/);
+	assert.match(panel, /1 clique abre o gráfico · 2 cliques abrem o detalhe/);
+	assert.match(panel, /Resultado Mensal \(Lucro\/Prejuízo\)/);
+	assert.match(panel, /CMV\/CPV \(Custos\)/);
+	assert.match(panel, /Margem de Lucro/);
+	assert.match(panel, /Faturamento/);
+}
+
 // 27. Gerador de Dossiê Executivo: munição de argumentação pronta para o consultor humano
 {
 	const { ExecutiveBriefingGenerator } = await import('./modules-library/enterprise-controllership/dist/ExecutiveBriefingGenerator.js');

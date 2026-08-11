@@ -19,7 +19,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { buildSystemPrompt } from '@foundry/engine-core/ai';
-import { authenticateHeaders, checkRateLimit, InMemoryRateLimitStore, rateLimitKey, SERVER_ROLES, type RateLimitPolicy } from '../lib/security/apiGuard';
+import { authenticateHeaders, checkRateLimit, InMemoryRateLimitStore, isSessionAuthConfigured, rateLimitKey, SERVER_ROLES, type RateLimitPolicy } from '../lib/security/apiGuard';
 import { quotaStore, BASIC_PLAN_MONTHLY_TOKENS, QUOTA_EXCEEDED_MESSAGE } from '../lib/tokenQuota';
 
 // Rate limit por IP (a identidade do JWT ainda não é verificada aqui — em produção
@@ -108,7 +108,10 @@ export function extractBearerToken(authorizationHeader: string | null): string |
  */
 export async function resolveRequestTenant(request: Request): Promise<{ readonly ok: true; readonly tenantId: string } | { readonly ok: false; readonly status: number }> {
 	const authHeader = request.headers.get('authorization');
-	if (process.env['JWT_SECRET']) {
+	// Mesmo predicado do resto do app: a ponte só está "ligada" com JWT_SECRET E
+	// FIREBASE_PROJECT_ID (o /api/session só minta o cookie com os dois). Numa
+	// preview parcial (só o segredo), cai no fallback estrutural documentado.
+	if (isSessionAuthConfigured()) {
 		const auth = await authenticateHeaders(authHeader, request.headers.get('cookie'), SERVER_ROLES);
 		if (!auth.ok) return { ok: false, status: auth.status };
 		return { ok: true, tenantId: auth.principal.tenantId };

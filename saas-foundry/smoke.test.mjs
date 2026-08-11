@@ -505,7 +505,9 @@ try {
 		// Fecha a impersonação: antes, um uid forjado num JWT não-verificado passava.
 		const { default: jsonwebtoken } = await import('jsonwebtoken');
 		const HS_SECRET = 'cognitive-hs256-secret-32-chars-min!';
+		// A ponte só "enforça" com JWT_SECRET E FIREBASE_PROJECT_ID (mesmo predicado do app).
 		process.env.JWT_SECRET = HS_SECRET;
+		process.env.FIREBASE_PROJECT_ID = 'lidar-core-test';
 		try {
 			// JWT não assinado com o segredo (forjado) -> 401, mesmo bem-formado.
 			const forged = await call({ headers: { authorization: `Bearer ${jwt}`, 'content-type': 'application/json' }, body: validBody });
@@ -518,6 +520,17 @@ try {
 			assert.equal((await okSigned.json()).agentType, 'CFO');
 			// O tenant é o VERIFICADO (tnt_signed), não um uid arbitrário do atacante.
 			assert.ok((await quotaStore.getBalance('tnt_signed')) < 50000, 'a cota debitada é a do tenant verificado');
+		} finally {
+			delete process.env.JWT_SECRET;
+			delete process.env.FIREBASE_PROJECT_ID;
+		}
+
+		// Preview PARCIAL (só JWT_SECRET, sem FIREBASE_PROJECT_ID): NÃO enforça —
+		// cai no fallback estrutural documentado (não quebra dev/preview). Regressão do review.
+		process.env.JWT_SECRET = HS_SECRET;
+		try {
+			const partial = await call({ headers: { authorization: `Bearer ${jwt}`, 'content-type': 'application/json' }, body: validBody });
+			assert.notEqual(partial.status, 401, 'ponte parcialmente provisionada mantém o fallback (não 401)');
 		} finally {
 			delete process.env.JWT_SECRET;
 		}

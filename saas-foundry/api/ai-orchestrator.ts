@@ -8,6 +8,34 @@
  * LLM cruzando o prompt com o catálogo de módulos.
  */
 
+// ATENÇÃO: este arquivo também é importado pelo FRONT (MagicPrompt usa `orchestrate`
+// como fallback local). Por isso NÃO pode importar módulos server-only (apiGuard/
+// node:crypto) — o rate limit é um limiter fixo-janela INLINE, sem dependências.
+declare const process: { readonly env: Record<string, string | undefined> } | undefined;
+
+const rlWindows = new Map<string, { count: number; windowStart: number }>();
+
+/** Rate limit por IP (janela fixa) — só roda no handler (servidor). Fail-open. */
+function orchestratorRateAllows(ip: string | null, nowMs: number = Date.now()): boolean {
+	const env = typeof process !== 'undefined' ? process.env : {};
+	const limit = Number(env['ORCHESTRATOR_RATE_LIMIT'] ?? '60');
+	const windowMs = Number(env['ORCHESTRATOR_RATE_WINDOW_MS'] ?? '60000');
+	const cap = Number.isFinite(limit) && limit > 0 ? limit : 60;
+	const win = Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60000;
+	const key = `ip:${ip ?? 'unknown'}`;
+	const current = rlWindows.get(key);
+	if (!current || nowMs - current.windowStart >= win) {
+		rlWindows.set(key, { count: 1, windowStart: nowMs });
+		return true;
+	}
+	current.count += 1;
+	return current.count <= cap;
+}
+
+function requestIp(request: Request): string | null {
+	return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? request.headers.get('x-real-ip') ?? null;
+}
+
 export interface AiArchitectRequest {
 	readonly prompt: string;
 }
@@ -76,6 +104,10 @@ export function orchestrate(prompt: string): AiArchitectResponse {
 export default async function handler(request: Request): Promise<Response> {
 	if (request.method !== 'POST') {
 		return Response.json({ error: 'method-not-allowed' }, { status: 405 });
+	}
+	// Rate limit por IP — a rota é pública, então limita varredura/abuso.
+	if (!orchestratorRateAllows(requestIp(request))) {
+		return Response.json({ error: 'rate-limited', message: 'Muitas requisições — tente em instantes.' }, { status: 429 });
 	}
 	let body: AiArchitectRequest;
 	try {

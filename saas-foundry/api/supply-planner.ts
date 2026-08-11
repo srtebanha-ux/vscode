@@ -10,10 +10,22 @@
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { authenticateNodeWhenConfigured, type NodeHeaders, type ServerRole } from './lib/security/apiGuard';
+import { authenticateNodeWhenConfigured, checkRateLimit, clientIp, InMemoryRateLimitStore, rateLimitKey, type NodeHeaders, type Principal, type RateLimitPolicy, type ServerRole } from './lib/security/apiGuard';
 
 // Serverless roda em Node; o tsconfig do shell só conhece o browser.
 declare const process: { readonly env: Record<string, string | undefined> };
+
+// Rate limit da rota (chama o Gemini). Chave por identidade; anônimo -> IP.
+const rateStore = new InMemoryRateLimitStore();
+function plannerRatePolicy(): RateLimitPolicy {
+	const limit = Number(process.env['PLANNER_RATE_LIMIT'] ?? '30');
+	const windowMs = Number(process.env['PLANNER_RATE_WINDOW_MS'] ?? '60000');
+	return { limit: Number.isFinite(limit) && limit > 0 ? limit : 30, windowMs: Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60000 };
+}
+function rateKeyFor(principal: Principal, headers: NodeHeaders, scope: string): string {
+	const identity = principal.userId === 'anonymous' ? null : { tenantId: principal.tenantId, userId: principal.userId };
+	return rateLimitKey(identity, clientIp(headers), scope);
+}
 
 // Planejar consome cota de IA — exige login (qualquer cargo) quando a ponte de
 // sessão está configurada (produção); no dev/preview passa aberto (sem quebrar).
@@ -181,6 +193,13 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 	const auth = await authenticateNodeWhenConfigured(req.headers ?? {}, ALLOWED_ROLES);
 	if (!auth.ok) {
 		res.status(auth.status).json({ error: auth.error, message: auth.message });
+		return;
+	}
+
+	// Rate limit ANTES de gastar cota de IA (fail-open se o limiter falhar).
+	const rate = await checkRateLimit(rateStore, rateKeyFor(auth.principal, req.headers ?? {}, 'planner'), plannerRatePolicy());
+	if (!rate.allowed) {
+		res.status(429).json({ error: 'rate_limited', message: `Muitas consultas — tente de novo em ${rate.retryAfterSeconds}s.`, retryAfterSeconds: rate.retryAfterSeconds });
 		return;
 	}
 

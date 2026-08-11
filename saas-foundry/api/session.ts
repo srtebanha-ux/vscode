@@ -43,7 +43,9 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 	try {
 		await route(req, res);
 	} catch (error) {
-		res.status(500).json({ error: 'internal_error', message: error instanceof Error ? error.message : String(error) });
+		// Nunca vazar detalhe interno (config/stack) para o cliente — só loga no servidor.
+		console.error('[session]', error instanceof Error ? error.message : error);
+		res.status(500).json({ error: 'internal_error', message: 'Não foi possível processar a requisição.' });
 	}
 }
 

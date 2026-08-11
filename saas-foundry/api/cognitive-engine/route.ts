@@ -19,7 +19,20 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { buildSystemPrompt } from '@foundry/engine-core/ai';
+import { checkRateLimit, InMemoryRateLimitStore, rateLimitKey, type RateLimitPolicy } from '../lib/security/apiGuard';
 import { quotaStore, BASIC_PLAN_MONTHLY_TOKENS, QUOTA_EXCEEDED_MESSAGE } from '../lib/tokenQuota';
+
+// Rate limit por IP (a identidade do JWT ainda não é verificada aqui — em produção
+// o firebase-admin verifica; por ora o IP barra rotação de uid e brute-force).
+const rateStore = new InMemoryRateLimitStore();
+function cognitiveRatePolicy(): RateLimitPolicy {
+	const limit = Number(process.env['COGNITIVE_RATE_LIMIT'] ?? '60');
+	const windowMs = Number(process.env['COGNITIVE_RATE_WINDOW_MS'] ?? '60000');
+	return { limit: Number.isFinite(limit) && limit > 0 ? limit : 60, windowMs: Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60000 };
+}
+function requestIp(request: Request): string | null {
+	return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? request.headers.get('x-real-ip') ?? null;
+}
 
 // Re-export para consumidores existentes (testes / composição da API).
 export { quotaStore, BASIC_PLAN_MONTHLY_TOKENS, QUOTA_EXCEEDED_MESSAGE } from '../lib/tokenQuota';
@@ -158,6 +171,12 @@ export async function POST(request: Request): Promise<Response> {
 	const tenantId = extractTenantId(token);
 	if (!tenantId) {
 		return Response.json({ error: 'unauthorized', message: 'Token sem identidade de tenant.' }, { status: 401 });
+	}
+
+	// 1b) Rate limit por IP: barra brute-force/varredura antes de tocar na LLM.
+	const rate = await checkRateLimit(rateStore, rateLimitKey(null, requestIp(request), 'cognitive'), cognitiveRatePolicy());
+	if (!rate.allowed) {
+		return Response.json({ error: 'rate-limited', message: 'Muitas requisições — tente em instantes.', retryAfterSeconds: rate.retryAfterSeconds }, { status: 429 });
 	}
 
 	// 2) Payload não confiável: JSON + contrato zod fail-closed.

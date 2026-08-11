@@ -500,6 +500,54 @@ try {
 
 		// Handler default (functions clássico): método errado -> 405
 		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/cognitive-engine', { method: 'GET' }))).status, 405);
+
+		// Rate limit por IP: teto baixo + IP fresco -> 3ª requisição é 429 (antes da LLM/quota).
+		process.env.COGNITIVE_RATE_LIMIT = '2';
+		try {
+			const rlHeaders = { ...authed, 'x-forwarded-for': '198.51.100.7' };
+			assert.notEqual((await call({ headers: rlHeaders, body: validBody })).status, 429, '1ª passa');
+			assert.notEqual((await call({ headers: rlHeaders, body: validBody })).status, 429, '2ª passa');
+			const limited = await call({ headers: rlHeaders, body: validBody });
+			assert.equal(limited.status, 429, '3ª estoura o teto -> 429');
+			assert.equal((await limited.json()).error, 'rate-limited');
+		} finally {
+			delete process.env.COGNITIVE_RATE_LIMIT;
+		}
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
+	}
+}
+
+// 15b. AI Orchestrator (/api/ai-orchestrator): recomendador público + rate limit por IP
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./api/ai-orchestrator.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-orch-')), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { default: handler, orchestrate } = await import(pathToFileURL(compiled).href);
+		// Núcleo puro: casa palavras-chave -> módulos.
+		assert.ok(orchestrate('preciso integrar SAP e conciliar banco').recommendedModules.includes('lidar-orchestrator-v1'));
+		assert.equal(orchestrate('xyzabc sem correspondência nenhuma').recommendedModules.length, 0);
+		// HTTP: método errado -> 405; prompt curto -> 400; válido -> 200.
+		assert.equal((await handler(new Request('https://x/api/ai-orchestrator', { method: 'GET' }))).status, 405);
+		assert.equal((await handler(new Request('https://x/api/ai-orchestrator', { method: 'POST', body: JSON.stringify({ prompt: 'x' }) }))).status, 400);
+		const ok = await handler(new Request('https://x/api/ai-orchestrator', { method: 'POST', body: JSON.stringify({ prompt: 'quero automatizar marketing e anúncios no instagram' }) }));
+		assert.equal(ok.status, 200);
+		assert.ok((await ok.json()).recommendedModules.includes('virtual-cmo-v1'));
+		// Rate limit por IP: teto baixo + IP fresco -> 3ª é 429.
+		process.env.ORCHESTRATOR_RATE_LIMIT = '2';
+		try {
+			const req = () => new Request('https://x/api/ai-orchestrator', { method: 'POST', headers: { 'x-forwarded-for': '192.0.2.5' }, body: JSON.stringify({ prompt: 'integração de sistemas e erp' }) });
+			assert.notEqual((await handler(req())).status, 429, '1ª passa');
+			assert.notEqual((await handler(req())).status, 429, '2ª passa');
+			assert.equal((await handler(req())).status, 429, '3ª estoura o teto -> 429');
+		} finally {
+			delete process.env.ORCHESTRATOR_RATE_LIMIT;
+		}
 	} finally {
 		await rm(join(compiled, '..'), { recursive: true, force: true });
 	}
@@ -522,14 +570,25 @@ try {
 		await writeFile(compiled, outputFiles[0].text);
 		const { POST, default: methodHandler, verifyStripeSignature, applyBillingEvent, quotaStore } = await import(pathToFileURL(compiled).href);
 
-		const validSig = 't=1720656000,v1=deadbeefcafe';
-		assert.equal(verifyStripeSignature('{"x":1}', validSig, 'whsec_test'), true);
+		// Assinatura HMAC-SHA256 REAL do Stripe: t=<ts>,v1=<hmac(secret, `${ts}.${body}`)>.
+		const { createHmac } = await import('node:crypto');
+		const nowSec = Math.floor(Date.now() / 1000);
+		const stripeSign = (body, secret, t = nowSec) => `t=${t},v1=${createHmac('sha256', secret).update(`${t}.${body}`).digest('hex')}`;
+
+		const validSig = stripeSign('{"x":1}', 'whsec_test');
+		assert.equal(verifyStripeSignature('{"x":1}', validSig, 'whsec_test'), true, 'assinatura HMAC correta passa');
+		// A BRECHA fechada: header com a FORMA certa mas HMAC forjado -> REJEITADO.
+		assert.equal(verifyStripeSignature('{"x":1}', `t=${nowSec},v1=deadbeefcafe`, 'whsec_test'), false, 'HMAC forjado é rejeitado (webhook não é mais falsificável)');
+		// Replay: corpo/secret certos, mas timestamp fora da janela de tolerância.
+		assert.equal(verifyStripeSignature('{"x":1}', stripeSign('{"x":1}', 'whsec_test', nowSec - 100000), 'whsec_test'), false, 'evento antigo (replay) é rejeitado');
+		// Corpo adulterado após a assinatura -> HMAC não bate.
+		assert.equal(verifyStripeSignature('{"x":2}', validSig, 'whsec_test'), false, 'corpo alterado invalida a assinatura');
 		for (const [body, sig, secret] of [
-			['', validSig, 'whsec_test'],           // corpo vazio
-			['{"x":1}', null, 'whsec_test'],          // sem header
-			['{"x":1}', 'v1=abc', 'whsec_test'],      // sem timestamp
-			['{"x":1}', 't=1', 'whsec_test'],         // sem v1
-			['{"x":1}', validSig, 'sk_live_x']        // secret errada
+			['', validSig, 'whsec_test'],                          // corpo vazio
+			['{"x":1}', null, 'whsec_test'],                        // sem header
+			['{"x":1}', 'v1=abc', 'whsec_test'],                    // sem timestamp
+			['{"x":1}', `t=${nowSec}`, 'whsec_test'],               // sem v1
+			['{"x":1}', validSig, 'whsec_outra']                    // secret errada -> HMAC diverge
 		]) {
 			assert.equal(verifyStripeSignature(body, sig, secret), false, `sig "${sig}" secret "${secret}" deveria falhar`);
 		}
@@ -554,18 +613,22 @@ try {
 		assert.equal((await applyBillingEvent({ id: 'evt_3', type: 'invoice.payment_succeeded', data: { object: { id: 'in_3' } } })).handled, false);
 		assert.equal((await applyBillingEvent({ id: 'evt_4', type: 'customer.subscription.updated', data: { object: { id: 'sub_1' } } })).reason, 'ignored-event');
 
-		// HTTP: sem secret no ambiente -> 500 (misconfig, fail-closed)
+		// HTTP: o corpo assinado precisa ser EXATAMENTE o corpo enviado (bytes crus).
+		const paidBody = JSON.stringify(paidEvent);
+		const paidSig = stripeSign(paidBody, 'whsec_test');
+
+		// Sem secret no ambiente -> 500 (misconfig, fail-closed)
 		delete process.env.STRIPE_WEBHOOK_SECRET;
-		const noSecret = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: JSON.stringify(paidEvent), headers: { 'stripe-signature': validSig } }));
+		const noSecret = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: paidBody, headers: { 'stripe-signature': paidSig } }));
 		assert.equal(noSecret.status, 500);
 
-		// Com secret: assinatura inválida -> 400; válida -> 200 e recarga
+		// Com secret: header forjado -> 400; assinatura HMAC real -> 200 e recarga
 		process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
-		const badSig = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: JSON.stringify(paidEvent), headers: { 'stripe-signature': 'garbage' } }));
-		assert.equal(badSig.status, 400);
+		const badSig = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: paidBody, headers: { 'stripe-signature': `t=${nowSec},v1=forjado` } }));
+		assert.equal(badSig.status, 400, 'webhook forjado é barrado no HTTP');
 
 		await quotaStore.setBalance('acme', 0);
-		const okRes = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: JSON.stringify(paidEvent), headers: { 'stripe-signature': validSig } }));
+		const okRes = await POST(new Request('https://lidarcore.example/api/webhooks/stripe', { method: 'POST', body: paidBody, headers: { 'stripe-signature': paidSig } }));
 		assert.equal(okRes.status, 200);
 		assert.equal((await okRes.json()).tokenBalance, 1_000_000);
 
@@ -2813,6 +2876,22 @@ try {
 		await handler({ method: 'POST', body: { serviceDescription: 'Pintura residencial', location: 'São Paulo - SP' } }, res);
 		assert.equal(res.code, 500); // sem GEMINI_API_KEY -> 500 (front cai no fallback)
 		assert.match(res.payload.error, /GEMINI_API_KEY/);
+
+		// Rate limit: identidade/IP fresco + teto baixo -> 3ª chamada é 429 (antes da IA).
+		process.env.ORACLE_RATE_LIMIT = '2';
+		try {
+			const body = { serviceDescription: 'Pintura residencial', location: 'São Paulo - SP' };
+			const flood = async () => { const r = mockRes(); await handler({ method: 'POST', headers: { 'x-forwarded-for': '203.0.113.9' }, body }, r); return r.code; };
+			assert.notEqual(await flood(), 429, '1ª passa');
+			assert.notEqual(await flood(), 429, '2ª passa (no teto)');
+			const limited = mockRes();
+			await handler({ method: 'POST', headers: { 'x-forwarded-for': '203.0.113.9' }, body }, limited);
+			assert.equal(limited.code, 429, '3ª estoura o teto -> 429');
+			assert.equal(limited.payload.error, 'rate_limited');
+			assert.ok(limited.payload.retryAfterSeconds >= 1);
+		} finally {
+			delete process.env.ORACLE_RATE_LIMIT;
+		}
 	} finally {
 		await rm(join(compiled, '..'), { recursive: true, force: true });
 	}

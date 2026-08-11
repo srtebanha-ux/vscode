@@ -319,8 +319,9 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 	try {
 		await route(req, res);
 	} catch (error) {
-		// Rede de segurança: erro inesperado vira JSON legível (nunca o crash opaco da Vercel).
-		res.status(500).json({ error: 'internal_error', message: error instanceof Error ? error.message : String(error) });
+		// Rede de segurança: nunca vaza a mensagem interna (nem o crash opaco da Vercel).
+		console.error('[governance]', error instanceof Error ? error.message : error);
+		res.status(500).json({ error: 'internal_error', message: 'Erro interno ao processar a requisição.' });
 	}
 }
 

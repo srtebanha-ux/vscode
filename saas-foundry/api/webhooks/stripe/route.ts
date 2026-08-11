@@ -11,6 +11,7 @@
  * corpo de um webhook sem antes provar que veio do Stripe.
  */
 
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { quotaStore, quotaForPlan } from '../../lib/tokenQuota';
 
 // Re-export do saldo para testes e composição (mesma instância bundleada).
@@ -37,20 +38,57 @@ export type WebhookResult =
 	| { readonly received: true; readonly handled: true; readonly tenantId: string; readonly tokenBalance: number }
 	| { readonly received: true; readonly handled: false; readonly reason: 'ignored-event' | 'missing-tenant' };
 
+/** Janela anti-replay padrão do Stripe (5 min). */
+export const STRIPE_TOLERANCE_SECONDS = 300;
+
+/** Faz o parse do header `Stripe-Signature` (`t=...,v1=...,v1=...`). */
+function parseSignatureHeader(header: string): { readonly t: number | null; readonly v1: readonly string[] } {
+	let t: number | null = null;
+	const v1: string[] = [];
+	for (const part of header.split(',')) {
+		const idx = part.indexOf('=');
+		if (idx === -1) continue;
+		const key = part.slice(0, idx).trim();
+		const value = part.slice(idx + 1).trim();
+		if (key === 't') {
+			const parsed = Number(value);
+			if (Number.isFinite(parsed)) t = parsed;
+		} else if (key === 'v1' && value) {
+			v1.push(value);
+		}
+	}
+	return { t, v1 };
+}
+
 /**
- * Verificação da assinatura. PRODUÇÃO:
- *   const event = stripe.webhooks.constructEvent(rawBody, sigHeader, whsec);
- * (HMAC-SHA256 sobre `${timestamp}.${rawBody}`, comparação em tempo constante,
- * tolerância de 5 min contra replay). O mock exige a forma do header assinado.
+ * Verificação REAL da assinatura do Stripe (sem SDK, só node:crypto):
+ *   1. Parse do header assinado (timestamp `t` + assinaturas `v1`).
+ *   2. HMAC-SHA256(secret, `${t}.${rawBody}`) — o mesmo esquema do Stripe.
+ *   3. Comparação em TEMPO CONSTANTE (timingSafeEqual) contra qualquer `v1`.
+ *   4. Tolerância de tempo (anti-replay): rejeita eventos fora da janela.
+ * Sem isto, o antigo "check de formato" aceitava QUALQUER header bem-formado —
+ * um atacante forjava um webhook e recarregava a cota de qualquer tenant.
  */
-export function verifyStripeSignature(rawBody: string, signatureHeader: string | null, webhookSecret: string): boolean {
-	return (
-		rawBody.length > 0 &&
-		typeof signatureHeader === 'string' &&
-		/(^|,)t=\d+/.test(signatureHeader) &&
-		/(^|,)v1=[a-f0-9]+/.test(signatureHeader) &&
-		webhookSecret.startsWith('whsec_')
-	);
+export function verifyStripeSignature(
+	rawBody: string,
+	signatureHeader: string | null,
+	webhookSecret: string,
+	nowSeconds: number = Math.floor(Date.now() / 1000),
+	toleranceSeconds: number = STRIPE_TOLERANCE_SECONDS
+): boolean {
+	if (rawBody.length === 0 || typeof signatureHeader !== 'string' || !webhookSecret) return false;
+	const { t, v1 } = parseSignatureHeader(signatureHeader);
+	if (t === null || v1.length === 0) return false;
+	// Anti-replay: o evento precisa estar dentro da janela de tolerância.
+	if (Math.abs(nowSeconds - t) > toleranceSeconds) return false;
+
+	const expected = createHmac('sha256', webhookSecret).update(`${t}.${rawBody}`, 'utf8').digest('hex');
+	const expectedBuf = Buffer.from(expected, 'utf8');
+	// Aceita se ALGUMA assinatura v1 bater (rotação de chave do Stripe), em tempo constante.
+	return v1.some(candidate => {
+		const candidateBuf = Buffer.from(candidate, 'utf8');
+		return candidateBuf.length === expectedBuf.length && timingSafeEqual(candidateBuf, expectedBuf);
+	});
 }
 
 /**

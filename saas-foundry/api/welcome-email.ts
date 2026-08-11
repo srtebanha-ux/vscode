@@ -9,6 +9,39 @@
  * em variável de ambiente do SERVIDOR — nunca chega ao browser.
  */
 
+import { timingSafeEqual } from 'node:crypto';
+import { checkRateLimit, InMemoryRateLimitStore, rateLimitKey, type RateLimitPolicy } from './lib/security/apiGuard';
+
+// Serverless roda em Node; o tsconfig do shell só conhece o browser.
+declare const process: { readonly env: Record<string, string | undefined> };
+
+// Rate limit por IP: a rota dispara e-mail — sem freio, vira canhão de spam/abuso.
+const rateStore = new InMemoryRateLimitStore();
+function welcomeRatePolicy(): RateLimitPolicy {
+	const limit = Number(process.env['WELCOME_EMAIL_RATE_LIMIT'] ?? '10');
+	const windowMs = Number(process.env['WELCOME_EMAIL_RATE_WINDOW_MS'] ?? '60000');
+	return { limit: Number.isFinite(limit) && limit > 0 ? limit : 10, windowMs: Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60000 };
+}
+function requestIp(request: Request): string | null {
+	return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? request.headers.get('x-real-ip') ?? null;
+}
+
+/**
+ * Segredo compartilhado (server-to-server): a rota é chamada pela Cloud Function
+ * de criação de conta, não pelo browser. Quando WELCOME_EMAIL_SECRET está no
+ * ambiente, exige `Authorization: Bearer <secret>` (comparação em tempo constante).
+ * Sem o env (dev), fica aberta — mesmo padrão "enforce quando configurado".
+ */
+export function isWelcomeEmailAuthorized(authorizationHeader: string | null, secret: string | undefined): boolean {
+	if (!secret) return true; // dev/preview: sem segredo provisionado, não bloqueia
+	if (!authorizationHeader) return false;
+	const [scheme, value, ...rest] = authorizationHeader.split(' ');
+	if (scheme !== 'Bearer' || !value || rest.length > 0) return false;
+	const provided = Buffer.from(value, 'utf8');
+	const expected = Buffer.from(secret, 'utf8');
+	return provided.length === expected.length && timingSafeEqual(provided, expected);
+}
+
 export interface WelcomeEmailRequest {
 	readonly email: string;
 	readonly name?: string;
@@ -70,6 +103,15 @@ function escapeHtml(value: string): string {
 export default async function handler(request: Request): Promise<Response> {
 	if (request.method !== 'POST') {
 		return Response.json({ error: 'method-not-allowed' }, { status: 405 });
+	}
+	// Server-to-server: exige o segredo compartilhado quando provisionado.
+	if (!isWelcomeEmailAuthorized(request.headers.get('authorization'), process.env['WELCOME_EMAIL_SECRET'])) {
+		return Response.json({ error: 'unauthorized' }, { status: 401 });
+	}
+	// Rate limit por IP (fail-open) — barra disparo em massa de e-mail.
+	const rate = await checkRateLimit(rateStore, rateLimitKey(null, requestIp(request), 'welcome-email'), welcomeRatePolicy());
+	if (!rate.allowed) {
+		return Response.json({ error: 'rate-limited', message: 'Muitas requisições.' }, { status: 429 });
 	}
 	let body: WelcomeEmailRequest;
 	try {

@@ -501,6 +501,27 @@ try {
 		// Handler default (functions clássico): método errado -> 405
 		assert.equal((await methodHandler(new Request('https://lidarcore.example/api/cognitive-engine', { method: 'GET' }))).status, 405);
 
+		// ── Verificação de ASSINATURA quando a ponte de sessão está ligada ──
+		// Fecha a impersonação: antes, um uid forjado num JWT não-verificado passava.
+		const { default: jsonwebtoken } = await import('jsonwebtoken');
+		const HS_SECRET = 'cognitive-hs256-secret-32-chars-min!';
+		process.env.JWT_SECRET = HS_SECRET;
+		try {
+			// JWT não assinado com o segredo (forjado) -> 401, mesmo bem-formado.
+			const forged = await call({ headers: { authorization: `Bearer ${jwt}`, 'content-type': 'application/json' }, body: validBody });
+			assert.equal(forged.status, 401, 'uid forjado em JWT não verificado é REJEITADO quando JWT_SECRET está configurado');
+			// Sessão HS256 REAL (assinada com o segredo, com tenant/role) -> aceita, tenant verificado.
+			const signed = jsonwebtoken.sign({ uid: 'u_signed', tenantId: 'tnt_signed', role: 'ROLE_PME' }, HS_SECRET, { algorithm: 'HS256' });
+			await quotaStore.setBalance('tnt_signed', 50000);
+			const okSigned = await call({ headers: { authorization: `Bearer ${signed}`, 'content-type': 'application/json' }, body: validBody });
+			assert.equal(okSigned.status, 200, 'sessão HS256 assinada é aceita');
+			assert.equal((await okSigned.json()).agentType, 'CFO');
+			// O tenant é o VERIFICADO (tnt_signed), não um uid arbitrário do atacante.
+			assert.ok((await quotaStore.getBalance('tnt_signed')) < 50000, 'a cota debitada é a do tenant verificado');
+		} finally {
+			delete process.env.JWT_SECRET;
+		}
+
 		// Rate limit por IP: teto baixo + IP fresco -> 3ª requisição é 429 (antes da LLM/quota).
 		process.env.COGNITIVE_RATE_LIMIT = '2';
 		try {
@@ -1199,6 +1220,55 @@ try {
 		assert.equal(result.provider, 'skipped');
 	} finally {
 		await rm(dir, { recursive: true, force: true });
+	}
+}
+
+// 28c. Rota /api/welcome-email: server-to-server com segredo + rate limit (anti-spam)
+{
+	const esbuild = await import('esbuild');
+	const { outputFiles } = await esbuild.build({
+		entryPoints: [new URL('./api/welcome-email.ts', import.meta.url).pathname],
+		bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent'
+	});
+	const compiled = join(await mkdtemp(join(tmpdir(), 'foundry-welcome-')), 'route.mjs');
+	try {
+		await writeFile(compiled, outputFiles[0].text);
+		const { default: handler, isWelcomeEmailAuthorized } = await import(pathToFileURL(compiled).href);
+		const url = 'https://lidarcore.example/api/welcome-email';
+		const post = (init) => handler(new Request(url, { method: 'POST', ...init }));
+
+		// isWelcomeEmailAuthorized: sem segredo -> aberto (dev); com segredo -> exige o Bearer certo.
+		assert.equal(isWelcomeEmailAuthorized(null, undefined), true, 'sem segredo provisionado, não bloqueia (dev)');
+		assert.equal(isWelcomeEmailAuthorized('Bearer s3cr3t', 's3cr3t'), true);
+		assert.equal(isWelcomeEmailAuthorized('Bearer errado', 's3cr3t'), false);
+		assert.equal(isWelcomeEmailAuthorized(null, 's3cr3t'), false, 'segredo exigido mas ausente');
+		assert.equal(isWelcomeEmailAuthorized('s3cr3t', 's3cr3t'), false, 'sem esquema Bearer');
+
+		// HTTP: método errado -> 405; e-mail inválido -> 400.
+		delete process.env.WELCOME_EMAIL_SECRET;
+		assert.equal((await handler(new Request(url, { method: 'GET' }))).status, 405);
+		assert.equal((await post({ body: JSON.stringify({ email: 'não-é-email' }) })).status, 400);
+		// Sem segredo (dev): passa.
+		assert.equal((await post({ body: JSON.stringify({ email: 'ana@barbearia.com', name: 'Ana' }) })).status, 200);
+
+		// Com WELCOME_EMAIL_SECRET: sem/errado Bearer -> 401; correto -> 200.
+		process.env.WELCOME_EMAIL_SECRET = 'whs-shared-secret';
+		try {
+			assert.equal((await post({ body: JSON.stringify({ email: 'a@b.com' }) })).status, 401, 'sem o segredo -> 401 (endpoint não é mais aberto)');
+			assert.equal((await post({ headers: { authorization: 'Bearer errado' }, body: JSON.stringify({ email: 'a@b.com' }) })).status, 401);
+			assert.equal((await post({ headers: { authorization: 'Bearer whs-shared-secret' }, body: JSON.stringify({ email: 'a@b.com' }) })).status, 200);
+			// Rate limit por IP: teto baixo + IP fresco -> estoura em 429.
+			process.env.WELCOME_EMAIL_RATE_LIMIT = '2';
+			const authed = { authorization: 'Bearer whs-shared-secret', 'x-forwarded-for': '203.0.113.44' };
+			assert.notEqual((await post({ headers: authed, body: JSON.stringify({ email: 'a@b.com' }) })).status, 429);
+			assert.notEqual((await post({ headers: authed, body: JSON.stringify({ email: 'a@b.com' }) })).status, 429);
+			assert.equal((await post({ headers: authed, body: JSON.stringify({ email: 'a@b.com' }) })).status, 429, 'disparo em massa é barrado');
+		} finally {
+			delete process.env.WELCOME_EMAIL_SECRET;
+			delete process.env.WELCOME_EMAIL_RATE_LIMIT;
+		}
+	} finally {
+		await rm(join(compiled, '..'), { recursive: true, force: true });
 	}
 }
 

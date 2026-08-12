@@ -19,7 +19,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { buildSystemPrompt } from '@foundry/engine-core/ai';
-import { checkRateLimit, InMemoryRateLimitStore, rateLimitKey, type RateLimitPolicy } from '../lib/security/apiGuard';
+import { authenticateHeaders, checkRateLimit, InMemoryRateLimitStore, isSessionAuthConfigured, rateLimitKey, SERVER_ROLES, type RateLimitPolicy } from '../lib/security/apiGuard';
 import { quotaStore, BASIC_PLAN_MONTHLY_TOKENS, QUOTA_EXCEEDED_MESSAGE } from '../lib/tokenQuota';
 
 // Rate limit por IP (a identidade do JWT ainda não é verificada aqui — em produção
@@ -96,6 +96,34 @@ export function extractBearerToken(authorizationHeader: string | null): string |
 	return token;
 }
 
+/**
+ * Resolve o tenant do request — com VERIFICAÇÃO DE ASSINATURA quando configurado.
+ *
+ * Antes, o tenant vinha do `uid` de um JWT NÃO verificado (base64 decode puro):
+ * qualquer um forjava `header.{"uid":"vítima"}.sig` e operava/drenava a cota de
+ * outro tenant (impersonação/roubo de cota). Agora, quando a ponte de sessão
+ * está ligada (JWT_SECRET), exigimos uma sessão HS256 VÁLIDA (a mesma do apiGuard,
+ * via cookie ou Bearer) e derivamos o tenant do principal verificado. Sem a ponte
+ * (dev/preview), cai no uid estrutural — o comportamento aberto de sempre.
+ */
+export async function resolveRequestTenant(request: Request): Promise<{ readonly ok: true; readonly tenantId: string } | { readonly ok: false; readonly status: number }> {
+	const authHeader = request.headers.get('authorization');
+	// Mesmo predicado do resto do app: a ponte só está "ligada" com JWT_SECRET E
+	// FIREBASE_PROJECT_ID (o /api/session só minta o cookie com os dois). Numa
+	// preview parcial (só o segredo), cai no fallback estrutural documentado.
+	if (isSessionAuthConfigured()) {
+		const auth = await authenticateHeaders(authHeader, request.headers.get('cookie'), SERVER_ROLES);
+		if (!auth.ok) return { ok: false, status: auth.status };
+		return { ok: true, tenantId: auth.principal.tenantId };
+	}
+	// Dev/preview: sem ponte de sessão, aceita o uid estrutural (não verificado).
+	const token = extractBearerToken(authHeader);
+	if (!token) return { ok: false, status: 401 };
+	const tenantId = extractTenantId(token);
+	if (!tenantId) return { ok: false, status: 401 };
+	return { ok: true, tenantId };
+}
+
 /** Tenant = uid do payload do JWT (produção: uid retornado pelo verifyIdToken). */
 export function extractTenantId(token: string): string | null {
 	try {
@@ -163,15 +191,13 @@ async function callAnthropic(apiKey: string, payload: CognitiveRequest): Promise
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 export async function POST(request: Request): Promise<Response> {
-	// 1) Autenticação antes de qualquer parse: quem não está logado não gasta tokens.
-	const token = extractBearerToken(request.headers.get('authorization'));
-	if (!token) {
-		return Response.json({ error: 'unauthorized', message: 'Bearer token ausente ou inválido.' }, { status: 401 });
+	// 1) Autenticação com VERIFICAÇÃO DE ASSINATURA (quando a ponte de sessão está
+	//    ligada): sem sessão válida, ninguém gasta tokens nem toca em cota alheia.
+	const tenant = await resolveRequestTenant(request);
+	if (!tenant.ok) {
+		return Response.json({ error: 'unauthorized', message: 'Sessão ausente ou inválida.' }, { status: tenant.status });
 	}
-	const tenantId = extractTenantId(token);
-	if (!tenantId) {
-		return Response.json({ error: 'unauthorized', message: 'Token sem identidade de tenant.' }, { status: 401 });
-	}
+	const tenantId = tenant.tenantId;
 
 	// 1b) Rate limit por IP: barra brute-force/varredura antes de tocar na LLM.
 	const rate = await checkRateLimit(rateStore, rateLimitKey(null, requestIp(request), 'cognitive'), cognitiveRatePolicy());

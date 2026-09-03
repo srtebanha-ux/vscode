@@ -4,7 +4,10 @@ import { config } from '../config.js';
 import { products } from '../db/repo.js';
 import { nowIso } from '../lib/id.js';
 import { errMeta, logger } from '../lib/log.js';
-import type { LandingPage, ProductRecord, SeoMeta } from '../types.js';
+import type { ChangelogEntry, LandingPage, ProductRecord, SeoMeta, Snippet, UseCase } from '../types.js';
+import { history, recordVersion } from './changelog.js';
+import { groundingFacts, renderSnippet } from './snippet.js';
+import { safeUseCases } from './usecases.js';
 
 const log = logger('seo');
 
@@ -37,15 +40,21 @@ function priceLabel(cents: number, currency: string): string {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: currency.toUpperCase() }).format(cents / 100);
 }
 
-/** Expansão programática de cauda longa: raiz + modificadores + intenções. */
-export function keywordClusters(product: ProductRecord): string[] {
+/**
+ * Cauda longa em três camadas: termos do blueprint, molde raiz x modificador/intenção,
+ * e — a camada que não é template — termos derivados dos casos de uso aterrados e dos
+ * fatos reais do artefato, que variam por produto mesmo dentro do mesmo nicho.
+ */
+export function keywordClusters(product: ProductRecord, useCases: UseCase[] = [], facts: string[] = []): string[] {
   const root = product.keywords[0] ?? product.title.toLowerCase();
   const expanded = [
     ...product.keywords,
     ...MODIFIERS.map((m) => `${root} ${m}`),
     ...INTENT_PREFIXES.map((p) => `${p} ${root}`),
+    ...useCases.map((useCase) => useCase.title),
+    ...facts.map((fact) => `${root} ${fact.replace(/[_\-.]+/g, ' ')}`),
   ];
-  return [...new Set(expanded.map((k) => k.replace(/\s+/g, ' ').trim().toLowerCase()))].slice(0, 24);
+  return [...new Set(expanded.map((k) => k.replace(/\s+/g, ' ').trim().toLowerCase()).filter((k) => k.length > 4))].slice(0, 40);
 }
 
 function tokenize(product: ProductRecord): Set<string> {
@@ -75,7 +84,39 @@ export function relatedLinks(product: ProductRecord, catalog: ProductRecord[]): 
     .map((entry) => ({ slug: entry.candidate.slug, anchor: truncate(entry.candidate.title, 70) }));
 }
 
-function jsonLd(product: ProductRecord, canonical: string): Record<string, unknown>[] {
+function artifactSchema(product: ProductRecord, snippet: Snippet, canonical: string): Record<string, unknown> | null {
+  if (snippet.kind === 'table') {
+    return {
+      '@context': 'https://schema.org',
+      '@type': 'Dataset',
+      name: product.title,
+      description: truncate(product.tagline, 300),
+      url: canonical,
+      encodingFormat: 'text/csv',
+      variableMeasured: snippet.headers.map((header) => ({ '@type': 'PropertyValue', name: header })),
+    };
+  }
+  if (snippet.kind === 'code') {
+    return {
+      '@context': 'https://schema.org',
+      '@type': 'SoftwareSourceCode',
+      name: product.title,
+      description: truncate(product.tagline, 300),
+      url: canonical,
+      programmingLanguage: snippet.language,
+      codeSampleType: 'full solution',
+    };
+  }
+  return null;
+}
+
+function jsonLd(
+  product: ProductRecord,
+  canonical: string,
+  snippet: Snippet,
+  changelog: ChangelogEntry[],
+): Record<string, unknown>[] {
+  const latest = changelog[0];
   return [
     {
       '@context': 'https://schema.org',
@@ -85,6 +126,8 @@ function jsonLd(product: ProductRecord, canonical: string): Record<string, unkno
       sku: product.id,
       category: product.kind,
       brand: { '@type': 'Brand', name: 'Vending Machine' },
+      ...(latest ? { releaseNotes: latest.note, softwareVersion: latest.version } : {}),
+      ...(changelog.length > 1 && latest ? { dateModified: latest.createdAt } : {}),
       offers: {
         '@type': 'Offer',
         url: canonical,
@@ -111,12 +154,20 @@ function jsonLd(product: ProductRecord, canonical: string): Record<string, unkno
         { '@type': 'ListItem', position: 2, name: product.title, item: canonical },
       ],
     },
+    ...(artifactSchema(product, snippet, canonical) ? [artifactSchema(product, snippet, canonical) as Record<string, unknown>] : []),
   ];
 }
 
-export function buildSeo(product: ProductRecord, catalog: ProductRecord[]): SeoMeta {
+export interface Enrichments {
+  snippet: Snippet;
+  useCases: UseCase[];
+  changelog: ChangelogEntry[];
+}
+
+export function buildSeo(product: ProductRecord, catalog: ProductRecord[], enrichments: Enrichments): SeoMeta {
   const canonical = storefront(`/p/${product.slug}`);
   const price = priceLabel(product.priceCents, product.currency);
+  const facts = groundingFacts(enrichments.snippet);
   return {
     slug: product.slug,
     canonical,
@@ -124,9 +175,9 @@ export function buildSeo(product: ProductRecord, catalog: ProductRecord[]): SeoM
     metaDescription: truncate(`${product.tagline} Download imediato após o pagamento.`, DESC_MAX),
     h1: truncate(product.title, 80),
     intent: product.keywords[0] ?? product.slug.replace(/-/g, ' '),
-    keywordClusters: keywordClusters(product),
+    keywordClusters: keywordClusters(product, enrichments.useCases, facts),
     internalLinks: relatedLinks(product, catalog),
-    jsonLd: jsonLd(product, canonical),
+    jsonLd: jsonLd(product, canonical, enrichments.snippet, enrichments.changelog),
     openGraph: {
       'og:type': 'product',
       'og:title': truncate(product.title, TITLE_MAX),
@@ -148,11 +199,14 @@ function previewLines(product: ProductRecord): string[] {
     .map((line) => (line.length > PREVIEW_LINE_MAX ? `${line.slice(0, PREVIEW_LINE_MAX)}…` : line));
 }
 
-export function buildLanding(product: ProductRecord, catalog: ProductRecord[]): LandingPage {
+export function buildLanding(product: ProductRecord, catalog: ProductRecord[], enrichments: Enrichments): LandingPage {
   const { asset, ...rest } = product;
   return {
     product: { ...rest, previewLines: previewLines(product), assetFilename: asset.filename, assetBytes: asset.bytes },
-    seo: buildSeo(product, catalog),
+    seo: buildSeo(product, catalog, enrichments),
+    snippet: enrichments.snippet,
+    useCases: enrichments.useCases,
+    changelog: enrichments.changelog,
   };
 }
 
@@ -173,10 +227,25 @@ export interface CatalogEntry {
   publishedAt: string;
 }
 
-/** Gera a landing page estática + índice do catálogo consumidos pelo SSG do Next.js. */
-export function publish(product: ProductRecord): LandingPage {
+export interface PublishOptions {
+  /** Revisão anterior do mesmo produto, quando a fábrica refabricou o artefato. */
+  previous?: ProductRecord | null;
+  /** Desliga a chamada ao LLM dos casos de uso (testes e republicações em lote). */
+  enrich?: boolean;
+}
+
+/**
+ * Toda enriquecimento acontece aqui e é serializado no JSON. O `next build` continua
+ * sendo leitura pura de arquivo — nenhuma injeção entra no caminho crítico da build.
+ */
+export async function publish(product: ProductRecord, options: PublishOptions = {}): Promise<LandingPage> {
+  const snippet = renderSnippet(product.asset);
+  recordVersion(product, options.previous ?? null);
+  const changelog = history(product.id);
+  const useCases = options.enrich === false ? [] : await safeUseCases(product, snippet);
+
   const catalog = products.listPublishable();
-  const landing = buildLanding(product, catalog);
+  const landing = buildLanding(product, catalog, { snippet, useCases, changelog });
   const dir = contentDir();
   mkdirSync(resolve(dir, 'products'), { recursive: true });
   writeAtomic(resolve(dir, 'products', `${product.slug}.json`), landing);
@@ -185,7 +254,13 @@ export function publish(product: ProductRecord): LandingPage {
   products.markPublished(product.id, product.stripePriceId, publishedAt);
   rebuildIndex();
 
-  log.info('landing published', { slug: product.slug, keywords: landing.seo.keywordClusters.length });
+  log.info('landing published', {
+    slug: product.slug,
+    keywords: landing.seo.keywordClusters.length,
+    snippet: snippet.kind,
+    useCases: useCases.length,
+    version: changelog[0]?.version ?? 'n/a',
+  });
   return landing;
 }
 
@@ -226,8 +301,8 @@ export async function revalidate(slug: string): Promise<boolean> {
   }
 }
 
-export async function publishAndRevalidate(product: ProductRecord): Promise<LandingPage> {
-  const landing = publish(product);
+export async function publishAndRevalidate(product: ProductRecord, options?: PublishOptions): Promise<LandingPage> {
+  const landing = await publish(product, options);
   await revalidate(product.slug);
   return landing;
 }

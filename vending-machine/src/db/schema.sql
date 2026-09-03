@@ -42,6 +42,18 @@ CREATE TABLE IF NOT EXISTS products (
 );
 CREATE INDEX IF NOT EXISTS idx_products_status ON products (status, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS product_versions (
+  id             TEXT PRIMARY KEY,
+  product_id     TEXT NOT NULL REFERENCES products (id) ON DELETE CASCADE,
+  version        TEXT NOT NULL,
+  checksum       TEXT NOT NULL,
+  changed_fields TEXT NOT NULL,
+  note           TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  UNIQUE (product_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_versions_product ON product_versions (product_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS orders (
   id                TEXT PRIMARY KEY,
   product_id        TEXT NOT NULL REFERENCES products (id) ON DELETE RESTRICT,

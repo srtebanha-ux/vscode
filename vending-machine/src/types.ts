@@ -78,7 +78,64 @@ export interface SeoMeta {
   generatedAt: string;
 }
 
+export type TokenType = 'kw' | 'str' | 'num' | 'com' | 'fn' | 'op' | 'txt';
+export interface Token {
+  t: TokenType;
+  v: string;
+}
+
+export interface SnippetTable {
+  kind: 'table';
+  delimiter: string;
+  headers: string[];
+  rows: string[][];
+  totalRows: number;
+  truncated: boolean;
+}
+
+export interface SnippetCode {
+  kind: 'code';
+  language: string;
+  lines: Token[][];
+  symbols: string[];
+  totalLines: number;
+  truncated: boolean;
+}
+
+export interface SnippetTree {
+  kind: 'tree';
+  entries: Array<{ path: string; type: string; sample: string }>;
+  truncated: boolean;
+}
+
+export interface SnippetText {
+  kind: 'text';
+  lines: string[];
+  headings: string[];
+  truncated: boolean;
+}
+
+export type Snippet = SnippetTable | SnippetCode | SnippetTree | SnippetText;
+
+export interface UseCase {
+  title: string;
+  scenario: string;
+  anchor: string;
+  grounded: boolean;
+}
+
+export interface ChangelogEntry {
+  version: string;
+  note: string;
+  changedFields: string[];
+  checksum: string;
+  createdAt: string;
+}
+
 export interface LandingPage {
   product: Omit<ProductRecord, 'asset'> & { previewLines: string[]; assetFilename: string; assetBytes: number };
   seo: SeoMeta;
+  snippet: Snippet;
+  useCases: UseCase[];
+  changelog: ChangelogEntry[];
 }

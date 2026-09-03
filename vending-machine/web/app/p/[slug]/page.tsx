@@ -1,7 +1,10 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { BuyButton } from '@/components/BuyButton';
+import { SnippetView } from '@/components/SnippetView';
 import { formatPrice, getLanding, listSlugs } from '@/lib/catalog';
+
+const DATE = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
 
 export const dynamicParams = false;
 
@@ -33,8 +36,9 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
   const { slug } = await params;
   const landing = getLanding(slug);
   if (!landing) notFound();
-  const { product, seo } = landing;
+  const { product, seo, snippet, useCases, changelog } = landing;
   const price = formatPrice(product.priceCents, product.currency);
+  const current = changelog[0];
 
   return (
     <article className="grid gap-10 lg:grid-cols-[1.6fr_1fr]">
@@ -44,7 +48,10 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
       />
 
       <div>
-        <span className="text-xs uppercase tracking-wide text-slate-400">{product.kind}</span>
+        <div className="flex items-center gap-3 text-xs uppercase tracking-wide text-slate-400">
+          <span>{product.kind}</span>
+          {current && <span className="rounded border border-slate-200 px-1.5 py-0.5 font-mono normal-case dark:border-slate-800">v{current.version}</span>}
+        </div>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">{seo.h1}</h1>
         <p className="mt-4 max-w-prose text-lg text-slate-600 dark:text-slate-300">{product.tagline}</p>
 
@@ -64,12 +71,46 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
           </ul>
         </section>
 
-        {product.previewLines.length > 0 && (
+        <section className="mt-10">
+          <h2 className="text-lg font-semibold">Estrutura de {product.assetFilename}</h2>
+          <p className="mt-1 text-sm text-slate-500">Conteúdo real do arquivo que você recebe — não é uma amostra ilustrativa.</p>
+          <div className="mt-4">
+            <SnippetView snippet={snippet} filename={product.assetFilename} />
+          </div>
+        </section>
+
+        {useCases.length > 0 && (
           <section className="mt-10">
-            <h2 className="text-lg font-semibold">Prévia do arquivo</h2>
-            <pre className="mt-4 overflow-x-auto rounded-lg bg-slate-50 p-4 text-xs leading-relaxed text-slate-700 dark:bg-slate-900 dark:text-slate-300">
-              {product.previewLines.join('\n')}
-            </pre>
+            <h2 className="text-lg font-semibold">Onde isso é usado</h2>
+            <div className="mt-4 space-y-6">
+              {useCases.map((useCase) => (
+                <article key={useCase.title}>
+                  <h3 className="font-medium leading-snug">{useCase.title}</h3>
+                  <p className="mt-1 max-w-prose text-slate-600 dark:text-slate-400">{useCase.scenario}</p>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Resolvido por <code className="rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">{useCase.anchor}</code>
+                  </p>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {changelog.length > 0 && (
+          <section className="mt-10">
+            <h2 className="text-lg font-semibold">Histórico de versões</h2>
+            <ol className="mt-4 space-y-3">
+              {changelog.map((entry) => (
+                <li key={entry.version} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-l-2 border-slate-200 pl-4 dark:border-slate-800">
+                  <span className="font-mono text-sm font-medium">v{entry.version}</span>
+                  <time dateTime={entry.createdAt} className="text-xs text-slate-500">{DATE.format(new Date(entry.createdAt))}</time>
+                  <span className="w-full text-sm text-slate-600 dark:text-slate-400">{entry.note}</span>
+                </li>
+              ))}
+            </ol>
+            <p className="mt-3 text-xs text-slate-500">
+              Cada entrada corresponde a uma alteração verificada por checksum SHA-256 do arquivo entregue.
+            </p>
           </section>
         )}
 
@@ -109,6 +150,7 @@ export default async function ProductPage({ params }: { params: Promise<{ slug: 
           <li>Entrega automática por e-mail</li>
           <li>Arquivo {product.assetFilename} ({Math.max(1, Math.round(product.assetBytes / 1024))} KB)</li>
           <li>Link de download assinado e com expiração</li>
+          {current && <li>Versão atual v{current.version}</li>}
         </ul>
       </aside>
     </article>

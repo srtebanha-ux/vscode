@@ -1,6 +1,7 @@
 import type { Statement } from 'better-sqlite3';
 import { db } from './client.js';
 import type {
+  ChangelogEntry,
   DemandSignal,
   OrderRecord,
   OrderStatus,
@@ -21,6 +22,11 @@ interface ProductRow {
   price_cents: number; currency: string; asset_filename: string; asset_mime: string;
   asset_base64: string; asset_bytes: number; asset_checksum: string; status: string;
   stripe_price_id: string | null; created_at: string; published_at: string | null;
+}
+
+interface VersionRow {
+  id: string; product_id: string; version: string; checksum: string;
+  changed_fields: string; note: string; created_at: string;
 }
 
 interface OrderRow {
@@ -216,6 +222,55 @@ export const products = {
 
   setStatus(id: string, status: ProductStatus): void {
     stmt('UPDATE products SET status = ? WHERE id = ?').run(status, id);
+  },
+
+  /** Substitui conteúdo e artefato preservando id/slug — base do loop de refabricação. */
+  updateContent(product: ProductRecord): void {
+    stmt(
+      `UPDATE products SET title = @title, tagline = @tagline, description = @description,
+         features_json = @features_json, keywords_json = @keywords_json, faq_json = @faq_json,
+         price_cents = @price_cents, asset_filename = @asset_filename, asset_mime = @asset_mime,
+         asset_base64 = @asset_base64, asset_bytes = @asset_bytes, asset_checksum = @asset_checksum
+       WHERE id = @id`,
+    ).run({
+      id: product.id,
+      title: product.title,
+      tagline: product.tagline,
+      description: product.description,
+      features_json: JSON.stringify(product.features),
+      keywords_json: JSON.stringify(product.keywords),
+      faq_json: JSON.stringify(product.faq),
+      price_cents: product.priceCents,
+      asset_filename: product.asset.filename,
+      asset_mime: product.asset.mime,
+      asset_base64: product.asset.base64,
+      asset_bytes: product.asset.bytes,
+      asset_checksum: product.asset.checksum,
+    });
+  },
+};
+
+export const versions = {
+  insert(rowId: string, productId: string, entry: ChangelogEntry): void {
+    stmt(
+      `INSERT INTO product_versions (id, product_id, version, checksum, changed_fields, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (product_id, version) DO NOTHING`,
+    ).run(rowId, productId, entry.version, entry.checksum, JSON.stringify(entry.changedFields), entry.note, entry.createdAt);
+  },
+
+  /** Mais recente primeiro. */
+  list(productId: string): ChangelogEntry[] {
+    const rows = stmt(
+      'SELECT * FROM product_versions WHERE product_id = ? ORDER BY created_at DESC, rowid DESC',
+    ).all(productId) as VersionRow[];
+    return rows.map((row) => ({
+      version: row.version,
+      note: row.note,
+      changedFields: parseJson<string[]>(row.changed_fields, []),
+      checksum: row.checksum,
+      createdAt: row.created_at,
+    }));
   },
 };
 

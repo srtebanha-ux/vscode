@@ -23,7 +23,7 @@ export async function cycle(batchSize = 3): Promise<CycleReport> {
   let published = 0;
   for (const product of factory.produced) {
     try {
-      await publishAndRevalidate(product);
+      await publishAndRevalidate(product, { previous: null });
       published += 1;
     } catch (error) {
       log.error('publish failed', { slug: product.slug, ...errMeta(error) });

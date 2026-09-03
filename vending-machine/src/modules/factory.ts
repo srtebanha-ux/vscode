@@ -175,6 +175,41 @@ export async function manufacture(signal: DemandSignal): Promise<ProductRecord> 
   }
 }
 
+export interface RefabricateResult {
+  previous: ProductRecord;
+  next: ProductRecord;
+  changed: boolean;
+}
+
+/**
+ * Regenera o artefato de um produto já publicado preservando id e slug. O checksum novo
+ * é o que alimenta o changelog: se o conteúdo não mudou, nada é gravado e nada é versionado.
+ */
+export async function refabricate(product: ProductRecord, signal: DemandSignal): Promise<RefabricateResult> {
+  const blueprint = await draftBlueprint(signal);
+  const asset = await renderArtifact(blueprint, signal);
+
+  if (asset.checksum === product.asset.checksum) {
+    log.info('refabricate produced identical artifact', { productId: product.id });
+    return { previous: product, next: product, changed: false };
+  }
+
+  const next: ProductRecord = {
+    ...product,
+    title: blueprint.title,
+    tagline: blueprint.tagline,
+    description: blueprint.description,
+    features: blueprint.features,
+    keywords: dedupe([signal.query, ...blueprint.keywords]),
+    faq: blueprint.faq,
+    priceCents: normalizePrice(blueprint.priceCents),
+    asset,
+  };
+  products.updateContent(next);
+  log.info('product refabricated', { productId: product.id, slug: product.slug, bytes: asset.bytes });
+  return { previous: product, next, changed: true };
+}
+
 export interface FactoryBatchResult {
   produced: ProductRecord[];
   failed: Array<{ signalId: string; reason: string }>;

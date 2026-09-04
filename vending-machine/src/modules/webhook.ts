@@ -25,7 +25,7 @@ export class CheckoutError extends Error {
 
 /** Cria a sessão de pagamento com price_data inline — nenhum objeto precisa existir no Stripe. */
 export async function createCheckoutSession(slug: string): Promise<{ url: string; sessionId: string }> {
-  const product = products.bySlug(slug);
+  const product = await products.bySlug(slug);
   if (!product) throw new CheckoutError('product not found', 404);
   if (product.status !== 'published') throw new CheckoutError('product not purchasable', 409);
 
@@ -64,10 +64,10 @@ async function deliver(session: Stripe.Checkout.Session, eventId: string): Promi
   if (!productId) throw new CheckoutError('session without productId metadata', 422);
   if (!email) throw new CheckoutError('session without customer email', 422);
 
-  const product: ProductRecord | null = products.byId(productId);
+  const product: ProductRecord | null = await products.byId(productId);
   if (!product) throw new CheckoutError(`unknown product ${productId}`, 422);
 
-  const existing = orders.bySessionId(session.id);
+  const existing = await orders.bySessionId(session.id);
   if (existing?.status === 'delivered') {
     log.info('delivery already completed', { orderId: existing.id, sessionId: session.id });
     return;
@@ -86,7 +86,7 @@ async function deliver(session: Stripe.Checkout.Session, eventId: string): Promi
     createdAt: nowIso(),
     deliveredAt: null,
   };
-  if (!existing) orders.insert(order);
+  if (!existing) await orders.insert(order);
 
   try {
     const token = issueToken({ orderId: order.id, productId: product.id });
@@ -97,10 +97,10 @@ async function deliver(session: Stripe.Checkout.Session, eventId: string): Promi
       expiresAt: new Date(Date.now() + config.DOWNLOAD_TTL_SECONDS * 1000),
       maxUses: config.DOWNLOAD_MAX_USES,
     });
-    orders.markDelivered(order.id, nowIso());
+    await orders.markDelivered(order.id, nowIso());
     log.info('order delivered', { orderId: order.id, productId: product.id, email: order.email });
   } catch (error) {
-    orders.markFailed(order.id);
+    await orders.markFailed(order.id);
     throw error;
   }
 }
@@ -131,7 +131,7 @@ export async function stripeWebhookHandler(req: Request, res: Response): Promise
     return;
   }
 
-  if (!events.claim(event.id, event.type, nowIso())) {
+  if (!(await events.claim(event.id, event.type, nowIso()))) {
     log.info('duplicate event ignored', { eventId: event.id });
     res.status(200).json({ received: true, duplicate: true });
     return;
@@ -147,7 +147,7 @@ export async function stripeWebhookHandler(req: Request, res: Response): Promise
     await deliver(session, event.id);
     res.status(200).json({ received: true });
   } catch (error) {
-    events.release(event.id);
+    await events.release(event.id);
     const status = error instanceof CheckoutError ? error.status : 500;
     log.error('delivery failed', { eventId: event.id, status, ...errMeta(error) });
     res.status(status >= 500 ? 500 : status).json({ error: 'delivery failed' });
@@ -155,7 +155,7 @@ export async function stripeWebhookHandler(req: Request, res: Response): Promise
 }
 
 /** Download assinado: HMAC + expiração + limite de usos. */
-export function downloadHandler(req: Request, res: Response): void {
+export async function downloadHandler(req: Request, res: Response): Promise<void> {
   const token = req.params.token ?? '';
   const verified = verifyToken(token);
   if (!verified.ok) {
@@ -163,7 +163,7 @@ export function downloadHandler(req: Request, res: Response): void {
     return;
   }
 
-  const order = orders.byId(verified.claim.orderId);
+  const order = await orders.byId(verified.claim.orderId);
   if (!order || order.productId !== verified.claim.productId) {
     res.status(404).json({ error: 'order not found' });
     return;
@@ -177,13 +177,13 @@ export function downloadHandler(req: Request, res: Response): void {
     return;
   }
 
-  const product = products.byId(order.productId);
+  const product = await products.byId(order.productId);
   if (!product) {
     res.status(410).json({ error: 'product no longer available' });
     return;
   }
 
-  const used = orders.incrementDownloads(order.id);
+  const used = await orders.incrementDownloads(order.id);
   const buffer = Buffer.from(product.asset.base64, 'base64');
   res
     .status(200)

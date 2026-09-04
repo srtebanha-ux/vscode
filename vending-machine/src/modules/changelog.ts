@@ -86,9 +86,9 @@ export function diffProduct(previous: ProductRecord, next: ProductRecord): Versi
 }
 
 /** Grava v1.0.0 na primeira publicação; nas seguintes, só quando existe mudança real. */
-export function recordVersion(product: ProductRecord, previous: ProductRecord | null): ChangelogEntry | null {
-  const history = versions.list(product.id);
-  const last = history[0];
+export async function recordVersion(product: ProductRecord, previous: ProductRecord | null): Promise<ChangelogEntry | null> {
+  const entries = await versions.list(product.id);
+  const last = entries[0];
 
   if (!last) {
     const entry: ChangelogEntry = {
@@ -98,7 +98,7 @@ export function recordVersion(product: ProductRecord, previous: ProductRecord | 
       checksum: product.asset.checksum,
       createdAt: product.publishedAt ?? nowIso(),
     };
-    versions.insert(id('ver'), product.id, entry);
+    await versions.insert(id('ver'), product.id, entry);
     return entry;
   }
 
@@ -113,10 +113,10 @@ export function recordVersion(product: ProductRecord, previous: ProductRecord | 
     checksum: product.asset.checksum,
     createdAt: nowIso(),
   };
-  versions.insert(id('ver'), product.id, entry);
+  await versions.insert(id('ver'), product.id, entry);
   return entry;
 }
 
-export function history(productId: string): ChangelogEntry[] {
+export async function history(productId: string): Promise<ChangelogEntry[]> {
   return versions.list(productId);
 }

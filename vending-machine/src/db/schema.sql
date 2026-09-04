@@ -1,6 +1,3 @@
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-
 CREATE TABLE IF NOT EXISTS signals (
   id            TEXT PRIMARY KEY,
   query         TEXT NOT NULL,
@@ -68,6 +65,23 @@ CREATE TABLE IF NOT EXISTS orders (
   delivered_at      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_orders_email ON orders (email);
+
+CREATE TABLE IF NOT EXISTS published_pages (
+  slug          TEXT PRIMARY KEY,
+  product_id    TEXT NOT NULL REFERENCES products (id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  tagline       TEXT NOT NULL,
+  kind          TEXT NOT NULL,
+  price_cents   INTEGER NOT NULL,
+  currency      TEXT NOT NULL,
+  keywords_json TEXT NOT NULL,
+  version       TEXT NOT NULL,
+  landing_json  TEXT NOT NULL,
+  published_at  TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pages_published ON published_pages (published_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pages_product ON published_pages (product_id);
 
 CREATE TABLE IF NOT EXISTS processed_events (
   event_id     TEXT PRIMARY KEY,

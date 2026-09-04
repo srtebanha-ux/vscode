@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { config } from './config.js';
-import { db } from './db/client.js';
+import { migrate } from './db/client.js';
 import { errMeta, logger } from './lib/log.js';
 import { CheckoutError, createCheckoutSession, downloadHandler, stripeWebhookHandler } from './modules/webhook.js';
 
@@ -10,7 +10,7 @@ const app = express();
 app.disable('x-powered-by');
 
 app.post('/webhooks/stripe', express.raw({ type: 'application/json', limit: '1mb' }), stripeWebhookHandler);
-app.get('/download/:token', downloadHandler);
+app.get('/download/:token', (req, res, next) => { void downloadHandler(req, res).catch(next); });
 
 app.use(express.json({ limit: '256kb' }));
 
@@ -33,8 +33,9 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(status).json({ error: error instanceof CheckoutError ? error.message : 'internal error' });
 });
 
-db();
-const server = app.listen(config.PORT, () => log.info('listening', { port: config.PORT }));
+const server = await migrate().then(() =>
+  app.listen(config.PORT, () => log.info('listening', { port: config.PORT })),
+);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => server.close(() => process.exit(0)));

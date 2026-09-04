@@ -112,7 +112,7 @@ export async function scan(sources: TrendsSource[] = [new SeedFileSource()]): Pr
         report.skipped += 1;
         continue;
       }
-      signals.upsert(signal);
+      await signals.upsert(signal);
       report.ingested += 1;
       report.topScore = Math.max(report.topScore, signal.score);
     }

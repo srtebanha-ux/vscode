@@ -132,6 +132,18 @@ export interface ChangelogEntry {
   createdAt: string;
 }
 
+export interface CatalogEntry {
+  slug: string;
+  title: string;
+  tagline: string;
+  kind: string;
+  priceCents: number;
+  currency: string;
+  keywords: string[];
+  version: string;
+  publishedAt: string;
+}
+
 export interface LandingPage {
   product: Omit<ProductRecord, 'asset'> & { previewLines: string[]; assetFilename: string; assetBytes: number };
   seo: SeoMeta;

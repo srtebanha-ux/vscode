@@ -1,14 +1,14 @@
 import { strict as assert } from 'node:assert';
 import { createHash } from 'node:crypto';
-import { db } from './db/client.js';
+import { migrate } from './db/client.js';
 import { id, nowIso } from './lib/id.js';
 import { logger } from './lib/log.js';
 import { issueToken, verifyToken } from './lib/signer.js';
 import { slugify } from './lib/slug.js';
-import { orders, products, signals } from './db/repo.js';
+import { orders, pages, products, signals } from './db/repo.js';
 import { diffProduct } from './modules/changelog.js';
 import { opportunityScore, scan } from './modules/scraper.js';
-import { buildSeo, publish, rebuildIndex } from './modules/seo_builder.js';
+import { buildSeo, catalogEntries, publish } from './modules/seo_builder.js';
 import { groundingFacts, renderSnippet } from './modules/snippet.js';
 import type { ProductRecord } from './types.js';
 
@@ -24,13 +24,13 @@ const PY_SOURCE = [
 
 /** Valida o caminho sem-LLM: radar -> persistência -> snippet -> changelog -> vitrine -> link assinado. */
 async function main(): Promise<void> {
-  db();
+  await migrate();
 
   const radar = await scan();
   assert.ok(radar.ingested > 0, 'radar ingested nothing');
   assert.ok(opportunityScore({ query: 'a b c d e', niche: 'n', painPoint: 'p', suggestedKind: 'script', volume: 1000, competition: 0.1 }) > 60);
 
-  const signal = signals.nextPending(0, 1)[0];
+  const signal = (await signals.nextPending(0, 1))[0];
   assert.ok(signal, 'no pending signal');
 
   const csv = [
@@ -63,8 +63,8 @@ async function main(): Promise<void> {
     createdAt: nowIso(),
     publishedAt: null,
   };
-  products.insert(product);
-  signals.setStatus(signal.id, 'consumed');
+  await products.insert(product);
+  await signals.setStatus(signal.id, 'consumed');
 
   // ② snippet estruturado
   const snippet = renderSnippet(product.asset);
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
   assert.ok(code.lines[1]?.some((token) => token.t === 'kw' && token.v === 'def'), 'keyword not tokenized');
   assert.ok(code.lines[2]?.some((token) => token.t === 'str'), 'docstring not tokenized as string');
 
-  const seo = buildSeo(product, products.listPublishable(), { snippet, useCases: [], changelog: [] });
+  const seo = buildSeo(product, await products.listPublishable(), { snippet, useCases: [], changelog: [] });
   assert.ok(seo.metaTitle.length <= 60, 'meta title too long');
   assert.ok(seo.metaDescription.length <= 155, 'meta description too long');
   assert.ok(seo.keywordClusters.length >= 6, 'keyword expansion too small');
@@ -94,7 +94,15 @@ async function main(): Promise<void> {
   assert.ok(!('asset' in landing.product), 'asset leaked into landing payload');
   assert.equal(landing.snippet.kind, 'table', 'snippet not serialized into the landing payload');
   assert.ok(landing.seo.keywordClusters.some((k) => k.includes('custo por km')), 'artifact facts not folded into clusters');
-  assert.ok(rebuildIndex().some((e) => e.slug === product.slug), 'product missing from catalog index');
+  const catalog = await catalogEntries();
+  assert.ok(catalog.some((entry) => entry.slug === product.slug), 'product missing from catalog');
+  assert.equal(catalog.find((entry) => entry.slug === product.slug)?.version, '1.0.0', 'catalog version out of sync');
+
+  const stored = await pages.landing(product.slug);
+  assert.ok(stored, 'landing_json not persisted');
+  assert.equal(stored.snippet.kind, 'table', 'snippet lost in serialization round-trip');
+  assert.ok(!('asset' in stored.product), 'asset leaked into landing_json');
+  assert.deepEqual(await pages.slugs(), [product.slug], 'slug list should come from published_pages');
 
   // ① changelog com proveniência
   assert.equal(landing.changelog.length, 1, 'initial version not recorded');
@@ -118,7 +126,7 @@ async function main(): Promise<void> {
   assert.ok(delta.changedFields.includes('asset') && delta.changedFields.includes('priceCents'), 'delta missed changed fields');
   assert.ok(delta.note.includes('frota'), 'added column not named in the note');
 
-  products.updateContent(revised);
+  await products.updateContent(revised);
   const republished = await publish(revised, { previous: product, enrich: false });
   assert.equal(republished.changelog.length, 2, 'second version not recorded');
   assert.equal(republished.changelog[0]?.version, '1.0.1', 'asset+price change should bump patch');
@@ -137,14 +145,14 @@ async function main(): Promise<void> {
     createdAt: nowIso(),
     deliveredAt: null,
   };
-  orders.insert(order);
+  await orders.insert(order);
 
   const token = issueToken({ orderId: order.id, productId: product.id });
   const verified = verifyToken(token);
   assert.ok(verified.ok, 'token verification failed');
   assert.equal(verifyToken(`${token}x`).ok, false, 'tampered token accepted');
   assert.equal(verifyToken(issueToken({ orderId: order.id, productId: product.id }, -10)).ok, false, 'expired token accepted');
-  assert.equal(orders.incrementDownloads(order.id), 1, 'download counter not incremented');
+  assert.equal(await orders.incrementDownloads(order.id), 1, 'download counter not incremented');
 
   log.info('smoke passed', {
     slug: product.slug,

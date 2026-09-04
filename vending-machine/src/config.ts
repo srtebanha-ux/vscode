@@ -5,6 +5,8 @@ const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
   DB_PATH: z.string().min(1).default('./data/vending.db'),
+  TURSO_DATABASE_URL: z.string().default(''),
+  TURSO_AUTH_TOKEN: z.string().default(''),
 
   ANTHROPIC_API_KEY: z.string().default(''),
   LLM_MODEL: z.string().default('claude-opus-5'),
@@ -15,7 +17,6 @@ const EnvSchema = z.object({
 
   PUBLIC_BASE_URL: z.url().default('http://localhost:4000'),
   STOREFRONT_URL: z.url().default('http://localhost:3000'),
-  CONTENT_DIR: z.string().min(1).default('./web/content'),
 
   DOWNLOAD_SECRET: z.string().min(16).default('dev-only-insecure-secret-change-me'),
   DOWNLOAD_TTL_SECONDS: z.coerce.number().int().positive().default(86_400),

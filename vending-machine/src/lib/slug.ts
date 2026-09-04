@@ -13,11 +13,11 @@ export function slugify(input: string, maxWords = 8): string {
   return slug || `item-${Date.now().toString(36)}`;
 }
 
-export function uniqueSlug(base: string, taken: (candidate: string) => boolean): string {
-  if (!taken(base)) return base;
+export async function uniqueSlug(base: string, taken: (candidate: string) => Promise<boolean>): Promise<string> {
+  if (!(await taken(base))) return base;
   for (let i = 2; i < 100; i += 1) {
     const candidate = `${base}-${i}`;
-    if (!taken(candidate)) return candidate;
+    if (!(await taken(candidate))) return candidate;
   }
   return `${base}-${Date.now().toString(36)}`;
 }

@@ -7,10 +7,8 @@ export const metadata: Metadata = {
   alternates: { canonical: '/' },
 };
 
-export const dynamic = 'force-static';
-
-export default function HomePage() {
-  const catalog = getCatalog();
+export default async function HomePage() {
+  const catalog = await getCatalog();
   return (
     <>
       <section className="mb-12 max-w-prose">

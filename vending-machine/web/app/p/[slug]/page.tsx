@@ -2,19 +2,19 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { BuyButton } from '@/components/BuyButton';
 import { SnippetView } from '@/components/SnippetView';
-import { formatPrice, getLanding, listSlugs } from '@/lib/catalog';
+import { formatPrice, getPageData, getSlugs } from '@/lib/catalog';
 
 const DATE = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
 
 export const dynamicParams = false;
 
-export function generateStaticParams(): Array<{ slug: string }> {
-  return listSlugs().map((slug) => ({ slug }));
+export async function generateStaticParams(): Promise<Array<{ slug: string }>> {
+  return (await getSlugs()).map((slug) => ({ slug }));
 }
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
-  const landing = getLanding(slug);
+  const landing = await getPageData(slug);
   if (!landing) return { title: 'Produto não encontrado' };
   const { seo, product } = landing;
   return {
@@ -34,7 +34,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function ProductPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const landing = getLanding(slug);
+  const landing = await getPageData(slug);
   if (!landing) notFound();
   const { product, seo, snippet, useCases, changelog } = landing;
   const price = formatPrice(product.priceCents, product.currency);

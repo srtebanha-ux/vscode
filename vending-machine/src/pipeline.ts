@@ -1,7 +1,7 @@
-import { db } from './db/client.js';
+import { migrate } from './db/client.js';
 import { errMeta, logger } from './lib/log.js';
 import { runFactory } from './modules/factory.js';
-import { publishAndRevalidate, rebuildIndex } from './modules/seo_builder.js';
+import { publishAndRevalidate } from './modules/seo_builder.js';
 import { scan, SeedFileSource } from './modules/scraper.js';
 
 const log = logger('pipeline');
@@ -16,7 +16,7 @@ export interface CycleReport {
 
 /** Ciclo autônomo completo: Radar -> Fábrica -> Vitrine. */
 export async function cycle(batchSize = 3): Promise<CycleReport> {
-  db();
+  await migrate();
   const radar = await scan([new SeedFileSource()]);
   const factory = await runFactory(batchSize);
 
@@ -29,8 +29,6 @@ export async function cycle(batchSize = 3): Promise<CycleReport> {
       log.error('publish failed', { slug: product.slug, ...errMeta(error) });
     }
   }
-  rebuildIndex();
-
   const report: CycleReport = {
     scanned: radar.scanned,
     ingested: radar.ingested,

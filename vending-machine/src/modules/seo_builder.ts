@@ -1,10 +1,9 @@
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { config } from '../config.js';
-import { products } from '../db/repo.js';
+import { pages, products } from '../db/repo.js';
 import { nowIso } from '../lib/id.js';
 import { errMeta, logger } from '../lib/log.js';
-import type { ChangelogEntry, LandingPage, ProductRecord, SeoMeta, Snippet, UseCase } from '../types.js';
+import type { CatalogEntry, ChangelogEntry, LandingPage, ProductRecord, SeoMeta, Snippet, UseCase } from '../types.js';
+import { batch } from '../db/client.js';
 import { history, recordVersion } from './changelog.js';
 import { groundingFacts, renderSnippet } from './snippet.js';
 import { safeUseCases } from './usecases.js';
@@ -26,10 +25,6 @@ function truncate(value: string, max: number): string {
   const cut = clean.slice(0, max - 1);
   const boundary = cut.lastIndexOf(' ');
   return `${(boundary > max * 0.6 ? cut.slice(0, boundary) : cut).trimEnd()}…`;
-}
-
-function contentDir(): string {
-  return resolve(process.cwd(), config.CONTENT_DIR);
 }
 
 function storefront(path = ''): string {
@@ -210,23 +205,6 @@ export function buildLanding(product: ProductRecord, catalog: ProductRecord[], e
   };
 }
 
-function writeAtomic(path: string, payload: unknown): void {
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-  renameSync(tmp, path);
-}
-
-export interface CatalogEntry {
-  slug: string;
-  title: string;
-  tagline: string;
-  kind: string;
-  priceCents: number;
-  currency: string;
-  keywords: string[];
-  publishedAt: string;
-}
-
 export interface PublishOptions {
   /** Revisão anterior do mesmo produto, quando a fábrica refabricou o artefato. */
   previous?: ProductRecord | null;
@@ -235,24 +213,23 @@ export interface PublishOptions {
 }
 
 /**
- * Toda enriquecimento acontece aqui e é serializado no JSON. O `next build` continua
- * sendo leitura pura de arquivo — nenhuma injeção entra no caminho crítico da build.
+ * Todo o enriquecimento acontece aqui e é serializado em `published_pages.landing_json`.
+ * O storefront só faz SELECT — nenhuma injeção entra no caminho crítico da build.
  */
 export async function publish(product: ProductRecord, options: PublishOptions = {}): Promise<LandingPage> {
   const snippet = renderSnippet(product.asset);
-  recordVersion(product, options.previous ?? null);
-  const changelog = history(product.id);
+  await recordVersion(product, options.previous ?? null);
+  const changelog = await history(product.id);
   const useCases = options.enrich === false ? [] : await safeUseCases(product, snippet);
 
-  const catalog = products.listPublishable();
-  const landing = buildLanding(product, catalog, { snippet, useCases, changelog });
-  const dir = contentDir();
-  mkdirSync(resolve(dir, 'products'), { recursive: true });
-  writeAtomic(resolve(dir, 'products', `${product.slug}.json`), landing);
-
+  const catalog = await products.listPublishable();
   const publishedAt = product.publishedAt ?? nowIso();
-  products.markPublished(product.id, product.stripePriceId, publishedAt);
-  rebuildIndex();
+  const landing = buildLanding({ ...product, publishedAt }, catalog, { snippet, useCases, changelog });
+
+  await batch([
+    products.markPublishedStatement(product.id, product.stripePriceId, publishedAt),
+    pages.upsertStatement(landing, nowIso()),
+  ]);
 
   log.info('landing published', {
     slug: product.slug,
@@ -264,25 +241,8 @@ export async function publish(product: ProductRecord, options: PublishOptions = 
   return landing;
 }
 
-export function rebuildIndex(): CatalogEntry[] {
-  const entries: CatalogEntry[] = products
-    .listPublishable()
-    .map((p) => ({
-      slug: p.slug,
-      title: p.title,
-      tagline: p.tagline,
-      kind: p.kind,
-      priceCents: p.priceCents,
-      currency: p.currency,
-      keywords: p.keywords.slice(0, 8),
-      publishedAt: p.publishedAt ?? p.createdAt,
-    }))
-    .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
-
-  const dir = contentDir();
-  mkdirSync(dir, { recursive: true });
-  writeAtomic(resolve(dir, 'index.json'), entries);
-  return entries;
+export async function catalogEntries(): Promise<CatalogEntry[]> {
+  return pages.catalog();
 }
 
 /** Dispara ISR no storefront para publicar sem rebuild completo. */

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { config } from '../config.js';
-import { products, signals, transaction } from '../db/repo.js';
+import { batch } from '../db/client.js';
+import { products, signals } from '../db/repo.js';
 import { id, nowIso } from '../lib/id.js';
 import { LlmError, longText, stripFence, structured } from '../lib/llm.js';
 import { errMeta, logger } from '../lib/log.js';
@@ -134,7 +135,8 @@ export async function manufacture(signal: DemandSignal): Promise<ProductRecord> 
     const blueprint = await draftBlueprint(signal);
     const asset = await renderArtifact(blueprint, signal);
 
-    const slug = uniqueSlug(slugify(blueprint.title || signal.query), (candidate) => products.slugTaken(candidate));
+    const base = slugify(blueprint.title || signal.query);
+    const slug = await uniqueSlug(base, (candidate) => products.slugTaken(candidate));
     const product: ProductRecord = {
       id: id('prod'),
       signalId: signal.id,
@@ -155,10 +157,7 @@ export async function manufacture(signal: DemandSignal): Promise<ProductRecord> 
       publishedAt: null,
     };
 
-    transaction(() => {
-      products.insert(product);
-      signals.setStatus(signal.id, 'consumed');
-    });
+    await batch([products.insertStatement(product), signals.setStatusStatement(signal.id, 'consumed')]);
 
     log.info('product manufactured', {
       productId: product.id,
@@ -169,7 +168,7 @@ export async function manufacture(signal: DemandSignal): Promise<ProductRecord> 
     });
     return product;
   } catch (error) {
-    signals.setStatus(signal.id, 'rejected');
+    await signals.setStatus(signal.id, 'rejected');
     log.error('manufacture failed', { signalId: signal.id, query: signal.query, ...errMeta(error) });
     throw error;
   }
@@ -205,7 +204,7 @@ export async function refabricate(product: ProductRecord, signal: DemandSignal):
     priceCents: normalizePrice(blueprint.priceCents),
     asset,
   };
-  products.updateContent(next);
+  await products.updateContent(next);
   log.info('product refabricated', { productId: product.id, slug: product.slug, bytes: asset.bytes });
   return { previous: product, next, changed: true };
 }
@@ -217,7 +216,7 @@ export interface FactoryBatchResult {
 
 /** Worker assíncrono: consome sinais pendentes com concorrência limitada. */
 export async function runFactory(limit = 3, concurrency = 2): Promise<FactoryBatchResult> {
-  const queue = signals.nextPending(config.MIN_DEMAND_SCORE, limit);
+  const queue = await signals.nextPending(config.MIN_DEMAND_SCORE, limit);
   const result: FactoryBatchResult = { produced: [], failed: [] };
   if (queue.length === 0) return result;
 

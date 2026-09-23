@@ -3,6 +3,7 @@ import { useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
 import { AlertTriangle, CheckCircle2, Database, FileCode2, FileUp, FlaskConical, Loader2, Lock, Server, ShieldCheck } from 'lucide-react';
 import { CSV_HEADER, generateDemoCsv, ingestCsv, loadCube, saveCube, type IngestResult } from './erpIngest.js';
+import { ingestWorkbook, looksLikeBinaryWorkbook, type StoreMode, type WorkbookInsight } from './spreadsheetIngest.js';
 
 const MODULE_ID = 'enterprise-controllership-v1';
 const int = new Intl.NumberFormat('pt-BR');
@@ -50,7 +51,13 @@ const DEMO_BATCH_SIZE = 50_000;
 type Phase =
 	| { readonly kind: 'idle' }
 	| { readonly kind: 'running'; readonly processed: number; readonly total: number }
-	| { readonly kind: 'done'; readonly result: IngestResult };
+	| { readonly kind: 'done'; readonly result: IngestResult; readonly insight?: WorkbookInsight };
+
+const STORE_MODE_LABEL: Readonly<Record<StoreMode, string>> = {
+	multi: 'Rede com filiais — cubo por filial (o Radar compara lojas)',
+	'single-uf': 'Loja única — dimensão por UF do fornecedor',
+	single: 'Loja única (matriz) — sem base de comparação cruzada'
+};
 
 /**
  * Ponte de Ingestão — pipeline REAL: CSV do ERP legado processado em lotes
@@ -105,13 +112,55 @@ export function ERPSyncBridge(): React.JSX.Element {
 		[toast, track]
 	);
 
+	// Lê e ENTENDE a pasta de trabalho (.xlsx/.xls) inteira: acha Compras e
+	// Vendas, mapeia as colunas fiscais, detecta o modo de loja e alimenta o Cubo.
+	const runWorkbook = useCallback(
+		async (buffer: ArrayBuffer, sourceLabel: string) => {
+			setPhase({ kind: 'running', processed: 0, total: 0 });
+			track('Cálculo Realizado', { moduleId: MODULE_ID, kind: 'erp-workbook-sync' });
+			try {
+				// Cede um frame pra barra aparecer antes do parse síncrono do arquivo.
+				await new Promise(resolve => setTimeout(resolve, 0));
+				const insight = ingestWorkbook(buffer);
+				const primary = insight.compras ?? insight.vendas;
+				if (!primary || primary.result.accepted === 0) {
+					setPhase({ kind: 'idle' });
+					toast.error(
+						insight.sheetsRead.length === 0
+							? 'Não reconheci nenhuma aba de Compras ou Vendas na planilha. Verifique se há colunas como Fornecedor/Cliente, Valor e Data.'
+							: 'A planilha foi lida, mas nenhuma linha de dados válida foi encontrada.'
+					);
+					return;
+				}
+				if (insight.compras) {
+					saveCube(insight.compras.result.cube);
+					setCubeInfo({ records: insight.compras.result.cube.recordCount, at: insight.compras.result.cube.generatedAt });
+				}
+				setPhase({ kind: 'done', result: primary.result, insight });
+				const abas = insight.sheetsRead.join(', ');
+				toast.success(`${sourceLabel}: entendi ${insight.sheetsRead.length} aba(s) (${abas}) — Cubo Financeiro atualizado para o Radar.`);
+			} catch (err) {
+				setPhase({ kind: 'idle' });
+				const message = err instanceof Error && err.message ? `Falha ao ler a planilha: ${err.message}` : 'Falha ao ler a planilha do Excel.';
+				toast.error(message);
+			}
+		},
+		[toast, track]
+	);
+
 	const onFile = useCallback(
 		async (file: File | undefined) => {
 			if (!file || busy) return;
-			const text = await file.text();
-			await runIngestion(text, file.name);
+			const buffer = await file.arrayBuffer();
+			const head = new Uint8Array(buffer.slice(0, 4));
+			if (looksLikeBinaryWorkbook(head)) {
+				await runWorkbook(buffer, file.name);
+			} else {
+				const text = new TextDecoder('utf-8').decode(buffer);
+				await runIngestion(text, file.name);
+			}
 		},
-		[busy, runIngestion]
+		[busy, runIngestion, runWorkbook]
 	);
 
 	const runDemo = useCallback(async () => {
@@ -135,7 +184,14 @@ export function ERPSyncBridge(): React.JSX.Element {
 					</span>
 				</div>
 				<div className="flex flex-col gap-2 sm:flex-row">
-					<input ref={fileRef} type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" className="hidden" data-testid="erp-file" onChange={e => void onFile(e.target.files?.[0])} />
+					<input
+						ref={fileRef}
+						type="file"
+						accept=".xlsx,.xls,.csv,.tsv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,text/tab-separated-values,text/plain"
+						className="hidden"
+						data-testid="erp-file"
+						onChange={e => void onFile(e.target.files?.[0])}
+					/>
 					<button
 						type="button"
 						onClick={() => fileRef.current?.click()}
@@ -143,7 +199,7 @@ export function ERPSyncBridge(): React.JSX.Element {
 						data-testid="erp-upload"
 						className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:scale-[1.02] hover:bg-sky-400 disabled:opacity-70"
 					>
-						<FileUp className="h-4 w-4" aria-hidden /> Importar CSV do ERP
+						<FileUp className="h-4 w-4" aria-hidden /> Importar planilha (Excel/CSV)
 					</button>
 					<button
 						type="button"
@@ -224,9 +280,35 @@ export function ERPSyncBridge(): React.JSX.Element {
 							</div>
 						</dl>
 						<p className="mt-3 text-[11px] text-zinc-500">
-							{phase.result.branches.length} filiais · {phase.result.suppliers.length} fornecedores · {phase.result.cube.cells.length} células no cubo.
+							{phase.result.branches.length} {phase.insight?.storeMode === 'multi' ? 'filiais' : 'dimensões'} · {phase.result.suppliers.length} fornecedores · {phase.result.cube.cells.length} células no cubo.
 							{phase.result.errors.length > 0 ? ` Primeira rejeição: linha ${phase.result.errors[0]?.line} (${phase.result.errors[0]?.reason}).` : ''}
 						</p>
+						{phase.insight && (
+							<div className="mt-4 rounded-xl border border-sky-500/20 bg-zinc-900/50 p-4" data-testid="workbook-insight">
+								<p className="text-[11px] font-semibold uppercase tracking-wide text-sky-300">O que o ERP entendeu da planilha</p>
+								<p className="mt-1.5 text-xs text-zinc-300">
+									Abas lidas: <span className="text-zinc-100">{phase.insight.sheetsRead.join(', ') || '—'}</span>
+									{phase.insight.sheetsIgnored.length > 0 && <span className="text-zinc-500"> · ignoradas: {phase.insight.sheetsIgnored.join(', ')}</span>}
+								</p>
+								<p className="mt-1 text-xs text-zinc-400">{STORE_MODE_LABEL[phase.insight.storeMode]}</p>
+								<dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-3">
+									<div className="rounded-lg bg-zinc-950/60 p-3">
+										<dt className="text-zinc-500">Compras (custo)</dt>
+										<dd className="mt-0.5 font-mono text-base font-bold tabular-nums text-sky-300">{brl.format(phase.insight.totalCompras)}</dd>
+									</div>
+									<div className="rounded-lg bg-zinc-950/60 p-3">
+										<dt className="text-zinc-500">Vendas (faturamento)</dt>
+										<dd className="mt-0.5 font-mono text-base font-bold tabular-nums text-emerald-300">{brl.format(phase.insight.totalVendas)}</dd>
+									</div>
+									{phase.insight.margemBruta != null && (
+										<div className="rounded-lg bg-zinc-950/60 p-3">
+											<dt className="text-zinc-500">Margem bruta</dt>
+											<dd className={`mt-0.5 font-mono text-base font-bold tabular-nums ${phase.insight.margemBruta >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{brl.format(phase.insight.margemBruta)}</dd>
+										</div>
+									)}
+								</dl>
+							</div>
+						)}
 					</div>
 				) : (
 					<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between" data-testid="ingest-idle">
@@ -238,7 +320,7 @@ export function ERPSyncBridge(): React.JSX.Element {
 								</p>
 							) : (
 								<p className="mt-1 flex items-center gap-1.5 text-sm text-zinc-400">
-									<AlertTriangle className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nenhum dado ingerido ainda — importe o CSV do ERP ou gere o lote de teste.
+									<AlertTriangle className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nenhum dado ingerido ainda — importe a planilha (Excel/CSV) ou gere o lote de teste.
 								</p>
 							)}
 						</div>

@@ -306,6 +306,45 @@ export async function ingestCsv(
 	};
 }
 
+/**
+ * Agrega registros JÁ tipados no Cubo Financeiro (mesma matemática do ingestCsv,
+ * porém síncrona e sem parsing). É o ponto de entrada usado pela leitura de
+ * planilha (.xlsx), onde as linhas chegam prontas de outro mapeador. Idempotente
+ * por `id`. `errors` fica vazio aqui — a rejeição de linha acontece no mapeador.
+ */
+export function aggregateRecords(records: readonly FinancialRecord[]): IngestResult {
+	const seen = new Set<string>();
+	const cells = new Map<string, CubeCell>();
+	let accepted = 0;
+	let duplicates = 0;
+
+	for (const rec of records) {
+		if (seen.has(rec.id)) {
+			duplicates += 1;
+			continue;
+		}
+		seen.add(rec.id);
+		accepted += 1;
+		const key = `${rec.branchId}|${rec.supplier}|${rec.category}`;
+		const cell = cells.get(key) ?? { branchId: rec.branchId, supplier: rec.supplier, category: rec.category, count: 0, total: 0, freteTotal: 0, impostoTotal: 0 };
+		cell.count += 1;
+		cell.total += rec.valor;
+		cell.freteTotal += rec.frete;
+		cell.impostoTotal += rec.imposto;
+		cells.set(key, cell);
+	}
+
+	const cellList = [...cells.values()];
+	return {
+		cube: { generatedAt: new Date().toISOString(), recordCount: accepted, cells: cellList },
+		accepted,
+		duplicates,
+		errors: [],
+		branches: [...new Set(cellList.map(c => c.branchId))].sort(),
+		suppliers: [...new Set(cellList.map(c => c.supplier))].sort()
+	};
+}
+
 // ── Persistência do cubo (localStorage; produção: tabela `financial_cube`) ──
 
 export const CUBE_STORAGE_KEY = 'lidar_erp_cube_v1';

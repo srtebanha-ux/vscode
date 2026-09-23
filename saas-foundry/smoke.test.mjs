@@ -1420,8 +1420,8 @@ try {
 	assert.match(erp, /TOTVS Protheus/);
 	assert.match(erp, /Receita Federal \/ XML/);
 	assert.match(erp, /Criptografia End-to-End · Compliance LGPD/);
-	// Pipeline real: upload de CSV + lote de teste + estado do Cubo Financeiro
-	assert.match(erp, /Importar CSV do ERP/);
+	// Pipeline real: upload de planilha (Excel/CSV) + lote de teste + estado do Cubo Financeiro
+	assert.match(erp, /Importar planilha \(Excel\/CSV\)/);
 	assert.match(erp, /Gerar lote de teste \(50\.000\)/);
 	assert.match(erp, /Cubo Financeiro/);
 	assert.match(erp, /Nenhum dado ingerido ainda/);
@@ -1550,6 +1550,86 @@ try {
 	assert.equal(loaded.recordCount, 5000);
 	assert.equal(loaded.cells.length, demo.cube.cells.length);
 	assert.equal(loadCube({ getItem: () => 'lixo{{{' }), null, 'cubo corrompido -> null, nunca lança');
+}
+
+// 28b2. Leitura de planilha real (.xlsx): entende abas, cabeçalho deslocado,
+// colunas pt-BR, modo de loja adaptativo e faturamento/margem.
+{
+	const XLSX = await import('xlsx');
+	const { ingestWorkbook, looksLikeBinaryWorkbook, cellToNumber, cellToIsoDate, normalizeHeader } =
+		await import('./modules-library/enterprise-controllership/dist/spreadsheetIngest.js');
+
+	// Helpers de célula
+	assert.equal(cellToNumber(1234.56), 1234.56);
+	assert.equal(cellToNumber('1.234,56'), 1234.56);
+	assert.equal(cellToNumber(''), 0);
+	assert.equal(cellToIsoDate(new Date(Date.UTC(2026, 7, 7))), '2026-08-07');
+	assert.equal(cellToIsoDate('05/04/2026'), '2026-04-05');
+	assert.equal(normalizeHeader('Frete\r\n(rateado)'), 'frete (rateado)');
+
+	// Monta um .xlsx como o do cliente: título nas 2 primeiras linhas, cabeçalho
+	// na linha 4, dados pt-BR, e uma aba não-tabular que deve ser ignorada.
+	const D = (y, m, d) => new Date(Date.UTC(y, m - 1, d));
+	const compras = XLSX.utils.aoa_to_sheet([
+		['REGISTRO DE ENTRADAS – COMPRAS', null, null, null, null, null, null, null],
+		['Agosto/2026 · itens de nota fiscal', null, null, null, null, null, null, null],
+		[null, null, null, null, null, null, null, null],
+		['Data Entrada', 'Nº NF', 'Fornecedor', 'UF', 'Categoria', 'Vlr Produtos', 'Frete (rateado)', 'Vlr ICMS'],
+		[D(2026, 8, 7), 9380, 'DISTRIBUIDORA SANTA CLARA', 'SP', 'Medicamento Generico', 100, 10, 12],
+		[D(2026, 8, 8), 9381, 'ACO FORTE LTDA', 'MG', 'Similar', 200, 20, 24]
+	]);
+	const vendas = XLSX.utils.aoa_to_sheet([
+		['REGISTRO DE SAÍDAS – FATURAMENTO', null, null, null],
+		[null, null, null, null],
+		[null, null, null, null],
+		['Data', 'Cliente / Destinatário', 'UF Dest.', 'Vlr Líquido'],
+		[D(2026, 8, 9), 'CONSUMIDOR FINAL', 'SP', 500],
+		[D(2026, 8, 10), 'CLIENTE PJ', 'SP', 300]
+	]);
+	const resumo = XLSX.utils.aoa_to_sheet([['RESUMO GERAL'], ['Total', 123]]);
+	const wb = XLSX.utils.book_new();
+	XLSX.utils.book_append_sheet(wb, compras, 'Compras');
+	XLSX.utils.book_append_sheet(wb, vendas, 'Vendas');
+	XLSX.utils.book_append_sheet(wb, resumo, 'Resumo');
+	const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+
+	// Assinatura de binário reconhecida (ZIP/PK)
+	assert.ok(looksLikeBinaryWorkbook(new Uint8Array(buf.slice(0, 4))), '.xlsx é detectado como binário');
+
+	const ins = ingestWorkbook(buf);
+	assert.deepEqual([...ins.sheetsRead].sort(), ['Compras', 'Vendas']);
+	assert.ok(ins.sheetsIgnored.includes('Resumo'), 'aba não-tabular é ignorada');
+	assert.equal(ins.storeMode, 'single-uf', 'sem coluna de filial e com UF -> single-uf');
+
+	assert.ok(ins.compras, 'aba de compras entendida');
+	assert.equal(ins.compras.kind, 'compras');
+	assert.equal(ins.compras.headerRow, 3, 'cabeçalho detectado na 4ª linha');
+	assert.equal(ins.compras.dimension, 'uf');
+	assert.equal(ins.compras.result.accepted, 2);
+	assert.equal(ins.compras.errors.length, 0);
+	assert.equal(ins.totalCompras, 300);
+	// imposto = ICMS somado; frete somado
+	assert.equal(ins.compras.result.cube.cells.reduce((s, c) => s + c.impostoTotal, 0), 36);
+	assert.equal(ins.compras.result.cube.cells.reduce((s, c) => s + c.freteTotal, 0), 30);
+	const spCell = ins.compras.result.cube.cells.find(c => c.branchId === 'SP');
+	assert.ok(spCell && spCell.supplier === 'DISTRIBUIDORA SANTA CLARA' && spCell.total === 100);
+
+	assert.ok(ins.vendas, 'aba de vendas entendida');
+	assert.equal(ins.totalVendas, 800);
+	assert.equal(ins.margemBruta, 500, 'margem = vendas - compras (800 - 300)');
+
+	// Modo MULTI: uma planilha com coluna Filial muda o comportamento (cubo por filial)
+	const rede = XLSX.utils.aoa_to_sheet([
+		['Filial', 'Data', 'Fornecedor', 'Categoria', 'Vlr Produtos', 'Frete', 'Vlr ICMS'],
+		['Loja Centro', D(2026, 8, 1), 'FORN A', 'geral', 1000, 80, 120],
+		['Loja Sul', D(2026, 8, 2), 'FORN A', 'geral', 1000, 200, 120]
+	]);
+	const wb2 = XLSX.utils.book_new();
+	XLSX.utils.book_append_sheet(wb2, rede, 'Compras');
+	const ins2 = ingestWorkbook(XLSX.write(wb2, { type: 'array', bookType: 'xlsx' }));
+	assert.equal(ins2.storeMode, 'multi', 'coluna Filial -> modo multi');
+	assert.equal(ins2.compras.dimension, 'filial');
+	assert.deepEqual([...ins2.compras.result.branches].sort(), ['Loja Centro', 'Loja Sul']);
 }
 
 // 28c. Radar de Prejuízo — Fase 1 (lossRadar): mediana, desvios e a anomalia achada

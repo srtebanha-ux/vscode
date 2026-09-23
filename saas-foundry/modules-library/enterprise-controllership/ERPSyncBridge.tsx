@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
 import { AlertTriangle, CheckCircle2, Database, FileCode2, FileUp, FlaskConical, Loader2, Lock, Server, ShieldCheck } from 'lucide-react';
-import { generateDemoCsv, ingestCsv, loadCube, saveCube, type IngestResult } from './erpIngest.js';
+import { CSV_HEADER, generateDemoCsv, ingestCsv, loadCube, saveCube, type IngestResult } from './erpIngest.js';
 
 const MODULE_ID = 'enterprise-controllership-v1';
 const int = new Intl.NumberFormat('pt-BR');
@@ -79,13 +79,27 @@ export function ERPSyncBridge(): React.JSX.Element {
 				const result = await ingestCsv(csv, {
 					onProgress: p => setPhase({ kind: 'running', processed: p.processed, total: p.total })
 				});
+				// Nenhuma linha aceita = importação falhou de fato: explica o porquê
+				// (primeira rejeição) em vez de exibir um "sucesso" com 0 registros.
+				if (result.accepted === 0) {
+					setPhase({ kind: 'idle' });
+					const firstReason = result.errors[0]?.reason;
+					toast.error(
+						firstReason
+							? `Nenhum registro reconhecido no arquivo. Verifique as colunas (${CSV_HEADER}). 1ª linha rejeitada: ${firstReason}.`
+							: 'O arquivo está vazio ou não contém linhas de dados.'
+					);
+					return;
+				}
 				saveCube(result.cube);
 				setCubeInfo({ records: result.cube.recordCount, at: result.cube.generatedAt });
 				setPhase({ kind: 'done', result });
 				toast.success(`${sourceLabel}: ${int.format(result.accepted)} registros ingeridos — Cubo Financeiro atualizado para o Radar.`);
-			} catch {
+			} catch (err) {
 				setPhase({ kind: 'idle' });
-				toast.error('Falha ao processar o arquivo. Verifique o formato (CSV do ERP).');
+				// IngestFormatError traz mensagem pronta pro usuário (ex.: anexou .xlsx).
+				const message = err instanceof Error && err.message ? err.message : 'Falha ao processar o arquivo. Verifique o formato (CSV do ERP).';
+				toast.error(message);
 			}
 		},
 		[toast, track]
@@ -121,7 +135,7 @@ export function ERPSyncBridge(): React.JSX.Element {
 					</span>
 				</div>
 				<div className="flex flex-col gap-2 sm:flex-row">
-					<input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" data-testid="erp-file" onChange={e => void onFile(e.target.files?.[0])} />
+					<input ref={fileRef} type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain" className="hidden" data-testid="erp-file" onChange={e => void onFile(e.target.files?.[0])} />
 					<button
 						type="button"
 						onClick={() => fileRef.current?.click()}

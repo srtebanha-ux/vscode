@@ -1442,20 +1442,71 @@ try {
 
 // 28b. Motor de Ingestão Massiva (erpIngest): parser, idempotência, cubo e anomalia
 {
-	const { parseCsvLine, parseRecord, ingestCsv, generateDemoCsv, saveCube, loadCube, DEMO_ANOMALY } =
+	const { parseCsvLine, parseRecord, ingestCsv, generateDemoCsv, saveCube, loadCube, DEMO_ANOMALY, parseAmount, normalizeDate, detectDelimiter, stripBom, assertNotBinarySpreadsheet } =
 		await import('./modules-library/enterprise-controllership/dist/erpIngest.js');
 
 	// Parser CSV quote-aware: vírgula e aspas escapadas dentro do campo
 	assert.deepEqual(parseCsvLine('a,b,c'), ['a', 'b', 'c']);
 	assert.deepEqual(parseCsvLine('a,"b, com vírgula",c'), ['a', 'b, com vírgula', 'c']);
 	assert.deepEqual(parseCsvLine('a,"diz ""oi""",c'), ['a', 'diz "oi"', 'c']);
+	// Separador ; (Excel pt-BR) e TAB, com aspas respeitadas
+	assert.deepEqual(parseCsvLine('a;b;c', ';'), ['a', 'b', 'c']);
+	assert.deepEqual(parseCsvLine('a;"b; com ponto e vírgula";c', ';'), ['a', 'b; com ponto e vírgula', 'c']);
+	assert.deepEqual(parseCsvLine('a\tb\tc', '\t'), ['a', 'b', 'c']);
+
+	// Detecção de separador: ; vence quando é o dominante; vírgula é o default
+	assert.equal(detectDelimiter('id;branchId;supplier;category;valor;frete;imposto;date'), ';');
+	assert.equal(detectDelimiter('id,branchId,supplier,category,valor,frete,imposto,date'), ',');
+	assert.equal(detectDelimiter('coluna_unica'), ',');
+
+	// Números pt-BR e internacionais
+	assert.equal(parseAmount('10.5'), 10.5); // contrato histórico (ponto decimal)
+	assert.equal(parseAmount('1234,56'), 1234.56); // vírgula decimal
+	assert.equal(parseAmount('1.234,56'), 1234.56); // ponto de milhar + vírgula decimal
+	assert.equal(parseAmount('1,234.56'), 1234.56); // formato internacional
+	assert.equal(parseAmount('R$ 2.500,00'), 2500); // com moeda e espaço
+	assert.equal(parseAmount('0,08'), 0.08);
+	assert.ok(Number.isNaN(parseAmount('abc')));
+
+	// Datas: ISO passa; dd/mm/aaaa e dd/mm/aa são normalizadas; lixo é null
+	assert.equal(normalizeDate('2026-04-01'), '2026-04-01');
+	assert.equal(normalizeDate('01/04/2026'), '2026-04-01');
+	assert.equal(normalizeDate('1/4/26'), '2026-04-01');
+	assert.equal(normalizeDate('40/13/2026'), null); // fora de faixa
+	assert.equal(normalizeDate('não é data'), null);
+
+	// BOM do Excel é removido
+	assert.equal(stripBom('﻿id,branchId'), 'id,branchId');
+
+	// Guarda de binário: .xlsx (ZIP) e byte NUL são recusados com mensagem útil
+	assert.throws(() => assertNotBinarySpreadsheet('PK\u0003\u0004conteúdo binário'), /planilha do Excel/);
+	assert.throws(() => assertNotBinarySpreadsheet('linha\u0000com nul'), /planilha do Excel/);
+	assert.doesNotThrow(() => assertNotBinarySpreadsheet('id,branchId\nn1,f1'));
 
 	// Validação de linha: campos faltando, número inválido, data inválida
 	assert.match(parseRecord(['só', 'três', 'campos'], 7).reason, /esperava 8 campos/);
 	assert.match(parseRecord(['id1', 'f1', 's1', 'cat', 'abc', '1', '1', '2026-04-01'], 8).reason, /valor inválido/);
-	assert.match(parseRecord(['id1', 'f1', 's1', 'cat', '10', '1', '1', '01/04/2026'], 9).reason, /data inválida/);
+	assert.match(parseRecord(['id1', 'f1', 's1', 'cat', '10', '1', '1', 'não é data'], 9).reason, /data inválida/);
+	// dd/mm/aaaa agora é aceita e normalizada para ISO (planilha pt-BR)
+	assert.equal(parseRecord(['id1', 'f1', 's1', 'cat', '10', '1', '1', '01/04/2026'], 9).date, '2026-04-01');
 	const okRec = parseRecord(['id1', 'f1', 's1', '', '10.5', '1', '2', '2026-04-01'], 10);
 	assert.equal(okRec.category, 'geral'); // categoria vazia -> default
+
+	// Planilha REAL do cliente (pt-BR): BOM + separador ; + vírgula decimal + dd/mm/aaaa
+	const csvBr = [
+		'﻿id;branchId;supplier;category;valor;frete;imposto;date',
+		'nf-1;filial-sul;TransLog Sul;frete;1.250,50;100,04;150,06;05/04/2026',
+		'nf-2;filial-norte;Aço Forte;insumo;3.000,00;240,00;360,00;12/04/2026'
+	].join('\r\n');
+	const br = await ingestCsv(csvBr);
+	assert.equal(br.accepted, 2, 'planilha pt-BR é aceita (antes: 0)');
+	assert.equal(br.errors.length, 0);
+	const celBr = br.cube.cells.find(c => c.branchId === 'filial-sul');
+	assert.equal(celBr.total, 1250.5);
+	assert.equal(celBr.freteTotal, 100.04);
+
+	// Anexar o .xlsx binário: erro claro, não "sucesso" com 0 linhas
+	await assert.rejects(() => ingestCsv('PK\u0003\u0004' + '\u0000'.repeat(50)), /planilha do Excel/);
 
 	// Ingestão: header opcional, idempotência (id repetido), rejeição, cubo agregado
 	const csv = [

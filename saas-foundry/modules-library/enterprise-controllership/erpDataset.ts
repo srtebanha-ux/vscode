@@ -11,7 +11,7 @@
  */
 
 import type { IngestResult, MonthAgg } from './erpIngest.js';
-import type { StoreMode, WorkbookInsight } from './spreadsheetIngest.js';
+import type { FiscalRow, StoreMode, WorkbookInsight } from './spreadsheetIngest.js';
 
 const MES_CURTO = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'] as const;
 
@@ -64,7 +64,12 @@ export interface ErpDataset {
     readonly branchesCount: number;
 	readonly topSuppliers: readonly NamedTotal[];
 	readonly sectorRevenue: readonly NamedTotal[];
+	/** Amostra fiscal (documentos reais) para a Descoberta Fiscal. */
+	readonly fiscalSample: readonly FiscalRow[];
 }
+
+/** Teto de linhas fiscais guardadas no dataset (as de maior valor). */
+const FISCAL_SAMPLE_CAP = 400;
 
 function byMonth(result: IngestResult | undefined): Map<string, MonthAgg> {
 	const map = new Map<string, MonthAgg>();
@@ -93,6 +98,7 @@ export interface DeriveInput {
 	readonly storeMode: StoreMode;
 	readonly compras?: IngestResult;
 	readonly vendas?: IngestResult;
+	readonly fiscalRows?: readonly FiscalRow[];
 	readonly generatedAt?: string;
 }
 
@@ -158,17 +164,20 @@ export function deriveDataset(input: DeriveInput): ErpDataset {
 		customersCount: vendas?.suppliers.length ?? 0,
 		branchesCount: (compras ?? vendas)?.branches.length ?? 0,
 		topSuppliers: topByField(compras, 'supplier'),
-		sectorRevenue: topByField(vendas ?? compras, 'category')
+		sectorRevenue: topByField(vendas ?? compras, 'category'),
+		fiscalSample: [...(input.fiscalRows ?? [])].sort((a, b) => b.valor - a.valor).slice(0, FISCAL_SAMPLE_CAP)
 	};
 }
 
 /** Atalho a partir do que a leitura de planilha (.xlsx) já entendeu. */
 export function deriveDatasetFromWorkbook(insight: WorkbookInsight, sourceLabel: string): ErpDataset {
+	const fiscalRows = [...(insight.compras?.fiscalRows ?? []), ...(insight.vendas?.fiscalRows ?? [])];
 	return deriveDataset({
 		sourceLabel,
 		storeMode: insight.storeMode,
 		...(insight.compras ? { compras: insight.compras.result } : {}),
-		...(insight.vendas ? { vendas: insight.vendas.result } : {})
+		...(insight.vendas ? { vendas: insight.vendas.result } : {}),
+		fiscalRows
 	});
 }
 

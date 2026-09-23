@@ -46,6 +46,8 @@ const COLUMN_SYNONYMS = {
 	category: ['categoria', 'tipo de fornecedor', 'grupo', 'linha'],
 	branch: ['filial', 'loja', 'unidade', 'unidade de negocio', 'estabelecimento', 'matriz/filial'],
 	uf: ['uf', 'uf dest.', 'estado', 'uf destino'],
+	ncm: ['ncm'],
+	cst: ['cst icms', 'cst', 'cst icms saida', 'cst pis/cof', 'cst pis/cofins saida'],
 	chave: ['chave de acesso', 'chave'],
 	nf: ['no nf', 'n° nf', 'nº nf', 'numero nf', 'num nf', 'no documento', 'nº documento', 'n° documento', 'numero do documento'],
 	item: ['item', 'seq', 'sequencia']
@@ -118,6 +120,16 @@ function buildColumnMap(headerCells: readonly unknown[]): ColumnMap {
 export type SheetKind = 'compras' | 'vendas';
 export type StoreMode = 'multi' | 'single-uf' | 'single';
 
+/** Linha fiscal a nível de documento — alimenta a Descoberta Fiscal (mineração). */
+export interface FiscalRow {
+	readonly doc: string;
+	readonly data: string; // ISO
+	readonly filial: string;
+	readonly ncm: string;
+	readonly cst: string;
+	readonly valor: number;
+}
+
 export interface SheetDataset {
 	readonly sheet: string;
 	readonly kind: SheetKind;
@@ -129,6 +141,8 @@ export interface SheetDataset {
 	readonly records: readonly FinancialRecord[];
 	readonly errors: readonly RowError[];
 	readonly result: IngestResult;
+	/** Amostra fiscal (doc, NCM, CST) para a mineração — ordenada por valor desc. */
+	readonly fiscalRows: readonly FiscalRow[];
 }
 
 function chooseStoreMode(map: ColumnMap): { storeMode: StoreMode; dimension: SheetDataset['dimension'] } {
@@ -142,6 +156,7 @@ function mapSheet(sheet: string, rows: Grid, headerRow: number, map: ColumnMap, 
 	const { storeMode, dimension } = chooseStoreMode(map);
 	const partyCol = kind === 'compras' ? map.supplier : map.customer;
 	const records: FinancialRecord[] = [];
+	const fiscalRows: FiscalRow[] = [];
 	const errors: RowError[] = [];
 	let rowsRead = 0;
 
@@ -186,10 +201,21 @@ function mapSheet(sheet: string, rows: Grid, headerRow: number, map: ColumnMap, 
 		const id = `${idBase}#${itemPart}`;
 
 		records.push({ id, branchId, supplier: party, category, valor, frete, imposto, date });
+
+		const docLabel = String(at(map.nf) ?? at(map.chave) ?? '').trim();
+		fiscalRows.push({
+			doc: docLabel ? `NF ${docLabel}` : party,
+			data: date,
+			filial: dimension === 'filial' ? branchId : dimension === 'uf' ? `${party} · ${branchId}` : party,
+			ncm: String(at(map.ncm) ?? '').trim() || '—',
+			cst: String(at(map.cst) ?? '').trim() || '—',
+			valor
+		});
 	}
 
+	fiscalRows.sort((a, b) => b.valor - a.valor);
 	const result = aggregateRecords(records);
-	return { sheet, kind, headerRow, storeMode, dimension, rowsRead, records, errors, result: { ...result, errors } };
+	return { sheet, kind, headerRow, storeMode, dimension, rowsRead, records, errors, result: { ...result, errors }, fiscalRows };
 }
 
 // ── Entrada pública: entende o arquivo inteiro ───────────────────────────────

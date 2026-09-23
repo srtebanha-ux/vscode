@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Archive, ArrowDownUp, Bell, Download, FilePlus2, Filter, Radar, Search, ShieldAlert, TrendingUp } from 'lucide-react';
+import { useErpDataset } from './useErpDataset.js';
+import type { ErpDataset } from './erpDataset.js';
 
 const MODULE_ID = 'enterprise-controllership-v1';
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
@@ -55,11 +57,55 @@ const SEVERITY_META: Readonly<Record<Severity, { readonly label: string; readonl
 	otimizacao: { label: 'Otimização', ring: 'ring-emerald-500/30 border-l-emerald-500', dot: 'bg-emerald-400', text: 'text-emerald-300' }
 };
 
-function AutomatedAnomalyFeed(): React.JSX.Element {
+/** Alertas derivados dos números REAIS da planilha (quando houver dataset). */
+export function anomaliesFromDataset(ds: ErpDataset): Anomaly[] {
+	const out: Anomaly[] = [];
+	const top = ds.topSuppliers[0];
+	if (top && ds.comprasTotal > 0) {
+		const share = (top.total / ds.comprasTotal) * 100;
+		out.push({
+			id: 'concentracao-fornecedor',
+			severity: share >= 25 ? 'critico' : 'atencao',
+			title: `Concentração de compras · ${top.name}`,
+			body: `${top.name} responde por ${share.toFixed(1)}% do custo de aquisição do período (${brl.format(top.total)} de ${brl.format(ds.comprasTotal)}). Concentração eleva risco de dependência e de repasse de preço.`,
+			metric: `Exposição · ${brl.format(top.total)}`
+		});
+	}
+	if (ds.tributosTotal > 0) {
+		out.push({
+			id: 'carga-tributaria',
+			severity: 'atencao',
+			title: 'Carga tributária do período',
+			body: `Tributos apurados de ${brl.format(ds.tributosTotal)} — alíquota efetiva de ${ds.aliquotaEfetiva.toFixed(2)}% sobre ${ds.hasVendas ? 'o faturamento' : 'as compras'}. Revisar CST/NCM pode reduzir a carga na sistemática do IBS/CBS.`,
+			metric: `Tributos · ${brl.format(ds.tributosTotal)}`
+		});
+	}
+	if (ds.freteTotal > 0) {
+		out.push({
+			id: 'frete-acumulado',
+			severity: 'otimizacao',
+			title: 'Frete acumulado nas compras',
+			body: `Frete rateado somou ${brl.format(ds.freteTotal)} no período. Renegociar rota/transportadora e conferir o rateio por nota gera caixa direto.`,
+			metric: `Frete · ${brl.format(ds.freteTotal)}`
+		});
+	}
+	if (ds.hasVendas && ds.margemPct < 20) {
+		out.push({
+			id: 'margem-baixa',
+			severity: 'critico',
+			title: 'Margem bruta abaixo do saudável',
+			body: `Margem bruta de ${ds.margemPct.toFixed(1)}% (${brl.format(ds.margemBrutaValor)}). Revisar precificação e mix de produtos para recompor a rentabilidade.`,
+			metric: `Margem · ${ds.margemPct.toFixed(1)}%`
+		});
+	}
+	return out;
+}
+
+function AutomatedAnomalyFeed({ anomalies }: { readonly anomalies: readonly Anomaly[] }): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [archived, setArchived] = useState<readonly string[]>([]);
-	const visible = ANOMALIES.filter(a => !archived.includes(a.id));
+	const visible = anomalies.filter(a => !archived.includes(a.id));
 
 	const archive = (id: string): void => {
 		setArchived(current => [...current, id]);
@@ -176,8 +222,6 @@ export function sortRecords(records: readonly FiscalRecord[], key: SortKey, dir:
 	});
 }
 
-const QUARTERS = ['todos', '2025-T1', '2025-T2', '2025-T3', '2025-T4'] as const;
-const FILIAIS = ['todas', 'Matriz', 'Filial Sul', 'Filial Norte', 'CD Logística'] as const;
 const COLUMNS: readonly { readonly key: SortKey; readonly label: string; readonly numeric?: boolean }[] = [
 	{ key: 'doc', label: 'Documento' },
 	{ key: 'data', label: 'Data' },
@@ -189,14 +233,18 @@ const COLUMNS: readonly { readonly key: SortKey; readonly label: string; readonl
 
 const selectCls = 'rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition-all focus:border-sky-500/60 [color-scheme:dark]';
 
-function AdvancedDataMiner(): React.JSX.Element {
+function AdvancedDataMiner({ records }: { readonly records: readonly FiscalRecord[] }): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
-	const [filters, setFilters] = useState<MinerFilters>({ quarter: 'todos', filial: 'todas', min: 0, max: 500000, code: '' });
+	// Opções de filtro derivadas dos dados reais (com fallback estático).
+	const maxValor = useMemo(() => Math.max(500000, ...records.map(r => r.valor)), [records]);
+	const quarters = useMemo(() => ['todos', ...[...new Set(records.map(r => quarterOf(r.data)))].sort()], [records]);
+	const filiais = useMemo(() => ['todas', ...[...new Set(records.map(r => r.filial))].sort()], [records]);
+	const [filters, setFilters] = useState<MinerFilters>({ quarter: 'todos', filial: 'todas', min: 0, max: maxValor, code: '' });
 	const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'valor', dir: 'desc' });
 	const set = (patch: Partial<MinerFilters>): void => setFilters(prev => ({ ...prev, ...patch }));
 
-	const rows = useMemo(() => sortRecords(filterRecords(FISCAL_RECORDS, filters), sort.key, sort.dir), [filters, sort]);
+	const rows = useMemo(() => sortRecords(filterRecords(records, filters), sort.key, sort.dir), [records, filters, sort]);
 
 	const toggleSort = (key: SortKey): void =>
 		setSort(current => (current.key === key ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
@@ -224,13 +272,13 @@ function AdvancedDataMiner(): React.JSX.Element {
 					<label className="flex flex-col gap-1.5">
 						<span className="text-xs font-medium text-zinc-400">Período Fiscal</span>
 						<select value={filters.quarter} onChange={e => set({ quarter: e.target.value })} aria-label="Período Fiscal" className={selectCls}>
-							{QUARTERS.map(q => <option key={q} value={q}>{q === 'todos' ? 'Todos' : q}</option>)}
+							{quarters.map(q => <option key={q} value={q}>{q === 'todos' ? 'Todos' : q}</option>)}
 						</select>
 					</label>
 					<label className="flex flex-col gap-1.5">
 						<span className="text-xs font-medium text-zinc-400">Filial/Unidade de Negócio</span>
 						<select value={filters.filial} onChange={e => set({ filial: e.target.value })} aria-label="Filial/Unidade de Negócio" className={selectCls}>
-							{FILIAIS.map(f => <option key={f} value={f}>{f === 'todas' ? 'Todas' : f}</option>)}
+							{filiais.map(f => <option key={f} value={f}>{f === 'todas' ? 'Todas' : f}</option>)}
 						</select>
 					</label>
 					<label className="flex flex-col gap-1.5">
@@ -274,8 +322,8 @@ function AdvancedDataMiner(): React.JSX.Element {
 							</tr>
 						</thead>
 						<tbody>
-							{rows.map(r => (
-								<tr key={r.doc} className="border-b border-zinc-800/60 transition-colors hover:bg-zinc-800/40">
+							{rows.map((r, i) => (
+								<tr key={`${r.doc}-${r.ncm}-${i}`} className="border-b border-zinc-800/60 transition-colors hover:bg-zinc-800/40">
 									<td className="px-4 py-2.5 font-mono text-xs text-zinc-200">{r.doc}</td>
 									<td className="px-4 py-2.5 text-zinc-400">{r.data.split('-').reverse().join('/')}</td>
 									<td className="px-4 py-2.5 text-zinc-300">{r.filial}</td>
@@ -303,12 +351,20 @@ type HubTab = 'alertas' | 'mineracao';
 
 export function FiscalDiscoveryHub(): React.JSX.Element {
 	const [tab, setTab] = useState<HubTab>('alertas');
+	// Dados REAIS da planilha ingerida (com fallback à demonstração).
+	const dataset = useErpDataset();
+	const anomalies = useMemo<readonly Anomaly[]>(() => {
+		const derived = dataset ? anomaliesFromDataset(dataset) : [];
+		return derived.length > 0 ? derived : ANOMALIES;
+	}, [dataset]);
+	const records = dataset && dataset.fiscalSample.length > 0 ? dataset.fiscalSample : FISCAL_RECORDS;
 
 	return (
 		<div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-950 p-6 text-zinc-100">
 			<header className="flex flex-col gap-3 border-b border-zinc-800 pb-4 sm:flex-row sm:items-center sm:justify-between">
 				<h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
 					<Radar className="h-4 w-4 text-sky-400" aria-hidden /> Central de Descoberta Fiscal
+					{dataset && <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">dados reais</span>}
 				</h2>
 				<div role="tablist" aria-label="Modo de trabalho" className="flex gap-1 rounded-xl bg-zinc-900 p-1 ring-1 ring-zinc-800">
 					{([['alertas', 'Alertas da IA', ShieldAlert], ['mineracao', 'Mineração Avançada', TrendingUp]] as const).map(([id, label, Icon]) => (
@@ -334,7 +390,7 @@ export function FiscalDiscoveryHub(): React.JSX.Element {
 					exit={{ opacity: 0, y: -8 }}
 					transition={{ duration: 0.2, ease: 'easeOut' }}
 				>
-					{tab === 'alertas' ? <AutomatedAnomalyFeed /> : <AdvancedDataMiner />}
+					{tab === 'alertas' ? <AutomatedAnomalyFeed anomalies={anomalies} /> : <AdvancedDataMiner records={records} />}
 				</motion.div>
 			</AnimatePresence>
 		</div>

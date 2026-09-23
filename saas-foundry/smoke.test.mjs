@@ -1618,6 +1618,11 @@ try {
 	assert.equal(ins.totalVendas, 800);
 	assert.equal(ins.margemBruta, 500, 'margem = vendas - compras (800 - 300)');
 
+	// Amostra fiscal capturada a nível de documento (para a Descoberta Fiscal)
+	assert.equal(ins.compras.fiscalRows.length, 2);
+	assert.ok(ins.compras.fiscalRows[0].valor >= ins.compras.fiscalRows[1].valor, 'ordenada por valor');
+	assert.ok(ins.compras.fiscalRows.every(r => typeof r.ncm === 'string'));
+
 	// Modo MULTI: uma planilha com coluna Filial muda o comportamento (cubo por filial)
 	const rede = XLSX.utils.aoa_to_sheet([
 		['Filial', 'Data', 'Fornecedor', 'Categoria', 'Vlr Produtos', 'Frete', 'Vlr ICMS'],
@@ -1697,6 +1702,27 @@ try {
 	assert.equal(soCompras.comprasTotal, 300);
 	assert.equal(soCompras.hasVendas, false);
 	assert.equal(soCompras.hasCompras, true);
+
+	// Amostra fiscal (Descoberta Fiscal): ordenada por valor desc e limitada
+	const dsFiscal = deriveDataset({
+		sourceLabel: 'x.xlsx',
+		storeMode: 'single-uf',
+		compras,
+		vendas,
+		fiscalRows: [
+			{ doc: 'NF 1', data: '2026-08-01', filial: 'SP', ncm: '3004.90.79', cst: '60', valor: 1000 },
+			{ doc: 'NF 2', data: '2026-07-01', filial: 'MG', ncm: '2106.90.00', cst: '00', valor: 2000 }
+		]
+	});
+	assert.equal(dsFiscal.fiscalSample.length, 2);
+	assert.equal(dsFiscal.fiscalSample[0].valor, 2000); // maior primeiro
+
+	// Alertas da Descoberta Fiscal derivam dos números reais
+	const { anomaliesFromDataset } = await import('./modules-library/enterprise-controllership/dist/FiscalDiscoveryHub.js');
+	const anoms = anomaliesFromDataset(dsFiscal);
+	assert.ok(anoms.length >= 2, 'gera alertas a partir do dataset');
+	assert.ok(anoms.some(a => a.id === 'carga-tributaria'));
+	assert.ok(anoms.some(a => a.id === 'concentracao-fornecedor'));
 }
 
 // 28c. Radar de Prejuízo — Fase 1 (lossRadar): mediana, desvios e a anomalia achada

@@ -1632,6 +1632,73 @@ try {
 	assert.deepEqual([...ins2.compras.result.branches].sort(), ['Loja Centro', 'Loja Sul']);
 }
 
+// 28b3. Dataset único do ERP: destila Compras+Vendas nos números de TODO o ERP.
+{
+	const { aggregateRecords } = await import('./modules-library/enterprise-controllership/dist/erpIngest.js');
+	const { deriveDataset, monthLabel, saveDataset, loadDataset } =
+		await import('./modules-library/enterprise-controllership/dist/erpDataset.js');
+	const { panelKpisFromDataset, sectorRevenueFromDataset } =
+		await import('./modules-library/enterprise-controllership/dist/panelModel.js');
+
+	assert.equal(monthLabel('2026-07'), 'jul/26');
+	assert.equal(monthLabel('2026-08'), 'ago/26');
+
+	const comprasRecs = [
+		{ id: 'c1', branchId: 'SP', supplier: 'F1', category: 'med', valor: 100, frete: 10, imposto: 12, date: '2026-07-05' },
+		{ id: 'c2', branchId: 'SP', supplier: 'F1', category: 'med', valor: 200, frete: 20, imposto: 24, date: '2026-08-10' }
+	];
+	const vendasRecs = [
+		{ id: 'v1', branchId: 'SP', supplier: 'Cliente', category: 'med', valor: 300, frete: 0, imposto: 9, date: '2026-07-06' },
+		{ id: 'v2', branchId: 'SP', supplier: 'Cliente', category: 'hig', valor: 500, frete: 0, imposto: 15, date: '2026-08-11' }
+	];
+	const compras = aggregateRecords(comprasRecs);
+	const vendas = aggregateRecords(vendasRecs);
+	// Série mensal já vem do motor de ingestão
+	assert.deepEqual(compras.monthly.map(m => m.month), ['2026-07', '2026-08']);
+
+	const ds = deriveDataset({ sourceLabel: 'x.xlsx', storeMode: 'single-uf', compras, vendas });
+	assert.deepEqual(ds.months, ['2026-07', '2026-08']);
+	assert.deepEqual(ds.monthLabels, ['jul/26', 'ago/26']);
+	assert.equal(ds.faturamentoTotal, 800);
+	assert.equal(ds.comprasTotal, 300);
+	assert.equal(ds.tributosTotal, 60); // 12+24 (compras) + 9+15 (vendas)
+	assert.deepEqual(ds.series.faturamento, [300, 500]);
+	assert.deepEqual(ds.series.cmv, [100, 200]);
+	assert.deepEqual(ds.series.tributos, [21, 39]); // 12+9 · 24+15
+	assert.ok(Math.abs(ds.series.margem[0] - 200 / 3) < 0.01, 'margem jul = (300-100)/300');
+	assert.equal(ds.margemBrutaValor, 500);
+	assert.ok(Math.abs(ds.margemPct - 62.5) < 1e-9);
+	assert.ok(Math.abs(ds.aliquotaEfetiva - 7.5) < 1e-9); // 60/800
+	assert.equal(ds.faturamentoMensalMedio, 400);
+	assert.equal(ds.suppliersCount, 1);
+	assert.equal(ds.customersCount, 1);
+
+	// KPIs do Painel montados com as séries reais
+	const kpis = panelKpisFromDataset(ds);
+	const fat = kpis.find(k => k.id === 'faturamento');
+	assert.deepEqual(fat.series.map(p => p.valor), [300, 500]);
+	assert.deepEqual(fat.series.map(p => p.mes), ['jul/26', 'ago/26']);
+	// Setor/categoria a partir das vendas
+	const sector = sectorRevenueFromDataset(ds);
+	assert.ok(sector.some(s => s.setor === 'hig' && s.valor === 500));
+
+	// Persistência (storage injetável), com guarda de corrupção
+	const mem = new Map();
+	const fake = { setItem: (k, v) => mem.set(k, v), getItem: k => mem.get(k) ?? null };
+	saveDataset(ds, fake);
+	const loaded = loadDataset(fake);
+	assert.equal(loaded.faturamentoTotal, 800);
+	assert.equal(loaded.months.length, 2);
+	assert.equal(loadDataset({ getItem: () => 'lixo{{{' }), null, 'dataset corrompido -> null');
+
+	// Só Compras (CSV legado): faturamento zero, mas custos/tributos reais
+	const soCompras = deriveDataset({ sourceLabel: 'erp.csv', storeMode: 'single', compras });
+	assert.equal(soCompras.faturamentoTotal, 0);
+	assert.equal(soCompras.comprasTotal, 300);
+	assert.equal(soCompras.hasVendas, false);
+	assert.equal(soCompras.hasCompras, true);
+}
+
 // 28c. Radar de Prejuízo — Fase 1 (lossRadar): mediana, desvios e a anomalia achada
 {
 	const { generateDemoCsv, ingestCsv } = await import('./modules-library/enterprise-controllership/dist/erpIngest.js');

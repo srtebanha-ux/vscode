@@ -2,9 +2,16 @@ import { useMemo, useState } from 'react';
 import { useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
 import { FileDown, Loader2, Lock, ShieldAlert, Sparkles, Terminal } from 'lucide-react';
+import { useErpDataset } from './useErpDataset.js';
 
 const MODULE_ID = 'enterprise-controllership-v1';
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+
+/** Deriva uma razão social apresentável do nome do arquivo da planilha. */
+function clientNameFromSource(sourceLabel: string): string {
+	const base = sourceLabel.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim();
+	return base || sourceLabel;
+}
 
 /** Um "ralo de dinheiro" com a munição pronta para o Controlador Humano. */
 interface CashLeak {
@@ -62,6 +69,14 @@ export function ExecutiveBriefingGenerator({ clientName = 'Metalúrgica Prisma S
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [generating, setGenerating] = useState(false);
+	// Números REAIS da planilha ingerida (quando houver).
+	const dataset = useErpDataset();
+	const cliente = dataset ? clientNameFromSource(dataset.sourceLabel) : clientName;
+	// Exposição = tributos anualizados do período real; senão, o valor de referência.
+	const exposureBefore =
+		dataset && dataset.tributosTotal > 0 && dataset.months.length > 0
+			? Math.round((dataset.tributosTotal / dataset.months.length) * 12)
+			: EXPOSURE_BEFORE;
 
 	const totalRecovery = useMemo(() => LEAKS.reduce((sum, leak) => sum + leak.recovery, 0), []);
 
@@ -85,7 +100,7 @@ export function ExecutiveBriefingGenerator({ clientName = 'Metalúrgica Prisma S
 			doc.text('◈', M + 8, 48);
 			doc.setTextColor(250, 250, 250);
 			doc.setFontSize(15);
-			doc.text(clientName, M + 40, 46);
+			doc.text(cliente, M + 40, 46);
 			doc.setFont('helvetica', 'normal');
 			doc.setFontSize(9);
 			doc.setTextColor(212, 175, 55);
@@ -102,8 +117,8 @@ export function ExecutiveBriefingGenerator({ clientName = 'Metalúrgica Prisma S
 			const chartH = 120;
 			const baseY = y + chartH;
 			const barW = 90;
-			const maxVal = Math.max(EXPOSURE_BEFORE, totalRecovery);
-			const antesH = (EXPOSURE_BEFORE / maxVal) * chartH;
+			const maxVal = Math.max(exposureBefore, totalRecovery);
+			const antesH = (exposureBefore / maxVal) * chartH;
 			const posH = (totalRecovery / maxVal) * chartH;
 			doc.setFillColor(244, 63, 94);
 			doc.rect(M + 20, baseY - antesH, barW, antesH, 'F');
@@ -116,7 +131,7 @@ export function ExecutiveBriefingGenerator({ clientName = 'Metalúrgica Prisma S
 			doc.text('Pós-Ajuste Tributário', M + 20 + barW + 52, baseY + 24);
 			doc.setFont('helvetica', 'bold');
 			doc.setTextColor(244, 63, 94);
-			doc.text(brl.format(EXPOSURE_BEFORE), M + 20, baseY - antesH - 6);
+			doc.text(brl.format(exposureBefore), M + 20, baseY - antesH - 6);
 			doc.setTextColor(16, 185, 129);
 			doc.text(brl.format(totalRecovery), M + 20 + barW + 60, baseY - posH - 6);
 
@@ -157,7 +172,7 @@ export function ExecutiveBriefingGenerator({ clientName = 'Metalúrgica Prisma S
 			doc.setFontSize(16);
 			doc.text(brl.format(totalRecovery), W - M - 16 - doc.getTextWidth(brl.format(totalRecovery)), y + 28);
 
-			doc.save(`dossie-executivo-${clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.pdf`);
+			doc.save(`dossie-executivo-${cliente.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.pdf`);
 			track('Cálculo Realizado', { moduleId: MODULE_ID, kind: 'executive-dossier', recovery: totalRecovery });
 			toast.success('Dossiê executivo gerado — pronto para a reunião de diretoria.');
 		} catch {
@@ -180,7 +195,7 @@ export function ExecutiveBriefingGenerator({ clientName = 'Metalúrgica Prisma S
 						</span>
 					</h2>
 					<p className="mt-1 text-xs text-zinc-500">
-						cliente: <span className="text-zinc-300">{clientName}</span> · sessão descriptografada · analista humano
+						cliente: <span className="text-zinc-300">{cliente}</span> · sessão descriptografada · analista humano
 					</p>
 				</div>
 				<button
@@ -194,6 +209,23 @@ export function ExecutiveBriefingGenerator({ clientName = 'Metalúrgica Prisma S
 					{generating ? 'Compilando…' : 'Gerar Apresentação de Resultados (PDF/PPTX)'}
 				</button>
 			</header>
+
+			{/* Base real da planilha ingerida (quando houver) */}
+			{dataset && (
+				<div className="grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4" data-testid="dossier-erp-base">
+					{[
+						['Faturamento', brl.format(dataset.faturamentoTotal)],
+						['Compras', brl.format(dataset.comprasTotal)],
+						['Tributos', brl.format(dataset.tributosTotal)],
+						['Exposição anual.', brl.format(exposureBefore)]
+					].map(([label, value]) => (
+						<div key={label} className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-2.5">
+							<p className="text-zinc-500">{label}</p>
+							<p className="mt-0.5 font-bold text-emerald-300">{value}</p>
+						</div>
+					))}
+				</div>
+			)}
 
 			{/* Diagnóstico de Fuga de Caixa */}
 			<div className="flex items-center justify-between text-[11px] uppercase tracking-widest text-zinc-500">

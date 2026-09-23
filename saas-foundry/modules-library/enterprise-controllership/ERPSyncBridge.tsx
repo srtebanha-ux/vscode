@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { AlertTriangle, CheckCircle2, Database, FileCode2, FileUp, FlaskConical, Loader2, Lock, Server, ShieldCheck } from 'lucide-react';
 import { CSV_HEADER, generateDemoCsv, ingestCsv, loadCube, saveCube, type IngestResult } from './erpIngest.js';
 import { ingestWorkbook, looksLikeBinaryWorkbook, type StoreMode, type WorkbookInsight } from './spreadsheetIngest.js';
+import { deriveDataset, deriveDatasetFromWorkbook, saveDataset } from './erpDataset.js';
 
 const MODULE_ID = 'enterprise-controllership-v1';
 const int = new Intl.NumberFormat('pt-BR');
@@ -99,9 +100,11 @@ export function ERPSyncBridge(): React.JSX.Element {
 					return;
 				}
 				saveCube(result.cube);
+				// Abastece TODO o ERP (Painel, Simulador, Dossiê), não só o Radar.
+				saveDataset(deriveDataset({ sourceLabel, storeMode: result.branches.length > 1 ? 'multi' : 'single', compras: result }));
 				setCubeInfo({ records: result.cube.recordCount, at: result.cube.generatedAt });
 				setPhase({ kind: 'done', result });
-				toast.success(`${sourceLabel}: ${int.format(result.accepted)} registros ingeridos — Cubo Financeiro atualizado para o Radar.`);
+				toast.success(`${sourceLabel}: ${int.format(result.accepted)} registros ingeridos — ERP atualizado (Painel, Radar, Simulador e Dossiê).`);
 			} catch (err) {
 				setPhase({ kind: 'idle' });
 				// IngestFormatError traz mensagem pronta pro usuário (ex.: anexou .xlsx).
@@ -136,9 +139,11 @@ export function ERPSyncBridge(): React.JSX.Element {
 					saveCube(insight.compras.result.cube);
 					setCubeInfo({ records: insight.compras.result.cube.recordCount, at: insight.compras.result.cube.generatedAt });
 				}
+				// Destila Compras + Vendas no dataset que abastece TODO o ERP.
+				saveDataset(deriveDatasetFromWorkbook(insight, sourceLabel));
 				setPhase({ kind: 'done', result: primary.result, insight });
 				const abas = insight.sheetsRead.join(', ');
-				toast.success(`${sourceLabel}: entendi ${insight.sheetsRead.length} aba(s) (${abas}) — Cubo Financeiro atualizado para o Radar.`);
+				toast.success(`${sourceLabel}: entendi ${insight.sheetsRead.length} aba(s) (${abas}) — ERP atualizado (Painel, Radar, Simulador e Dossiê).`);
 			} catch (err) {
 				setPhase({ kind: 'idle' });
 				const message = err instanceof Error && err.message ? `Falha ao ler a planilha: ${err.message}` : 'Falha ao ler a planilha do Excel.';

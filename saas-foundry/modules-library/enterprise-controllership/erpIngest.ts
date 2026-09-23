@@ -234,6 +234,15 @@ export interface IngestProgress {
 	readonly total: number;
 }
 
+/** Agregado por competência (yyyy-mm) — base das séries mensais do ERP. */
+export interface MonthAgg {
+	readonly month: string; // yyyy-mm
+	count: number;
+	total: number;
+	freteTotal: number;
+	impostoTotal: number;
+}
+
 export interface IngestResult {
 	readonly cube: FinancialCube;
 	readonly accepted: number;
@@ -241,6 +250,23 @@ export interface IngestResult {
 	readonly errors: readonly RowError[];
 	readonly branches: readonly string[];
 	readonly suppliers: readonly string[];
+	/** Série mensal ordenada por competência (para os KPIs do Painel). */
+	readonly monthly: readonly MonthAgg[];
+}
+
+/** Acumula um registro no mapa mensal (yyyy-mm extraído da data ISO). */
+function accumulateMonth(months: Map<string, MonthAgg>, rec: FinancialRecord): void {
+	const month = rec.date.slice(0, 7);
+	const agg = months.get(month) ?? { month, count: 0, total: 0, freteTotal: 0, impostoTotal: 0 };
+	agg.count += 1;
+	agg.total += rec.valor;
+	agg.freteTotal += rec.frete;
+	agg.impostoTotal += rec.imposto;
+	months.set(month, agg);
+}
+
+function sortedMonths(months: Map<string, MonthAgg>): MonthAgg[] {
+	return [...months.values()].sort((a, b) => a.month.localeCompare(b.month));
 }
 
 /**
@@ -264,6 +290,7 @@ export async function ingestCsv(
 
 	const seen = new Set<string>();
 	const cells = new Map<string, CubeCell>();
+	const months = new Map<string, MonthAgg>();
 	const errors: RowError[] = [];
 	let accepted = 0;
 	let duplicates = 0;
@@ -289,6 +316,7 @@ export async function ingestCsv(
 			cell.freteTotal += parsed.frete;
 			cell.impostoTotal += parsed.imposto;
 			cells.set(key, cell);
+			accumulateMonth(months, parsed);
 		}
 		options?.onProgress?.({ processed: Math.min(end - startAt, total), total });
 		// Devolve o event loop: mantém a UI viva entre lotes (não bloqueia a main thread).
@@ -302,7 +330,8 @@ export async function ingestCsv(
 		duplicates,
 		errors,
 		branches: [...new Set(cellList.map(c => c.branchId))].sort(),
-		suppliers: [...new Set(cellList.map(c => c.supplier))].sort()
+		suppliers: [...new Set(cellList.map(c => c.supplier))].sort(),
+		monthly: sortedMonths(months)
 	};
 }
 
@@ -315,6 +344,7 @@ export async function ingestCsv(
 export function aggregateRecords(records: readonly FinancialRecord[]): IngestResult {
 	const seen = new Set<string>();
 	const cells = new Map<string, CubeCell>();
+	const months = new Map<string, MonthAgg>();
 	let accepted = 0;
 	let duplicates = 0;
 
@@ -332,6 +362,7 @@ export function aggregateRecords(records: readonly FinancialRecord[]): IngestRes
 		cell.freteTotal += rec.frete;
 		cell.impostoTotal += rec.imposto;
 		cells.set(key, cell);
+		accumulateMonth(months, rec);
 	}
 
 	const cellList = [...cells.values()];
@@ -341,7 +372,8 @@ export function aggregateRecords(records: readonly FinancialRecord[]): IngestRes
 		duplicates,
 		errors: [],
 		branches: [...new Set(cellList.map(c => c.branchId))].sort(),
-		suppliers: [...new Set(cellList.map(c => c.supplier))].sort()
+		suppliers: [...new Set(cellList.map(c => c.supplier))].sort(),
+		monthly: sortedMonths(months)
 	};
 }
 

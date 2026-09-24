@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Filter, Layers, Sparkles, TrendingUp } from 'lucide-react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { useErpDataset } from './useErpDataset.js';
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 
@@ -78,10 +79,21 @@ const chartTooltip = {
 } as const;
 
 /** Simulador de Cenários — o "parque de diversões" do analista tributário (IBS/CBS). */
+/** Arredonda a alíquota efetiva para o passo do slider (0,5%), dentro de 0–45%. */
+function seedAliquota(pct: number): number {
+	return Math.min(45, Math.max(0, Math.round(pct * 2) / 2));
+}
+/** Arredonda o volume ao passo do slider (R$ 100 mil), dentro de 100k–10mi. */
+function seedVolume(valor: number): number {
+	return Math.min(10_000_000, Math.max(100_000, Math.round(valor / 100_000) * 100_000));
+}
+
 export function TaxScenarioSimulator(): React.JSX.Element {
-	const [aliquotaAtual, setAliquotaAtual] = useState(34);
+	// Semeia os controles com os números REAIS da planilha, quando houver.
+	const dataset = useErpDataset();
+	const [aliquotaAtual, setAliquotaAtual] = useState(() => (dataset && dataset.aliquotaEfetiva > 0 ? seedAliquota(dataset.aliquotaEfetiva) : 34));
 	const [novaAliquota, setNovaAliquota] = useState(26.5);
-	const [volumeMensal, setVolumeMensal] = useState(1_200_000);
+	const [volumeMensal, setVolumeMensal] = useState(() => (dataset && dataset.faturamentoMensalMedio > 0 ? seedVolume(dataset.faturamentoMensalMedio) : 1_200_000));
 	const [escopo, setEscopo] = useState<'todos' | 'ncm'>('todos');
 	const [ncm, setNcm] = useState('2523.29.10');
 

@@ -1420,8 +1420,8 @@ try {
 	assert.match(erp, /TOTVS Protheus/);
 	assert.match(erp, /Receita Federal \/ XML/);
 	assert.match(erp, /Criptografia End-to-End · Compliance LGPD/);
-	// Pipeline real: upload de CSV + lote de teste + estado do Cubo Financeiro
-	assert.match(erp, /Importar CSV do ERP/);
+	// Pipeline real: upload de planilha (Excel/CSV) + lote de teste + estado do Cubo Financeiro
+	assert.match(erp, /Importar planilha \(Excel\/CSV\)/);
 	assert.match(erp, /Gerar lote de teste \(50\.000\)/);
 	assert.match(erp, /Cubo Financeiro/);
 	assert.match(erp, /Nenhum dado ingerido ainda/);
@@ -1442,20 +1442,71 @@ try {
 
 // 28b. Motor de Ingestão Massiva (erpIngest): parser, idempotência, cubo e anomalia
 {
-	const { parseCsvLine, parseRecord, ingestCsv, generateDemoCsv, saveCube, loadCube, DEMO_ANOMALY } =
+	const { parseCsvLine, parseRecord, ingestCsv, generateDemoCsv, saveCube, loadCube, DEMO_ANOMALY, parseAmount, normalizeDate, detectDelimiter, stripBom, assertNotBinarySpreadsheet } =
 		await import('./modules-library/enterprise-controllership/dist/erpIngest.js');
 
 	// Parser CSV quote-aware: vírgula e aspas escapadas dentro do campo
 	assert.deepEqual(parseCsvLine('a,b,c'), ['a', 'b', 'c']);
 	assert.deepEqual(parseCsvLine('a,"b, com vírgula",c'), ['a', 'b, com vírgula', 'c']);
 	assert.deepEqual(parseCsvLine('a,"diz ""oi""",c'), ['a', 'diz "oi"', 'c']);
+	// Separador ; (Excel pt-BR) e TAB, com aspas respeitadas
+	assert.deepEqual(parseCsvLine('a;b;c', ';'), ['a', 'b', 'c']);
+	assert.deepEqual(parseCsvLine('a;"b; com ponto e vírgula";c', ';'), ['a', 'b; com ponto e vírgula', 'c']);
+	assert.deepEqual(parseCsvLine('a\tb\tc', '\t'), ['a', 'b', 'c']);
+
+	// Detecção de separador: ; vence quando é o dominante; vírgula é o default
+	assert.equal(detectDelimiter('id;branchId;supplier;category;valor;frete;imposto;date'), ';');
+	assert.equal(detectDelimiter('id,branchId,supplier,category,valor,frete,imposto,date'), ',');
+	assert.equal(detectDelimiter('coluna_unica'), ',');
+
+	// Números pt-BR e internacionais
+	assert.equal(parseAmount('10.5'), 10.5); // contrato histórico (ponto decimal)
+	assert.equal(parseAmount('1234,56'), 1234.56); // vírgula decimal
+	assert.equal(parseAmount('1.234,56'), 1234.56); // ponto de milhar + vírgula decimal
+	assert.equal(parseAmount('1,234.56'), 1234.56); // formato internacional
+	assert.equal(parseAmount('R$ 2.500,00'), 2500); // com moeda e espaço
+	assert.equal(parseAmount('0,08'), 0.08);
+	assert.ok(Number.isNaN(parseAmount('abc')));
+
+	// Datas: ISO passa; dd/mm/aaaa e dd/mm/aa são normalizadas; lixo é null
+	assert.equal(normalizeDate('2026-04-01'), '2026-04-01');
+	assert.equal(normalizeDate('01/04/2026'), '2026-04-01');
+	assert.equal(normalizeDate('1/4/26'), '2026-04-01');
+	assert.equal(normalizeDate('40/13/2026'), null); // fora de faixa
+	assert.equal(normalizeDate('não é data'), null);
+
+	// BOM do Excel é removido
+	assert.equal(stripBom('﻿id,branchId'), 'id,branchId');
+
+	// Guarda de binário: .xlsx (ZIP) e byte NUL são recusados com mensagem útil
+	assert.throws(() => assertNotBinarySpreadsheet('PK\u0003\u0004conteúdo binário'), /planilha do Excel/);
+	assert.throws(() => assertNotBinarySpreadsheet('linha\u0000com nul'), /planilha do Excel/);
+	assert.doesNotThrow(() => assertNotBinarySpreadsheet('id,branchId\nn1,f1'));
 
 	// Validação de linha: campos faltando, número inválido, data inválida
 	assert.match(parseRecord(['só', 'três', 'campos'], 7).reason, /esperava 8 campos/);
 	assert.match(parseRecord(['id1', 'f1', 's1', 'cat', 'abc', '1', '1', '2026-04-01'], 8).reason, /valor inválido/);
-	assert.match(parseRecord(['id1', 'f1', 's1', 'cat', '10', '1', '1', '01/04/2026'], 9).reason, /data inválida/);
+	assert.match(parseRecord(['id1', 'f1', 's1', 'cat', '10', '1', '1', 'não é data'], 9).reason, /data inválida/);
+	// dd/mm/aaaa agora é aceita e normalizada para ISO (planilha pt-BR)
+	assert.equal(parseRecord(['id1', 'f1', 's1', 'cat', '10', '1', '1', '01/04/2026'], 9).date, '2026-04-01');
 	const okRec = parseRecord(['id1', 'f1', 's1', '', '10.5', '1', '2', '2026-04-01'], 10);
 	assert.equal(okRec.category, 'geral'); // categoria vazia -> default
+
+	// Planilha REAL do cliente (pt-BR): BOM + separador ; + vírgula decimal + dd/mm/aaaa
+	const csvBr = [
+		'﻿id;branchId;supplier;category;valor;frete;imposto;date',
+		'nf-1;filial-sul;TransLog Sul;frete;1.250,50;100,04;150,06;05/04/2026',
+		'nf-2;filial-norte;Aço Forte;insumo;3.000,00;240,00;360,00;12/04/2026'
+	].join('\r\n');
+	const br = await ingestCsv(csvBr);
+	assert.equal(br.accepted, 2, 'planilha pt-BR é aceita (antes: 0)');
+	assert.equal(br.errors.length, 0);
+	const celBr = br.cube.cells.find(c => c.branchId === 'filial-sul');
+	assert.equal(celBr.total, 1250.5);
+	assert.equal(celBr.freteTotal, 100.04);
+
+	// Anexar o .xlsx binário: erro claro, não "sucesso" com 0 linhas
+	await assert.rejects(() => ingestCsv('PK\u0003\u0004' + '\u0000'.repeat(50)), /planilha do Excel/);
 
 	// Ingestão: header opcional, idempotência (id repetido), rejeição, cubo agregado
 	const csv = [
@@ -1499,6 +1550,179 @@ try {
 	assert.equal(loaded.recordCount, 5000);
 	assert.equal(loaded.cells.length, demo.cube.cells.length);
 	assert.equal(loadCube({ getItem: () => 'lixo{{{' }), null, 'cubo corrompido -> null, nunca lança');
+}
+
+// 28b2. Leitura de planilha real (.xlsx): entende abas, cabeçalho deslocado,
+// colunas pt-BR, modo de loja adaptativo e faturamento/margem.
+{
+	const XLSX = await import('xlsx');
+	const { ingestWorkbook, looksLikeBinaryWorkbook, cellToNumber, cellToIsoDate, normalizeHeader } =
+		await import('./modules-library/enterprise-controllership/dist/spreadsheetIngest.js');
+
+	// Helpers de célula
+	assert.equal(cellToNumber(1234.56), 1234.56);
+	assert.equal(cellToNumber('1.234,56'), 1234.56);
+	assert.equal(cellToNumber(''), 0);
+	assert.equal(cellToIsoDate(new Date(Date.UTC(2026, 7, 7))), '2026-08-07');
+	assert.equal(cellToIsoDate('05/04/2026'), '2026-04-05');
+	assert.equal(normalizeHeader('Frete\r\n(rateado)'), 'frete (rateado)');
+
+	// Monta um .xlsx como o do cliente: título nas 2 primeiras linhas, cabeçalho
+	// na linha 4, dados pt-BR, e uma aba não-tabular que deve ser ignorada.
+	const D = (y, m, d) => new Date(Date.UTC(y, m - 1, d));
+	const compras = XLSX.utils.aoa_to_sheet([
+		['REGISTRO DE ENTRADAS – COMPRAS', null, null, null, null, null, null, null],
+		['Agosto/2026 · itens de nota fiscal', null, null, null, null, null, null, null],
+		[null, null, null, null, null, null, null, null],
+		['Data Entrada', 'Nº NF', 'Fornecedor', 'UF', 'Categoria', 'Vlr Produtos', 'Frete (rateado)', 'Vlr ICMS'],
+		[D(2026, 8, 7), 9380, 'DISTRIBUIDORA SANTA CLARA', 'SP', 'Medicamento Generico', 100, 10, 12],
+		[D(2026, 8, 8), 9381, 'ACO FORTE LTDA', 'MG', 'Similar', 200, 20, 24]
+	]);
+	const vendas = XLSX.utils.aoa_to_sheet([
+		['REGISTRO DE SAÍDAS – FATURAMENTO', null, null, null],
+		[null, null, null, null],
+		[null, null, null, null],
+		['Data', 'Cliente / Destinatário', 'UF Dest.', 'Vlr Líquido'],
+		[D(2026, 8, 9), 'CONSUMIDOR FINAL', 'SP', 500],
+		[D(2026, 8, 10), 'CLIENTE PJ', 'SP', 300]
+	]);
+	const resumo = XLSX.utils.aoa_to_sheet([['RESUMO GERAL'], ['Total', 123]]);
+	const wb = XLSX.utils.book_new();
+	XLSX.utils.book_append_sheet(wb, compras, 'Compras');
+	XLSX.utils.book_append_sheet(wb, vendas, 'Vendas');
+	XLSX.utils.book_append_sheet(wb, resumo, 'Resumo');
+	const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+
+	// Assinatura de binário reconhecida (ZIP/PK)
+	assert.ok(looksLikeBinaryWorkbook(new Uint8Array(buf.slice(0, 4))), '.xlsx é detectado como binário');
+
+	const ins = ingestWorkbook(buf);
+	assert.deepEqual([...ins.sheetsRead].sort(), ['Compras', 'Vendas']);
+	assert.ok(ins.sheetsIgnored.includes('Resumo'), 'aba não-tabular é ignorada');
+	assert.equal(ins.storeMode, 'single-uf', 'sem coluna de filial e com UF -> single-uf');
+
+	assert.ok(ins.compras, 'aba de compras entendida');
+	assert.equal(ins.compras.kind, 'compras');
+	assert.equal(ins.compras.headerRow, 3, 'cabeçalho detectado na 4ª linha');
+	assert.equal(ins.compras.dimension, 'uf');
+	assert.equal(ins.compras.result.accepted, 2);
+	assert.equal(ins.compras.errors.length, 0);
+	assert.equal(ins.totalCompras, 300);
+	// imposto = ICMS somado; frete somado
+	assert.equal(ins.compras.result.cube.cells.reduce((s, c) => s + c.impostoTotal, 0), 36);
+	assert.equal(ins.compras.result.cube.cells.reduce((s, c) => s + c.freteTotal, 0), 30);
+	const spCell = ins.compras.result.cube.cells.find(c => c.branchId === 'SP');
+	assert.ok(spCell && spCell.supplier === 'DISTRIBUIDORA SANTA CLARA' && spCell.total === 100);
+
+	assert.ok(ins.vendas, 'aba de vendas entendida');
+	assert.equal(ins.totalVendas, 800);
+	assert.equal(ins.margemBruta, 500, 'margem = vendas - compras (800 - 300)');
+
+	// Amostra fiscal capturada a nível de documento (para a Descoberta Fiscal)
+	assert.equal(ins.compras.fiscalRows.length, 2);
+	assert.ok(ins.compras.fiscalRows[0].valor >= ins.compras.fiscalRows[1].valor, 'ordenada por valor');
+	assert.ok(ins.compras.fiscalRows.every(r => typeof r.ncm === 'string'));
+
+	// Modo MULTI: uma planilha com coluna Filial muda o comportamento (cubo por filial)
+	const rede = XLSX.utils.aoa_to_sheet([
+		['Filial', 'Data', 'Fornecedor', 'Categoria', 'Vlr Produtos', 'Frete', 'Vlr ICMS'],
+		['Loja Centro', D(2026, 8, 1), 'FORN A', 'geral', 1000, 80, 120],
+		['Loja Sul', D(2026, 8, 2), 'FORN A', 'geral', 1000, 200, 120]
+	]);
+	const wb2 = XLSX.utils.book_new();
+	XLSX.utils.book_append_sheet(wb2, rede, 'Compras');
+	const ins2 = ingestWorkbook(XLSX.write(wb2, { type: 'array', bookType: 'xlsx' }));
+	assert.equal(ins2.storeMode, 'multi', 'coluna Filial -> modo multi');
+	assert.equal(ins2.compras.dimension, 'filial');
+	assert.deepEqual([...ins2.compras.result.branches].sort(), ['Loja Centro', 'Loja Sul']);
+}
+
+// 28b3. Dataset único do ERP: destila Compras+Vendas nos números de TODO o ERP.
+{
+	const { aggregateRecords } = await import('./modules-library/enterprise-controllership/dist/erpIngest.js');
+	const { deriveDataset, monthLabel, saveDataset, loadDataset } =
+		await import('./modules-library/enterprise-controllership/dist/erpDataset.js');
+	const { panelKpisFromDataset, sectorRevenueFromDataset } =
+		await import('./modules-library/enterprise-controllership/dist/panelModel.js');
+
+	assert.equal(monthLabel('2026-07'), 'jul/26');
+	assert.equal(monthLabel('2026-08'), 'ago/26');
+
+	const comprasRecs = [
+		{ id: 'c1', branchId: 'SP', supplier: 'F1', category: 'med', valor: 100, frete: 10, imposto: 12, date: '2026-07-05' },
+		{ id: 'c2', branchId: 'SP', supplier: 'F1', category: 'med', valor: 200, frete: 20, imposto: 24, date: '2026-08-10' }
+	];
+	const vendasRecs = [
+		{ id: 'v1', branchId: 'SP', supplier: 'Cliente', category: 'med', valor: 300, frete: 0, imposto: 9, date: '2026-07-06' },
+		{ id: 'v2', branchId: 'SP', supplier: 'Cliente', category: 'hig', valor: 500, frete: 0, imposto: 15, date: '2026-08-11' }
+	];
+	const compras = aggregateRecords(comprasRecs);
+	const vendas = aggregateRecords(vendasRecs);
+	// Série mensal já vem do motor de ingestão
+	assert.deepEqual(compras.monthly.map(m => m.month), ['2026-07', '2026-08']);
+
+	const ds = deriveDataset({ sourceLabel: 'x.xlsx', storeMode: 'single-uf', compras, vendas });
+	assert.deepEqual(ds.months, ['2026-07', '2026-08']);
+	assert.deepEqual(ds.monthLabels, ['jul/26', 'ago/26']);
+	assert.equal(ds.faturamentoTotal, 800);
+	assert.equal(ds.comprasTotal, 300);
+	assert.equal(ds.tributosTotal, 60); // 12+24 (compras) + 9+15 (vendas)
+	assert.deepEqual(ds.series.faturamento, [300, 500]);
+	assert.deepEqual(ds.series.cmv, [100, 200]);
+	assert.deepEqual(ds.series.tributos, [21, 39]); // 12+9 · 24+15
+	assert.ok(Math.abs(ds.series.margem[0] - 200 / 3) < 0.01, 'margem jul = (300-100)/300');
+	assert.equal(ds.margemBrutaValor, 500);
+	assert.ok(Math.abs(ds.margemPct - 62.5) < 1e-9);
+	assert.ok(Math.abs(ds.aliquotaEfetiva - 7.5) < 1e-9); // 60/800
+	assert.equal(ds.faturamentoMensalMedio, 400);
+	assert.equal(ds.suppliersCount, 1);
+	assert.equal(ds.customersCount, 1);
+
+	// KPIs do Painel montados com as séries reais
+	const kpis = panelKpisFromDataset(ds);
+	const fat = kpis.find(k => k.id === 'faturamento');
+	assert.deepEqual(fat.series.map(p => p.valor), [300, 500]);
+	assert.deepEqual(fat.series.map(p => p.mes), ['jul/26', 'ago/26']);
+	// Setor/categoria a partir das vendas
+	const sector = sectorRevenueFromDataset(ds);
+	assert.ok(sector.some(s => s.setor === 'hig' && s.valor === 500));
+
+	// Persistência (storage injetável), com guarda de corrupção
+	const mem = new Map();
+	const fake = { setItem: (k, v) => mem.set(k, v), getItem: k => mem.get(k) ?? null };
+	saveDataset(ds, fake);
+	const loaded = loadDataset(fake);
+	assert.equal(loaded.faturamentoTotal, 800);
+	assert.equal(loaded.months.length, 2);
+	assert.equal(loadDataset({ getItem: () => 'lixo{{{' }), null, 'dataset corrompido -> null');
+
+	// Só Compras (CSV legado): faturamento zero, mas custos/tributos reais
+	const soCompras = deriveDataset({ sourceLabel: 'erp.csv', storeMode: 'single', compras });
+	assert.equal(soCompras.faturamentoTotal, 0);
+	assert.equal(soCompras.comprasTotal, 300);
+	assert.equal(soCompras.hasVendas, false);
+	assert.equal(soCompras.hasCompras, true);
+
+	// Amostra fiscal (Descoberta Fiscal): ordenada por valor desc e limitada
+	const dsFiscal = deriveDataset({
+		sourceLabel: 'x.xlsx',
+		storeMode: 'single-uf',
+		compras,
+		vendas,
+		fiscalRows: [
+			{ doc: 'NF 1', data: '2026-08-01', filial: 'SP', ncm: '3004.90.79', cst: '60', valor: 1000 },
+			{ doc: 'NF 2', data: '2026-07-01', filial: 'MG', ncm: '2106.90.00', cst: '00', valor: 2000 }
+		]
+	});
+	assert.equal(dsFiscal.fiscalSample.length, 2);
+	assert.equal(dsFiscal.fiscalSample[0].valor, 2000); // maior primeiro
+
+	// Alertas da Descoberta Fiscal derivam dos números reais
+	const { anomaliesFromDataset } = await import('./modules-library/enterprise-controllership/dist/FiscalDiscoveryHub.js');
+	const anoms = anomaliesFromDataset(dsFiscal);
+	assert.ok(anoms.length >= 2, 'gera alertas a partir do dataset');
+	assert.ok(anoms.some(a => a.id === 'carga-tributaria'));
+	assert.ok(anoms.some(a => a.id === 'concentracao-fornecedor'));
 }
 
 // 28c. Radar de Prejuízo — Fase 1 (lossRadar): mediana, desvios e a anomalia achada

@@ -11,6 +11,8 @@
  * react-router, PANEL_ROUTES mapeia 1:1 para /controladoria/<route>.
  */
 
+import type { ErpDataset } from './erpDataset.js';
+
 // ── Período global ───────────────────────────────────────────────────────────
 
 export type PanelPeriod = '3m' | '6m' | '12m';
@@ -221,4 +223,35 @@ export const PANEL_ROUTES: Readonly<Record<PanelRoute, PanelRouteMeta>> = {
 export function kpiByRoute(route: PanelRoute): PanelKpi {
 	const id = PANEL_ROUTES[route].kpiId;
 	return PANEL_KPIS.find(kpi => kpi.id === id) ?? PANEL_KPIS[0]!;
+}
+
+// ── KPIs a partir do dataset real da planilha ────────────────────────────────
+
+/**
+ * Reveste os 6 KPIs do painel com as séries REAIS do dataset ingerido: mantém
+ * rótulos, cores, tipo de gráfico e rota (a identidade do painel), troca só os
+ * dados. Sem dataset, a UI continua com as séries de demonstração (PANEL_KPIS).
+ */
+export function panelKpisFromDataset(ds: ErpDataset): PanelKpi[] {
+	const points = (values: readonly number[], receita?: readonly number[]): MonthPoint[] =>
+		ds.months.map((_, i) => ({
+			mes: ds.monthLabels[i] ?? '',
+			valor: Math.round(values[i] ?? 0),
+			...(receita ? { receita: Math.round(receita[i] ?? 0) } : {})
+		}));
+	const seriesByKpi: Record<string, MonthPoint[]> = {
+		resultado: points(ds.series.resultado),
+		tributos: points(ds.series.tributos),
+		faturamento: points(ds.series.faturamento),
+		cmv: points(ds.series.cmv),
+		margem: points(ds.series.margem, ds.series.faturamento),
+		valores: points(ds.series.valoresPagos)
+	};
+	return PANEL_KPIS.map(kpi => ({ ...kpi, series: seriesByKpi[kpi.id] ?? kpi.series }));
+}
+
+/** Faturamento por setor (colunas do 1-clique) a partir das categorias reais. */
+export function sectorRevenueFromDataset(ds: ErpDataset): { readonly setor: string; readonly valor: number }[] {
+	if (ds.sectorRevenue.length === 0) return [...SECTOR_REVENUE];
+	return ds.sectorRevenue.map(s => ({ setor: s.name, valor: Math.round(s.total) }));
 }

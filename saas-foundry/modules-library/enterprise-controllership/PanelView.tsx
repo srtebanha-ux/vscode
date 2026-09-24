@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ArrowDownRight, ArrowLeft, ArrowUpRight, CalendarRange, ChevronRight, MousePointerClick } from 'lucide-react';
+import { ArrowDownRight, ArrowLeft, ArrowUpRight, CalendarRange, ChevronRight, Database, MousePointerClick } from 'lucide-react';
+import type { StoreMode } from './spreadsheetIngest.js';
 import {
 	aggregate,
 	formatKpiValue,
 	PANEL_KPIS,
 	PANEL_PERIODS,
 	PANEL_ROUTES,
+	panelKpisFromDataset,
 	periodMonths,
 	SECTOR_REVENUE,
+	sectorRevenueFromDataset,
 	slicePeriod,
 	windowDeltaPct,
 	type PanelKpi,
@@ -17,7 +20,16 @@ import {
 	type PanelRoute
 } from './panelModel.js';
 import { usePanelClick } from './usePanelClick.js';
+import { useErpDataset } from './useErpDataset.js';
 import { renderPanelScreen } from './PanelDetailScreens.js';
+
+type SectorRevenue = readonly { readonly setor: string; readonly valor: number }[];
+
+const STORE_MODE_HINT: Readonly<Record<StoreMode, string>> = {
+	multi: 'rede com filiais',
+	'single-uf': 'loja única (por UF)',
+	single: 'loja única'
+};
 
 /**
  * PanelView — a aba "Painel" reformulada. Botão global de Períodos + 6 KPIs
@@ -35,12 +47,12 @@ const chartTooltip = {
 } as const;
 
 /** Gráfico dinâmico do 1-clique — o tipo vem do KPI (linha / colunas / empilhadas). */
-function InlineChart({ kpi, months }: { readonly kpi: PanelKpi; readonly months: number }): React.JSX.Element {
+function InlineChart({ kpi, months, sector }: { readonly kpi: PanelKpi; readonly months: number; readonly sector: SectorRevenue }): React.JSX.Element {
 	if (kpi.chart === 'bar') {
-		// Faturamento: colunas por setor (quem gerou mais receita).
+		// Faturamento: colunas por setor/categoria (quem gerou mais receita).
 		return (
 			<ResponsiveContainer width="100%" height="100%">
-				<BarChart data={[...SECTOR_REVENUE]} margin={{ top: 4, right: 8, left: -14, bottom: 0 }}>
+				<BarChart data={[...sector]} margin={{ top: 4, right: 8, left: -14, bottom: 0 }}>
 					<CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
 					<XAxis dataKey="setor" stroke="#71717a" fontSize={10} tickLine={false} axisLine={false} interval={0} />
 					<YAxis stroke="#71717a" fontSize={10} tickLine={false} axisLine={false} tickFormatter={v => brlShort.format(v)} />
@@ -87,12 +99,14 @@ function InlineChart({ kpi, months }: { readonly kpi: PanelKpi; readonly months:
 function InteractiveKpiCard({
 	kpi,
 	months,
+	sector,
 	expanded,
 	onSingle,
 	onDouble
 }: {
 	readonly kpi: PanelKpi;
 	readonly months: number;
+	readonly sector: SectorRevenue;
 	readonly expanded: boolean;
 	readonly onSingle: () => void;
 	readonly onDouble: () => void;
@@ -133,7 +147,7 @@ function InteractiveKpiCard({
 						data-testid={`kpi-chart-${kpi.id}`}
 					>
 						<div className="h-40">
-							<InlineChart kpi={kpi} months={months} />
+							<InlineChart kpi={kpi} months={months} sector={sector} />
 						</div>
 						<p className="mt-1 text-[10px] text-zinc-600">Duplo-clique para abrir “{kpi.routeTitle}”.</p>
 					</motion.div>
@@ -148,6 +162,10 @@ export function PanelView(): React.JSX.Element {
 	const [expanded, setExpanded] = useState<string | null>(null);
 	const [screen, setScreen] = useState<PanelRoute | null>(null);
 	const months = periodMonths(period);
+	// Dados REAIS da última planilha ingerida (ou demonstração, se não houver).
+	const dataset = useErpDataset();
+	const kpis = dataset ? panelKpisFromDataset(dataset) : PANEL_KPIS;
+	const sector: SectorRevenue = dataset ? sectorRevenueFromDataset(dataset) : SECTOR_REVENUE;
 
 	// Tela de detalhe (duplo-clique): cabeçalho com voltar + a tela roteada.
 	if (screen) {
@@ -194,13 +212,25 @@ export function PanelView(): React.JSX.Element {
 				</div>
 			</div>
 
+			{/* Fonte dos dados: planilha ingerida vs. demonstração */}
+			<div
+				data-testid="panel-source"
+				className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium ${dataset ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-inset ring-emerald-500/25' : 'bg-zinc-900/70 text-zinc-500 ring-1 ring-inset ring-zinc-800'}`}
+			>
+				<Database className="h-3.5 w-3.5" aria-hidden />
+				{dataset
+					? `Dados de "${dataset.sourceLabel}" · ${dataset.monthLabels[0] ?? '—'}–${dataset.monthLabels[dataset.monthLabels.length - 1] ?? '—'} · ${STORE_MODE_HINT[dataset.storeMode]}`
+					: 'Dados de demonstração — importe a planilha na aba Ingestão ERP para ver seus números.'}
+			</div>
+
 			{/* Grid dos 6 KPIs interativos */}
 			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-				{PANEL_KPIS.map(kpi => (
+				{kpis.map(kpi => (
 					<InteractiveKpiCard
 						key={kpi.id}
 						kpi={kpi}
 						months={months}
+						sector={sector}
 						expanded={expanded === kpi.id}
 						onSingle={() => setExpanded(current => (current === kpi.id ? null : kpi.id))}
 						onDouble={() => setScreen(kpi.route)}

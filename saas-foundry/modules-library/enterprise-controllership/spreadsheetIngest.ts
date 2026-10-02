@@ -18,6 +18,7 @@
 
 import * as XLSX from 'xlsx';
 import { aggregateRecords, normalizeDate, parseAmount, type FinancialRecord, type IngestResult, type RowError } from './erpIngest.js';
+import { parseStatements, type StatementResult } from './statementIngest.js';
 
 // ── Normalização e dicionário de sinônimos de coluna (pt-BR, sem acento) ─────
 
@@ -232,6 +233,8 @@ export interface WorkbookInsight {
 	readonly totalVendas: number;
 	/** Margem bruta = vendas − compras, quando as duas abas existem. */
 	readonly margemBruta?: number;
+	/** Demonstrações financeiras (DRE/BP/DFC/Indicadores…), quando a planilha é contábil. */
+	readonly statements?: StatementResult;
 }
 
 const HEADER_MATCH_MIN = 3;
@@ -283,12 +286,16 @@ export function ingestWorkbook(data: ArrayBuffer | Uint8Array | string): Workboo
 	const totalVendas = vendas ? vendas.result.cube.cells.reduce((s, c) => s + c.total, 0) : 0;
 	const storeMode = compras?.storeMode ?? vendas?.storeMode ?? 'single';
 
+	// Sem abas transacionais: tenta ler como demonstrações financeiras (DRE/BP/DFC…).
+	const statements = !compras && !vendas ? parseStatements(wb) ?? undefined : undefined;
+
 	const insight: WorkbookInsight = { sheetsRead, sheetsIgnored, storeMode, totalCompras, totalVendas };
 	return {
 		...insight,
 		...(compras ? { compras } : {}),
 		...(vendas ? { vendas } : {}),
-		...(compras && vendas ? { margemBruta: totalVendas - totalCompras } : {})
+		...(compras && vendas ? { margemBruta: totalVendas - totalCompras } : {}),
+		...(statements ? { statements } : {})
 	};
 }
 

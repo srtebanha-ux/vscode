@@ -4,11 +4,22 @@ import { motion } from 'framer-motion';
 import { AlertTriangle, CheckCircle2, Database, FileCode2, FileUp, FlaskConical, Loader2, Lock, Server, ShieldCheck } from 'lucide-react';
 import { CSV_HEADER, generateDemoCsv, ingestCsv, loadCube, saveCube, type IngestResult } from './erpIngest.js';
 import { ingestWorkbook, looksLikeBinaryWorkbook, type StoreMode, type WorkbookInsight } from './spreadsheetIngest.js';
-import { deriveDataset, deriveDatasetFromWorkbook, saveDataset } from './erpDataset.js';
+import { deriveDataset, deriveDatasetFromStatements, deriveDatasetFromWorkbook, saveDataset } from './erpDataset.js';
 
 const MODULE_ID = 'enterprise-controllership-v1';
 const int = new Intl.NumberFormat('pt-BR');
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
+
+/** Resultado vazio para o caminho contábil (não há cubo transacional). */
+const EMPTY_RESULT: IngestResult = {
+	cube: { generatedAt: new Date(0).toISOString(), recordCount: 0, cells: [] },
+	accepted: 0,
+	duplicates: 0,
+	errors: [],
+	branches: [],
+	suppliers: [],
+	monthly: []
+};
 
 type ConnStatus = 'online' | 'degraded' | 'offline';
 
@@ -126,11 +137,21 @@ export function ERPSyncBridge(): React.JSX.Element {
 				await new Promise(resolve => setTimeout(resolve, 0));
 				const insight = ingestWorkbook(buffer);
 				const primary = insight.compras ?? insight.vendas;
+				// Caminho 2: planilha contábil (DRE/BP/DFC/Indicadores) sem Compras/Vendas.
+				if (!primary && insight.statements) {
+					const ds = deriveDatasetFromStatements(insight.statements, sourceLabel);
+					saveDataset(ds);
+					setCubeInfo({ records: insight.statements.sheetsRead.length, at: ds.generatedAt });
+					setPhase({ kind: 'done', result: EMPTY_RESULT, insight });
+					const abas = insight.statements.sheetsRead.join(', ');
+					toast.success(`${sourceLabel}: li as demonstrações (${abas}) — ERP atualizado com DRE, tributos, margens e resultado.`);
+					return;
+				}
 				if (!primary || primary.result.accepted === 0) {
 					setPhase({ kind: 'idle' });
 					toast.error(
 						insight.sheetsRead.length === 0
-							? 'Não reconheci nenhuma aba de Compras ou Vendas na planilha. Verifique se há colunas como Fornecedor/Cliente, Valor e Data.'
+							? 'Não reconheci abas de Compras/Vendas nem demonstrações (DRE/Balanço/DFC) na planilha. Verifique se há dados financeiros reconhecíveis.'
 							: 'A planilha foi lida, mas nenhuma linha de dados válida foi encontrada.'
 					);
 					return;
@@ -264,31 +285,55 @@ export function ERPSyncBridge(): React.JSX.Element {
 				) : phase.kind === 'done' ? (
 					<div data-testid="ingest-result">
 						<p className="flex items-center gap-1.5 text-sm font-semibold text-emerald-300">
-							<CheckCircle2 className="h-4 w-4" aria-hidden /> Sincronização concluída — Cubo Financeiro pronto para o Radar
+							<CheckCircle2 className="h-4 w-4" aria-hidden /> {phase.insight?.statements ? 'Demonstrações lidas — ERP atualizado' : 'Sincronização concluída — Cubo Financeiro pronto para o Radar'}
 						</p>
-						<dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-							<div className="rounded-xl bg-zinc-900/70 p-3">
-								<dt className="text-zinc-500">Registros aceitos</dt>
-								<dd className="mt-0.5 font-mono text-lg font-bold tabular-nums text-sky-300">{int.format(phase.result.accepted)}</dd>
+						{phase.insight?.statements ? (
+							<div data-testid="statements-result">
+								<dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+									{([
+										['Receita (DRE)', phase.insight.statements.figures.receitaBruta ?? phase.insight.statements.figures.receitaLiquida, 'text-sky-300'],
+										['CMV', phase.insight.statements.figures.cmv, 'text-rose-300'],
+										['Tributos', (phase.insight.statements.figures.icms ?? 0) + (phase.insight.statements.figures.pisCofins ?? 0) + (phase.insight.statements.figures.irpjCsll ?? 0), 'text-amber-300'],
+										['Lucro líquido', phase.insight.statements.figures.lucroLiquido, 'text-emerald-300']
+									] as const).map(([label, value, tone]) => (
+										<div key={label} className="rounded-xl bg-zinc-900/70 p-3">
+											<dt className="text-zinc-500">{label}</dt>
+											<dd className={`mt-0.5 font-mono text-lg font-bold tabular-nums ${tone}`}>{value != null ? brl.format(value) : '—'}</dd>
+										</div>
+									))}
+								</dl>
+								<p className="mt-3 text-[11px] text-zinc-500">
+									Período {phase.insight.statements.periodLabel || '—'} · {phase.insight.statements.sheetsRead.length} demonstração(ões) lida(s).
+									{phase.insight.statements.figures.margemBrutaPct != null ? ` Margem bruta ${phase.insight.statements.figures.margemBrutaPct.toFixed(1)}%.` : ''}
+								</p>
 							</div>
-							<div className="rounded-xl bg-zinc-900/70 p-3">
-								<dt className="text-zinc-500">Duplicados ignorados</dt>
-								<dd className="mt-0.5 font-mono text-lg font-bold tabular-nums text-zinc-300">{int.format(phase.result.duplicates)}</dd>
-							</div>
-							<div className="rounded-xl bg-zinc-900/70 p-3">
-								<dt className="text-zinc-500">Linhas rejeitadas</dt>
-								<dd className={`mt-0.5 font-mono text-lg font-bold tabular-nums ${phase.result.errors.length > 0 ? 'text-amber-300' : 'text-zinc-300'}`}>{int.format(phase.result.errors.length)}</dd>
-							</div>
-							<div className="rounded-xl bg-zinc-900/70 p-3">
-								<dt className="text-zinc-500">Volume agregado</dt>
-								<dd className="mt-0.5 font-mono text-lg font-bold tabular-nums text-emerald-300">{brl.format(phase.result.cube.cells.reduce((s, c) => s + c.total, 0))}</dd>
-							</div>
-						</dl>
-						<p className="mt-3 text-[11px] text-zinc-500">
-							{phase.result.branches.length} {phase.insight?.storeMode === 'multi' ? 'filiais' : 'dimensões'} · {phase.result.suppliers.length} fornecedores · {phase.result.cube.cells.length} células no cubo.
-							{phase.result.errors.length > 0 ? ` Primeira rejeição: linha ${phase.result.errors[0]?.line} (${phase.result.errors[0]?.reason}).` : ''}
-						</p>
-						{phase.insight && (
+						) : (
+							<>
+								<dl className="mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+									<div className="rounded-xl bg-zinc-900/70 p-3">
+										<dt className="text-zinc-500">Registros aceitos</dt>
+										<dd className="mt-0.5 font-mono text-lg font-bold tabular-nums text-sky-300">{int.format(phase.result.accepted)}</dd>
+									</div>
+									<div className="rounded-xl bg-zinc-900/70 p-3">
+										<dt className="text-zinc-500">Duplicados ignorados</dt>
+										<dd className="mt-0.5 font-mono text-lg font-bold tabular-nums text-zinc-300">{int.format(phase.result.duplicates)}</dd>
+									</div>
+									<div className="rounded-xl bg-zinc-900/70 p-3">
+										<dt className="text-zinc-500">Linhas rejeitadas</dt>
+										<dd className={`mt-0.5 font-mono text-lg font-bold tabular-nums ${phase.result.errors.length > 0 ? 'text-amber-300' : 'text-zinc-300'}`}>{int.format(phase.result.errors.length)}</dd>
+									</div>
+									<div className="rounded-xl bg-zinc-900/70 p-3">
+										<dt className="text-zinc-500">Volume agregado</dt>
+										<dd className="mt-0.5 font-mono text-lg font-bold tabular-nums text-emerald-300">{brl.format(phase.result.cube.cells.reduce((s, c) => s + c.total, 0))}</dd>
+									</div>
+								</dl>
+								<p className="mt-3 text-[11px] text-zinc-500">
+									{phase.result.branches.length} {phase.insight?.storeMode === 'multi' ? 'filiais' : 'dimensões'} · {phase.result.suppliers.length} fornecedores · {phase.result.cube.cells.length} células no cubo.
+									{phase.result.errors.length > 0 ? ` Primeira rejeição: linha ${phase.result.errors[0]?.line} (${phase.result.errors[0]?.reason}).` : ''}
+								</p>
+							</>
+						)}
+						{phase.insight && !phase.insight.statements && (
 							<div className="mt-4 rounded-xl border border-sky-500/20 bg-zinc-900/50 p-4" data-testid="workbook-insight">
 								<p className="text-[11px] font-semibold uppercase tracking-wide text-sky-300">O que o ERP entendeu da planilha</p>
 								<p className="mt-1.5 text-xs text-zinc-300">

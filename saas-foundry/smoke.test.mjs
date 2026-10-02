@@ -1299,6 +1299,8 @@ try {
 	// Com os dois escopos, o painel renderiza e traz as abas de Auditoria e RBAC (novos).
 	assert.match(gated(['read:insights', 'write:insights']), /Auditoria/);
 	assert.match(gated(['read:insights', 'write:insights']), /Papéis &amp; Acessos/);
+	// Nova aba de Demonstrações financeiras.
+	assert.match(gated(['read:insights', 'write:insights']), /Demonstrações/);
 }
 
 // 26b. Visualizador da Trilha de Auditoria: selo de integridade + estado de carga
@@ -1723,6 +1725,88 @@ try {
 	assert.ok(anoms.length >= 2, 'gera alertas a partir do dataset');
 	assert.ok(anoms.some(a => a.id === 'carga-tributaria'));
 	assert.ok(anoms.some(a => a.id === 'concentracao-fornecedor'));
+}
+
+// 28b4. Planilha CONTÁBIL (DRE/Premissas): ingestão por demonstrações financeiras.
+{
+	const XLSX = await import('xlsx');
+	const { ingestWorkbook } = await import('./modules-library/enterprise-controllership/dist/spreadsheetIngest.js');
+	const { deriveDatasetFromStatements } = await import('./modules-library/enterprise-controllership/dist/erpDataset.js');
+	const { parseStatements, normalizeLabel } = await import('./modules-library/enterprise-controllership/dist/statementIngest.js');
+
+	assert.equal(normalizeLabel('(–) IRPJ – Lucro Presumido'), 'irpj – lucro presumido');
+
+	// DRE com título nas 1ªs linhas, cabeçalho na 4ª, IRPJ e CSLL em linhas SEPARADAS,
+	// e uma coluna de "Referência" (benchmark) que NÃO pode virar a margem.
+	const dre = XLSX.utils.aoa_to_sheet([
+		['DEMONSTRAÇÃO DO RESULTADO – AGOSTO/2026', null, null],
+		['Em R$.', null, null],
+		[null, null, null],
+		['Conta', 'Agosto/2026', 'AV % RL'],
+		['RECEITA OPERACIONAL BRUTA', 1000, 1],
+		['(–) ICMS sobre vendas', -100, -0.1],
+		['(–) PIS/COFINS sobre vendas', -20, -0.02],
+		['(=) RECEITA OPERACIONAL LÍQUIDA', 880, 1],
+		['(–) Custo das mercadorias vendidas', -500, -0.568],
+		['(=) LUCRO BRUTO', 380, 0.4318],
+		['(–) IRPJ – Lucro Presumido', -30, -0.034],
+		['(–) CSLL – Lucro Presumido', -20, -0.0227],
+		['(=) LUCRO LÍQUIDO DO EXERCÍCIO', 330, 0.375]
+	]);
+	// Premissas: SEM cabeçalho de período na linha certa; valor na col 1, obs na col 2
+	// (com um "Agosto/2026" solto que NÃO pode ser escolhido como coluna de valor).
+	const prem = XLSX.utils.aoa_to_sheet([
+		['PREMISSAS DO MODELO', null, null],
+		['Dias do mês', 31, 'Agosto/2026'],
+		['Compras do mês – valor total das notas', 700, 'obs']
+	]);
+	// Indicadores com coluna de Referência (benchmark) à direita do mês.
+	const ind = XLSX.utils.aoa_to_sheet([
+		['INDICADORES', null, null, null],
+		[null, null, null, null],
+		[null, null, null, null],
+		['Indicador', '31/08/2026', 'Referência', 'Leitura'],
+		['Margem bruta = lucro bruto / RL', 0.4318, 0.306, 'ref setor']
+	]);
+	const wb = XLSX.utils.book_new();
+	XLSX.utils.book_append_sheet(wb, prem, 'Premissas');
+	XLSX.utils.book_append_sheet(wb, dre, 'DRE');
+	XLSX.utils.book_append_sheet(wb, ind, 'Indicadores');
+	const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+
+	const ins = ingestWorkbook(buf);
+	assert.ok(!ins.compras && !ins.vendas, 'não é transacional');
+	assert.ok(ins.statements, 'reconheceu como demonstrações financeiras');
+	const f = ins.statements.figures;
+	assert.equal(f.receitaBruta, 1000);
+	assert.equal(f.receitaLiquida, 880);
+	assert.equal(f.cmv, 500);
+	assert.equal(f.icms, 100);
+	assert.equal(f.pisCofins, 20);
+	assert.equal(f.irpjCsll, 50, 'IRPJ(30) + CSLL(20) somados, nunca a alíquota/LAIR');
+	assert.equal(f.lucroLiquido, 330);
+	assert.equal(f.comprasMes, 700, 'Premissas lida apesar do "Agosto/2026" solto na obs');
+	assert.equal(ins.statements.periodIso, '2026-08');
+
+	const ds = deriveDatasetFromStatements(ins.statements, 'contabil.xlsx');
+	assert.equal(ds.faturamentoTotal, 1000);
+	assert.equal(ds.comprasTotal, 700);
+	assert.equal(ds.tributosTotal, 170); // 100 + 20 + 50
+	assert.equal(ds.resultadoTotal, 330);
+	// Margem derivada do primário (380/880), NUNCA o benchmark 30,6%.
+	assert.ok(Math.abs(ds.margemPct - (380 / 880) * 100) < 0.01, `margem ${ds.margemPct}`);
+	assert.deepEqual(ds.monthLabels, ['ago/26']);
+	// Demonstrações na íntegra persistidas para a aba "Demonstrações".
+	assert.ok(ds.statements && ds.statements.sheets.length >= 2, 'guarda as demonstrações na íntegra');
+	const dreSheet = ds.statements.sheets.find(s => s.name === 'DRE');
+	assert.ok(dreSheet && dreSheet.lines.some(l => /RECEITA OPERACIONAL BRUTA/.test(l.label) && l.value === 1000));
+
+	// Planilha sem nada financeiro reconhecível -> statements null (erro honesto).
+	const lixo = XLSX.utils.aoa_to_sheet([['Nome', 'Idade'], ['Ana', 30], ['Beto', 40]]);
+	const wb2 = XLSX.utils.book_new();
+	XLSX.utils.book_append_sheet(wb2, lixo, 'Cadastro');
+	const ins2 = ingestWorkbook(XLSX.write(wb2, { type: 'array', bookType: 'xlsx' }));
+	assert.ok(!ins2.compras && !ins2.vendas && !ins2.statements, 'planilha não-financeira não vira dataset falso');
 }
 
 // 28c. Radar de Prejuízo — Fase 1 (lossRadar): mediana, desvios e a anomalia achada

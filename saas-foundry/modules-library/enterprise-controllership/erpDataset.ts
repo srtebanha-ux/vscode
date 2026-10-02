@@ -12,6 +12,7 @@
 
 import type { IngestResult, MonthAgg } from './erpIngest.js';
 import type { FiscalRow, StoreMode, WorkbookInsight } from './spreadsheetIngest.js';
+import type { StatementResult } from './statementIngest.js';
 
 const MES_CURTO = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'] as const;
 
@@ -179,6 +180,61 @@ export function deriveDatasetFromWorkbook(insight: WorkbookInsight, sourceLabel:
 		...(insight.vendas ? { vendas: insight.vendas.result } : {}),
 		fiscalRows
 	});
+}
+
+/**
+ * Monta o dataset do ERP a partir de DEMONSTRAÇÕES FINANCEIRAS (DRE/BP/DFC/
+ * Indicadores…), quando a planilha é contábil em vez de transacional. Usa os
+ * números já fechados (receita, CMV, tributos, lucro, margens) — período único.
+ */
+export function deriveDatasetFromStatements(stmt: StatementResult, sourceLabel: string): ErpDataset {
+	const f = stmt.figures;
+	const receita = f.receitaBruta ?? f.receitaLiquida ?? 0;
+	const cmv = f.cmv ?? 0;
+	const tributos = (f.icms ?? 0) + (f.pisCofins ?? 0) + (f.irpjCsll ?? 0);
+	const baseLiquida = f.receitaLiquida ?? receita;
+	const lucroBruto = f.lucroBruto ?? baseLiquida - cmv;
+	const lucroLiquido = f.lucroLiquido ?? 0;
+	const despesas = f.ebit != null ? Math.max(0, lucroBruto - f.ebit) : 0;
+	const margemPct = f.margemBrutaPct ?? (baseLiquida > 0 ? (lucroBruto / baseLiquida) * 100 : 0);
+	const comprasTotal = f.comprasMes ?? cmv;
+	const valoresPagos = cmv + despesas + tributos;
+	const month = /^\d{4}-\d{2}$/.test(stmt.periodIso) ? stmt.periodIso : 'periodo';
+	const monthText = month === 'periodo' ? stmt.periodLabel || 'Período' : monthLabel(month);
+
+	return {
+		version: 1,
+		generatedAt: new Date().toISOString(),
+		sourceLabel,
+		storeMode: 'single',
+		hasVendas: receita > 0,
+		hasCompras: comprasTotal > 0,
+		months: [month],
+		monthLabels: [monthText],
+		series: {
+			faturamento: [receita],
+			tributos: [tributos],
+			cmv: [cmv],
+			resultado: [lucroLiquido],
+			margem: [margemPct],
+			valoresPagos: [valoresPagos]
+		},
+		faturamentoTotal: receita,
+		comprasTotal,
+		tributosTotal: tributos,
+		freteTotal: 0,
+		margemBrutaValor: lucroBruto,
+		margemPct,
+		resultadoTotal: lucroLiquido,
+		aliquotaEfetiva: receita > 0 ? (tributos / receita) * 100 : 0,
+		faturamentoMensalMedio: receita,
+		suppliersCount: 0,
+		customersCount: 0,
+		branchesCount: 0,
+		topSuppliers: [],
+		sectorRevenue: [],
+		fiscalSample: []
+	};
 }
 
 // ── Persistência (localStorage; produção: tabela `erp_dataset` por tenant) ───

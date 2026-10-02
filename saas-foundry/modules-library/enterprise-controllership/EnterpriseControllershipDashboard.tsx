@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { hasScopes, useCoreService, useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import type { SecurityScope } from '@foundry/shared';
-import { FileBarChart, FileClock, FlaskConical, LayoutDashboard, Radar, ScanSearch, Server, ShieldAlert, ShieldCheck, Terminal, UserCog } from 'lucide-react';
+import { FileBarChart, FileClock, FileSpreadsheet, FlaskConical, LayoutDashboard, Radar, ScanSearch, Server, ShieldAlert, ShieldCheck, Terminal, UserCog } from 'lucide-react';
 import { ApprovalInbox } from './ApprovalInbox.js';
 import { AuditTrailViewer } from './AuditTrailViewer.js';
 import { RbacAdminPanel } from './RbacAdminPanel.js';
@@ -11,6 +11,7 @@ import { ExecutiveBriefingGenerator } from './ExecutiveBriefingGenerator.js';
 import { ERPSyncBridge } from './ERPSyncBridge.js';
 import { FiscalDiscoveryHub } from './FiscalDiscoveryHub.js';
 import { TaxScenarioSimulator } from './TaxScenarioSimulator.js';
+import { FinancialStatementsView } from './FinancialStatementsView.js';
 import { PanelView } from './PanelView.js';
 
 const REQUIRED_SCOPES: readonly SecurityScope[] = ['read:insights', 'write:insights'];
@@ -20,7 +21,7 @@ function Dashboard(): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [exporting, setExporting] = useState(false);
-	const [view, setView] = useState<'painel' | 'aprovacoes' | 'auditoria' | 'rbac' | 'radar' | 'dossie' | 'erp' | 'simulador' | 'descoberta'>('painel');
+	const [view, setView] = useState<'painel' | 'aprovacoes' | 'auditoria' | 'rbac' | 'radar' | 'dossie' | 'erp' | 'simulador' | 'descoberta' | 'demonstracoes'>('painel');
 
 	const exportReport = (): void => {
 		if (exporting) return;
@@ -70,6 +71,7 @@ function Dashboard(): React.JSX.Element {
 						['rbac', 'Papéis & Acessos', UserCog],
 						['radar', 'Radar de Prejuízo', Radar],
 						['descoberta', 'Descoberta Fiscal', ScanSearch],
+						['demonstracoes', 'Demonstrações', FileSpreadsheet],
 					['erp', 'Ingestão ERP', Server],
 					['simulador', 'Simulador Tributário', FlaskConical],
 					['dossie', 'Dossiê Executivo', Terminal]
@@ -105,6 +107,8 @@ function Dashboard(): React.JSX.Element {
 				<ExecutiveBriefingGenerator />
 			) : view === 'descoberta' ? (
 				<FiscalDiscoveryHub />
+			) : view === 'demonstracoes' ? (
+				<FinancialStatementsView />
 			) : view === 'erp' ? (
 				<ERPSyncBridge />
 			) : view === 'simulador' ? (

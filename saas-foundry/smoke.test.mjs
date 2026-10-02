@@ -1299,6 +1299,8 @@ try {
 	// Com os dois escopos, o painel renderiza e traz as abas de Auditoria e RBAC (novos).
 	assert.match(gated(['read:insights', 'write:insights']), /Auditoria/);
 	assert.match(gated(['read:insights', 'write:insights']), /Papéis &amp; Acessos/);
+	// Nova aba de Demonstrações financeiras.
+	assert.match(gated(['read:insights', 'write:insights']), /Demonstrações/);
 }
 
 // 26b. Visualizador da Trilha de Auditoria: selo de integridade + estado de carga
@@ -1794,6 +1796,10 @@ try {
 	// Margem derivada do primário (380/880), NUNCA o benchmark 30,6%.
 	assert.ok(Math.abs(ds.margemPct - (380 / 880) * 100) < 0.01, `margem ${ds.margemPct}`);
 	assert.deepEqual(ds.monthLabels, ['ago/26']);
+	// Demonstrações na íntegra persistidas para a aba "Demonstrações".
+	assert.ok(ds.statements && ds.statements.sheets.length >= 2, 'guarda as demonstrações na íntegra');
+	const dreSheet = ds.statements.sheets.find(s => s.name === 'DRE');
+	assert.ok(dreSheet && dreSheet.lines.some(l => /RECEITA OPERACIONAL BRUTA/.test(l.label) && l.value === 1000));
 
 	// Planilha sem nada financeiro reconhecível -> statements null (erro honesto).
 	const lixo = XLSX.utils.aoa_to_sheet([['Nome', 'Idade'], ['Ana', 30], ['Beto', 40]]);

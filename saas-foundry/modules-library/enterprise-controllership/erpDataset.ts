@@ -67,6 +67,21 @@ export interface ErpDataset {
 	readonly sectorRevenue: readonly NamedTotal[];
 	/** Amostra fiscal (documentos reais) para a Descoberta Fiscal. */
 	readonly fiscalSample: readonly FiscalRow[];
+	/** Demonstrações financeiras na íntegra (aba "Demonstrações"), quando contábil. */
+	readonly statements?: ErpStatements;
+}
+
+export interface ErpStatementLine {
+	readonly label: string;
+	readonly value: number;
+}
+export interface ErpStatementSheet {
+	readonly name: string;
+	readonly lines: readonly ErpStatementLine[];
+}
+export interface ErpStatements {
+	readonly periodLabel: string;
+	readonly sheets: readonly ErpStatementSheet[];
 }
 
 /** Teto de linhas fiscais guardadas no dataset (as de maior valor). */
@@ -233,7 +248,11 @@ export function deriveDatasetFromStatements(stmt: StatementResult, sourceLabel: 
 		branchesCount: 0,
 		topSuppliers: [],
 		sectorRevenue: [],
-		fiscalSample: []
+		fiscalSample: [],
+		statements: {
+			periodLabel: stmt.periodLabel,
+			sheets: stmt.sheets.map(s => ({ name: s.name, lines: s.lines.slice(0, 80).map(l => ({ label: l.label, value: l.value })) }))
+		}
 	};
 }
 

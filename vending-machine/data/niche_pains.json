@@ -1,0 +1,14 @@
+[
+  { "query": "planilha de controle de frota", "niche": "logistica", "painPoint": "gestores de pequenas transportadoras controlam manutencao e combustivel em papel", "suggestedKind": "spreadsheet", "volume": 4400, "competition": 0.21 },
+  { "query": "planilha de fluxo de caixa para mei", "niche": "financas-pme", "painPoint": "MEI nao separa despesa pessoal da empresa e perde o controle mensal", "suggestedKind": "spreadsheet", "volume": 9900, "competition": 0.38 },
+  { "query": "script python para renomear notas fiscais em lote", "niche": "automacao-contabil", "painPoint": "escritorio contabil renomeia milhares de XMLs de NFe manualmente", "suggestedKind": "script", "volume": 720, "competition": 0.08 },
+  { "query": "modelo de contrato de prestacao de servico freelancer", "niche": "juridico-freela", "painPoint": "freelancer fecha job sem contrato e leva calote", "suggestedKind": "template", "volume": 6600, "competition": 0.44 },
+  { "query": "checklist de abertura e fechamento de restaurante", "niche": "food-service", "painPoint": "turno abre sem conferencia e gera perda de insumo", "suggestedKind": "checklist", "volume": 1300, "competition": 0.12 },
+  { "query": "planilha de escala de plantao enfermagem", "niche": "saude-gestao", "painPoint": "coordenacao monta escala 12x36 no papel e gera conflito de folga", "suggestedKind": "spreadsheet", "volume": 2900, "competition": 0.19 },
+  { "query": "script para extrair dados de boleto pdf", "niche": "automacao-financeira", "painPoint": "financeiro digita manualmente valor e vencimento de centenas de boletos", "suggestedKind": "script", "volume": 590, "competition": 0.07 },
+  { "query": "planilha de precificacao para confeitaria", "niche": "confeitaria", "painPoint": "confeiteira vende bolo abaixo do custo por nao ratear insumo e hora", "suggestedKind": "spreadsheet", "volume": 3600, "competition": 0.26 },
+  { "query": "template de proposta comercial para agencia", "niche": "agencias", "painPoint": "agencia refaz proposta do zero a cada lead e perde timing", "suggestedKind": "template", "volume": 1900, "competition": 0.31 },
+  { "query": "planilha de controle de estoque para petshop", "niche": "petshop", "painPoint": "petshop perde venda por ruptura de racao sem ponto de pedido", "suggestedKind": "spreadsheet", "volume": 880, "competition": 0.11 },
+  { "query": "checklist de auditoria lgpd para pequenas empresas", "niche": "compliance", "painPoint": "PME nao sabe por onde comecar a adequacao a LGPD", "suggestedKind": "checklist", "volume": 1600, "competition": 0.23 },
+  { "query": "script bash de backup automatico de banco de dados", "niche": "devops", "painPoint": "dev solo esquece de rodar dump e perde base de producao", "suggestedKind": "script", "volume": 1100, "competition": 0.16 }
+]

@@ -3,6 +3,7 @@ import { useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Archive, ArrowDownUp, Bell, Download, FilePlus2, Filter, Radar, Search, ShieldAlert, TrendingUp } from 'lucide-react';
 import { useErpDataset } from './useErpDataset.js';
+import { EmptyState } from './EmptyState.js';
 import type { ErpDataset } from './erpDataset.js';
 
 const MODULE_ID = 'enterprise-controllership-v1';
@@ -20,36 +21,7 @@ interface Anomaly {
 	readonly metric: string;
 }
 
-const ANOMALIES: readonly Anomaly[] = [
-	{
-		id: 'folha-sul',
-		severity: 'critico',
-		title: 'Inconsistência na folha · Filial Sul',
-		body: 'Inconsistência identificada na folha de pagamento da Filial Sul. Cruzamento de horas extras excedeu o limite do teto sindical em 12%. Risco de passivo trabalhista estimado: R$ 32.000.',
-		metric: 'Passivo estimado · R$ 32.000'
-	},
-	{
-		id: 'icms-st',
-		severity: 'atencao',
-		title: 'Divergência de ICMS-ST · CD Logística',
-		body: 'Base de cálculo do ICMS-ST 8% acima da MVA ajustada em 214 notas do último trimestre. Recomenda-se retificação antes do fechamento.',
-		metric: 'Exposição · R$ 18.400'
-	},
-	{
-		id: 'credito-pis',
-		severity: 'otimizacao',
-		title: 'Crédito de PIS/COFINS não aproveitado',
-		body: 'Insumos de manutenção industrial elegíveis a crédito não foram escriturados em 3 competências. Recuperação administrativa disponível.',
-		metric: 'Recuperável · R$ 27.500'
-	},
-	{
-		id: 'fornecedor-dup',
-		severity: 'critico',
-		title: 'Pagamento duplicado a fornecedor',
-		body: 'Dois lançamentos idênticos para o CNPJ 12.345.678/0001-90 na mesma competência. Conciliação bancária confirma saída dupla.',
-		metric: 'Caixa exposto · R$ 41.200'
-	}
-];
+// (sem anomalias de demonstração — a tela fica vazia até o cliente importar)
 
 const SEVERITY_META: Readonly<Record<Severity, { readonly label: string; readonly ring: string; readonly dot: string; readonly text: string }>> = {
 	critico: { label: 'Crítico', ring: 'ring-rose-500/30 border-l-rose-500', dot: 'bg-rose-500', text: 'text-rose-300' },
@@ -351,13 +323,15 @@ type HubTab = 'alertas' | 'mineracao';
 
 export function FiscalDiscoveryHub(): React.JSX.Element {
 	const [tab, setTab] = useState<HubTab>('alertas');
-	// Dados REAIS da planilha ingerida (com fallback à demonstração).
+	// Dados REAIS da planilha ingerida. Sem planilha, a tela fica LIMPA — nunca
+	// mostra alertas/notas de demonstração.
 	const dataset = useErpDataset();
-	const anomalies = useMemo<readonly Anomaly[]>(() => {
-		const derived = dataset ? anomaliesFromDataset(dataset) : [];
-		return derived.length > 0 ? derived : ANOMALIES;
-	}, [dataset]);
-	const records = dataset && dataset.fiscalSample.length > 0 ? dataset.fiscalSample : FISCAL_RECORDS;
+	const anomalies = useMemo<readonly Anomaly[]>(() => (dataset ? anomaliesFromDataset(dataset) : []), [dataset]);
+	const records = dataset ? dataset.fiscalSample : [];
+
+	if (!dataset) {
+		return <EmptyState title="Nenhum dado fiscal ainda — importe sua planilha" />;
+	}
 
 	return (
 		<div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-950 p-6 text-zinc-100">

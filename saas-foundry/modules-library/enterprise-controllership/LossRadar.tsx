@@ -121,7 +121,7 @@ export function LossRadar(): React.JSX.Element {
 					<AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" aria-hidden />
 					<div>
 						<p className="font-semibold">Sem dados para varrer</p>
-						<p className="mt-0.5 text-amber-200/90">Ingira o trimestre primeiro: aba <strong>Ingestão ERP</strong> → importe o CSV do ERP ou gere o lote de teste (50.000).</p>
+						<p className="mt-0.5 text-amber-200/90">Importe os dados primeiro: aba <strong>Ingestão ERP</strong> → importe a planilha (Excel/CSV) da sua empresa.</p>
 					</div>
 				</div>
 			) : findings === null ? (

@@ -1366,48 +1366,40 @@ try {
 	assert.equal(resolveClicks(3), 'double');
 	assert.ok(CLICK_WINDOW_MS >= 150 && CLICK_WINDOW_MS <= 400, 'janela de decisão humana');
 
-	// ── As 6 telas do duplo-clique renderizam (SSR) com o conteúdo pedido ──
+	// ── As 6 telas do duplo-clique renderizam (SSR) SÓ com dados reais do dataset ──
 	const { renderPanelScreen } = await import('./modules-library/enterprise-controllership/dist/PanelDetailScreens.js');
-	const dre = renderToStaticMarkup(renderPanelScreen('dre', '12m'));
-	assert.match(dre, /Comparativo do período/);
+	const { panelKpisFromDataset } = model;
+	const { aggregateRecords } = await import('./modules-library/enterprise-controllership/dist/erpIngest.js');
+	const { deriveDataset } = await import('./modules-library/enterprise-controllership/dist/erpDataset.js');
+	const comprasRec = aggregateRecords([{ id: 'c1', branchId: 'SP', supplier: 'Forn X', category: 'med', valor: 100, frete: 10, imposto: 12, date: '2026-08-01' }]);
+	const vendasRec = aggregateRecords([{ id: 'v1', branchId: 'SP', supplier: 'Cliente', category: 'med', valor: 300, frete: 0, imposto: 9, date: '2026-08-02' }]);
+	const dsPanel = deriveDataset({ sourceLabel: 'x.xlsx', storeMode: 'single-uf', compras: comprasRec, vendas: vendasRec });
+	const kpisPanel = panelKpisFromDataset(dsPanel);
+	const dre = renderToStaticMarkup(renderPanelScreen('dre', '12m', kpisPanel, dsPanel));
+	assert.match(dre, /Resultado do período/);
 	assert.match(dre, /Margem líquida/);
-	assert.match(renderToStaticMarkup(renderPanelScreen('tributos', '6m')), /Reforma Tributária/);
-	assert.match(renderToStaticMarkup(renderPanelScreen('produtos', '6m')), /Clientes com maior faturamento/);
-	const custos = renderToStaticMarkup(renderPanelScreen('custos', '12m'));
-	assert.match(custos, /departamentalização/);
-	assert.match(custos, /Custeio variável/);
-	assert.match(custos, /Custeio por absorção/);
-	assert.match(renderToStaticMarkup(renderPanelScreen('precos', '3m')), /Competitividade perante o mercado/);
-	const fluxo = renderToStaticMarkup(renderPanelScreen('fluxo', '12m'));
-	assert.match(fluxo, /Liquidez corrente/);
-	assert.match(fluxo, /A receber/);
+	assert.match(renderToStaticMarkup(renderPanelScreen('tributos', '6m', kpisPanel, dsPanel)), /Alíquota efetiva/);
+	assert.match(renderToStaticMarkup(renderPanelScreen('produtos', '6m', kpisPanel, dsPanel)), /Faturamento por categoria/);
+	assert.match(renderToStaticMarkup(renderPanelScreen('custos', '12m', kpisPanel, dsPanel)), /Maiores fornecedores/);
+	assert.match(renderToStaticMarkup(renderPanelScreen('precos', '3m', kpisPanel, dsPanel)), /Margem mês a mês/);
+	assert.match(renderToStaticMarkup(renderPanelScreen('fluxo', '12m', kpisPanel, dsPanel)), /Valores pagos por período/);
+	// Nada fictício: nomes de empresas de teste não aparecem.
+	assert.doesNotMatch(renderToStaticMarkup(renderPanelScreen('produtos', '6m', kpisPanel, dsPanel)), /Construtora|MoonSilver|Prisma|Aurora/);
 
-	// ── PanelView (SSR): botão Períodos + os 6 cards ──
+	// ── PanelView (SSR) SEM dados ingeridos: fica LIMPO (estado vazio) ──
 	const { PanelView } = await import('./modules-library/enterprise-controllership/dist/PanelView.js');
 	const panel = renderToStaticMarkup(createElement(PanelView));
-	assert.match(panel, /Períodos/);
-	assert.match(panel, /1 clique abre o gráfico · 2 cliques abrem o detalhe/);
-	assert.match(panel, /Resultado Mensal \(Lucro\/Prejuízo\)/);
-	assert.match(panel, /CMV\/CPV \(Custos\)/);
-	assert.match(panel, /Margem de Lucro/);
-	assert.match(panel, /Faturamento/);
+	assert.match(panel, /importe sua planilha/i, 'painel vazio convida a importar, sem KPIs de demonstração');
+	assert.doesNotMatch(panel, /Resultado Mensal/);
 }
 
 // 27. Gerador de Dossiê Executivo: munição de argumentação pronta para o consultor humano
 {
 	const { ExecutiveBriefingGenerator } = await import('./modules-library/enterprise-controllership/dist/ExecutiveBriefingGenerator.js');
-	const html = renderToStaticMarkup(createElement(ExecutiveBriefingGenerator, { clientName: 'Metalúrgica Prisma S.A.' }));
-
-	assert.match(html, /DOSSIÊ EXECUTIVO/);
-	assert.match(html, /CONFIDENCIAL/);
-	assert.match(html, /Metalúrgica Prisma S\.A\./);
-	// Cada ralo traz risco + argumento mastigado para a diretoria
-	assert.match(html, /🚨 Risco Encontrado:/);
-	assert.match(html, /Pagamento duplicado de PIS\/COFINS/);
-	assert.match(html, /💡 Sugestão de Argumento para a Diretoria:/);
-	assert.match(html, /Correção imediata gera R\$ 45\.000 de caixa positivo no trimestre/);
-	// Botão de exportação do dossiê
-	assert.match(html, /Gerar Apresentação de Resultados \(PDF\/PPTX\)/);
+	// SEM planilha ingerida: nada de cliente/dossiê fictício — tela limpa.
+	const html = renderToStaticMarkup(createElement(ExecutiveBriefingGenerator));
+	assert.match(html, /importe sua planilha/i);
+	assert.doesNotMatch(html, /Metalúrgica Prisma/);
 }
 
 // 28. Ponte ERP + Simulador Tributário: painel de ingestão + projeção da Reforma
@@ -1415,16 +1407,18 @@ try {
 	const { ERPSyncBridge } = await import('./modules-library/enterprise-controllership/dist/ERPSyncBridge.js');
 	const { projectScenario } = await import('./modules-library/enterprise-controllership/dist/TaxScenarioSimulator.js');
 
-	// Ponte de ingestão: conectores + selo de segurança + ação
+	// Ponte de ingestão: integrações mostradas como NÃO conectadas (sem status fictício)
 	const erp = renderToStaticMarkup(createElement(ERPSyncBridge));
 	assert.match(erp, /Ponte de Ingestão de Dados/);
 	assert.match(erp, /SAP ERP/);
 	assert.match(erp, /TOTVS Protheus/);
 	assert.match(erp, /Receita Federal \/ XML/);
+	assert.match(erp, /Não conectado/, 'integrações não mostram status "Conectado" fictício');
+	assert.doesNotMatch(erp, /docs\/min/, 'sem throughput fictício');
 	assert.match(erp, /Criptografia End-to-End · Compliance LGPD/);
-	// Pipeline real: upload de planilha (Excel/CSV) + lote de teste + estado do Cubo Financeiro
+	// Só importação da planilha do cliente — sem gerador de lote de teste.
 	assert.match(erp, /Importar planilha \(Excel\/CSV\)/);
-	assert.match(erp, /Gerar lote de teste \(50\.000\)/);
+	assert.doesNotMatch(erp, /Gerar lote de teste/);
 	assert.match(erp, /Cubo Financeiro/);
 	assert.match(erp, /Nenhum dado ingerido ainda/);
 
@@ -2014,15 +2008,10 @@ try {
 		'./modules-library/enterprise-controllership/dist/FiscalDiscoveryHub.js'
 	);
 
-	// Render: aba padrão (Alertas da IA) traz a anomalia crítica da Filial Sul
+	// Render SEM dados ingeridos: tela LIMPA — nada de anomalia/nota fictícia.
 	const hub = renderToStaticMarkup(createElement(FiscalDiscoveryHub));
-	assert.match(hub, /Central de Descoberta Fiscal/);
-	assert.match(hub, /Alertas da IA/);
-	assert.match(hub, /Mineração Avançada/);
-	assert.match(hub, /excedeu o limite do teto sindical em 12%/);
-	assert.match(hub, /Risco de passivo trabalhista estimado: R\$ 32\.000/);
-	assert.match(hub, /Adicionar ao Dossiê Trimestral/);
-	assert.match(hub, /Arquivar/);
+	assert.match(hub, /importe sua planilha/i);
+	assert.doesNotMatch(hub, /teto sindical|Filial Sul/, 'sem alertas de demonstração');
 
 	// filterRecords: período fiscal (trimestre) restringe corretamente
 	const t1 = filterRecords(FISCAL_RECORDS, { quarter: '2025-T1', filial: 'todas', min: 0, max: Infinity, code: '' });

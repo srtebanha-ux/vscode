@@ -3,6 +3,7 @@ import { useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
 import { FileDown, Loader2, Lock, ShieldAlert, Sparkles, Terminal } from 'lucide-react';
 import { useErpDataset } from './useErpDataset.js';
+import { EmptyState } from './EmptyState.js';
 
 const MODULE_ID = 'enterprise-controllership-v1';
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
@@ -57,26 +58,22 @@ const LEAKS: readonly CashLeak[] = [
 	}
 ];
 
-const EXPOSURE_BEFORE = 480000; // fuga/passivo anualizado exposto
-
 export interface ExecutiveBriefingGeneratorProps {
 	/** Razão social do cliente — vira o "logotipo" no cabeçalho do dossiê. */
 	readonly clientName?: string;
 }
 
 /** Gerador de Dossiê Executivo — o terminal de argumentação da Controladora Humana. */
-export function ExecutiveBriefingGenerator({ clientName = 'Metalúrgica Prisma S.A.' }: ExecutiveBriefingGeneratorProps = {}): React.JSX.Element {
+export function ExecutiveBriefingGenerator(_props: ExecutiveBriefingGeneratorProps = {}): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [generating, setGenerating] = useState(false);
-	// Números REAIS da planilha ingerida (quando houver).
+	// Números REAIS da planilha ingerida. Sem planilha, nada de cliente/dossiê
+	// fictício — a tela fica limpa até o cliente importar os dados dele.
 	const dataset = useErpDataset();
-	const cliente = dataset ? clientNameFromSource(dataset.sourceLabel) : clientName;
-	// Exposição = tributos anualizados do período real; senão, o valor de referência.
-	const exposureBefore =
-		dataset && dataset.tributosTotal > 0 && dataset.months.length > 0
-			? Math.round((dataset.tributosTotal / dataset.months.length) * 12)
-			: EXPOSURE_BEFORE;
+	const cliente = dataset ? clientNameFromSource(dataset.sourceLabel) : '';
+	// Exposição = tributos anualizados do período real.
+	const exposureBefore = dataset && dataset.tributosTotal > 0 && dataset.months.length > 0 ? Math.round((dataset.tributosTotal / dataset.months.length) * 12) : 0;
 
 	const totalRecovery = useMemo(() => LEAKS.reduce((sum, leak) => sum + leak.recovery, 0), []);
 
@@ -181,6 +178,10 @@ export function ExecutiveBriefingGenerator({ clientName = 'Metalúrgica Prisma S
 			setGenerating(false);
 		}
 	};
+
+	if (!dataset) {
+		return <EmptyState title="Nenhum dado para o dossiê — importe sua planilha" />;
+	}
 
 	return (
 		<div className="space-y-4 rounded-2xl border border-zinc-800 bg-black p-5 font-mono text-zinc-200 ring-1 ring-inset ring-emerald-500/10">

@@ -25,40 +25,10 @@ export interface MockApproval {
 	readonly approvePermission: string;
 }
 
-/** Pendências de demonstração — com cara de operação Enterprise real. */
+/** Inbox começa VAZIO — nada de pendência fictícia. As pendências reais chegam
+ * por submit (automação do Orchestrator) ou pela operação do cliente. */
 function seed(): MockApproval[] {
-	return [
-		{
-			id: 'apprv-001',
-			entityType: 'purchase_order',
-			module: 'Planejador Preditivo',
-			requestedBy: 'Eng. Roberto Silva',
-			amount: 45500,
-			description: '7m³ de concreto 35MPa + locação de bomba lança',
-			date: '2026-07-23T10:00:00Z',
-			approvePermission: 'purchase_order:approve'
-		},
-		{
-			id: 'apprv-002',
-			entityType: 'marketing_campaign',
-			module: 'Virtual CMO',
-			requestedBy: 'Equipe MoonSilver',
-			amount: null,
-			description: 'Campanha de Lançamento Trimestral Q3',
-			date: '2026-07-23T11:30:00Z',
-			approvePermission: 'campaign:approve'
-		},
-		{
-			id: 'apprv-003',
-			entityType: 'invoice',
-			module: 'Assistente Fiscal',
-			requestedBy: 'Controladoria — Ana Prado',
-			amount: 128400,
-			description: 'Emissão de NF-e — lote de serviços de engenharia (obra Jacarandá)',
-			date: '2026-07-22T16:45:00Z',
-			approvePermission: 'invoice:approve'
-		}
-	];
+	return [];
 }
 
 // Estado em memória da sessão dev — aprovar/rejeitar remove do inbox.
@@ -88,14 +58,10 @@ interface MockAuditRecord {
 	readonly note?: string;
 }
 
-/** Trilha de auditoria de demonstração (hash-chain é verificado na rota real). */
+/** Trilha começa VAZIA — a auditoria é construída pelas ações reais (cada
+ * aprovação/trava/ingestão gera um registro), nunca semeada com dados fictícios. */
 function seedAudit(): MockAuditRecord[] {
-	return [
-		{ seq: 0, at: '2026-07-23T10:05:00Z', action: 'approval:submit', actorUserId: 'u_maker_demo', entityType: 'purchase_order', entityId: 'po_2041' },
-		{ seq: 1, at: '2026-07-23T10:12:00Z', action: 'quote:approve', actorUserId: 'u_admin_demo', entityType: 'quote', entityId: 'orc_1187' },
-		{ seq: 2, at: '2026-07-23T14:30:00Z', action: 'freeze:create', actorUserId: 'u_ctrl_demo', entityType: 'freeze', entityId: 'frz_sul_01', note: 'custo invisível de 14% na Filial Sul' },
-		{ seq: 3, at: '2026-07-24T08:00:00Z', action: 'data:ingest', actorUserId: 'service:cron-ingest', entityType: 'financial_cube', entityId: 'tnt_demo', note: '4.812 registros do ERP' }
-	];
+	return [];
 }
 
 let auditLog: MockAuditRecord[] = seedAudit();

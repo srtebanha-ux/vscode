@@ -47,7 +47,7 @@ function Dashboard(): React.JSX.Element {
 							<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/60" />
 							<span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
 						</span>
-						Auditoria em tempo real · último ciclo há 4 min
+						Auditoria contínua · pronta para os seus dados
 					</span>
 				</div>
 				<button

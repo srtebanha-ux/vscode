@@ -133,7 +133,7 @@ export function FreezeControl({ onChanged }: { readonly onChanged?: () => void }
 				<input
 					value={branchId}
 					onChange={e => setBranchId(e.target.value)}
-					placeholder="Filial (ex.: filial-sul) — vazio = empresa inteira"
+					placeholder="Filial — vazio = empresa inteira"
 					data-testid="freeze-branch"
 					className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-rose-500/60 focus:outline-none"
 				/>
@@ -150,7 +150,7 @@ export function FreezeControl({ onChanged }: { readonly onChanged?: () => void }
 					value={reason}
 					onChange={e => setReason(e.target.value)}
 					maxLength={280}
-					placeholder="Motivo (obrigatório) — ex.: custo invisível de 14% em frete, aguarda justificativa do gerente"
+					placeholder="Motivo (obrigatório) — descreva por que a aprovação está sendo travada"
 					data-testid="freeze-reason"
 					className="flex-1 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-rose-500/60 focus:outline-none"
 				/>

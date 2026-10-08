@@ -3028,39 +3028,37 @@ try {
 		const { handleMockGovernance, resetMockGovernance } = await import(pathToFileURL(file).href);
 		resetMockGovernance();
 
-		// GET approvals: envelope { count, items } com 3 pendências enriquecidas.
+		// GET approvals: inbox começa VAZIO (sem pendências fictícias).
+		const list0 = handleMockGovernance('GET', 'approvals');
+		assert.equal(list0.status, 200);
+		assert.equal(list0.body.count, 0, 'inbox limpo por padrão — nada de pendência de demonstração');
+		// submit cria uma OC real no inbox; sem amount -> 422.
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ action: 'submit', entityType: 'purchase_order', entityId: 'po-1', amount: 45000 })).status, 201);
+		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ action: 'submit', entityType: 'purchase_order', entityId: 'x' })).status, 422);
 		const list = handleMockGovernance('GET', 'approvals');
-		assert.equal(list.status, 200);
-		assert.equal(list.body.count, 3);
-		assert.ok(list.body.items.every(i => i.canApprove === true));
-		const campaign = list.body.items.find(i => i.entityType === 'marketing_campaign');
-		assert.equal(campaign.amount, null, 'campanha não tem valor monetário');
-		assert.equal(campaign.module, 'Virtual CMO');
-		assert.ok(list.body.items.every(i => typeof i.description === 'string' && typeof i.date === 'string' && typeof i.module === 'string'));
+		assert.equal(list.body.count, 1);
+		assert.ok(list.body.items.every(i => i.canApprove === true && typeof i.description === 'string' && typeof i.date === 'string' && typeof i.module === 'string'));
 
 		// POST decide: aprovar remove do inbox e devolve status approved.
 		const target = list.body.items[0].id;
 		const decided = handleMockGovernance('POST', 'approvals', JSON.stringify({ id: target, approve: true }));
 		assert.equal(decided.status, 200);
 		assert.equal(decided.body.request.status, 'approved');
-		assert.equal(handleMockGovernance('GET', 'approvals').body.count, 2, 'pedido decidido saiu do inbox');
-		// Rejeitar também sai; id inexistente -> 404; corpo sem id -> 422.
+		assert.equal(handleMockGovernance('GET', 'approvals').body.count, 0, 'pedido decidido saiu do inbox');
+		// id inexistente -> 404; corpo sem id -> 422.
 		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ id: 'nao-existe', approve: true })).status, 404);
 		assert.equal(handleMockGovernance('POST', 'approvals', JSON.stringify({ approve: true })).status, 422);
 
-		// audit: envelope íntegro; resource desconhecido -> 400.
+		// audit: trilha começa VAZIA e íntegra; abrir caso cresce a trilha.
 		const auditGet = handleMockGovernance('GET', 'audit');
 		assert.equal(auditGet.body.intact, true);
-		assert.ok(auditGet.body.count >= 4, 'trilha mockada vem semeada para o visualizador');
-		assert.ok(auditGet.body.records.some(r => r.action === 'data:ingest'), 'trilha inclui eventos variados');
-		// Mock do open_audit_case (preview): nota válida -> 201 com caso; vazia -> 422.
+		assert.equal(auditGet.body.count, 0, 'trilha limpa por padrão — sem registros fictícios');
 		const mkCase = handleMockGovernance('POST', 'audit', JSON.stringify({ note: 'Revisar contrato de frete' }));
 		assert.equal(mkCase.status, 201);
 		assert.ok(mkCase.body.case.id, 'mock devolve o caso aberto');
-		// O caso aberto entra na trilha (append) e aparece no próximo GET.
 		assert.equal(handleMockGovernance('GET', 'audit').body.count, auditGet.body.count + 1, 'abrir caso cresce a trilha');
 		assert.equal(handleMockGovernance('POST', 'audit', JSON.stringify({ note: '  ' })).status, 422);
-		// Mock do RBAC: matriz cargo×permissão espelhando o front.
+		// Mock do RBAC: matriz cargo×permissão (config do produto, não dado fictício).
 		const rbacMock = handleMockGovernance('GET', 'rbac');
 		assert.equal(rbacMock.status, 200);
 		assert.ok(rbacMock.body.roles.ROLE_ADMIN_CONTROLLER.includes('rbac:manage'), 'mock RBAC traz a matriz do Admin');
@@ -3068,9 +3066,11 @@ try {
 		assert.equal(handleMockGovernance('GET', 'foo').status, 400);
 
 		resetMockGovernance();
-		assert.equal(handleMockGovernance('GET', 'approvals').body.count, 3, 'reset restaura as pendências');
+		assert.equal(handleMockGovernance('GET', 'approvals').body.count, 0, 'reset mantém o inbox limpo');
 
-		// Trava Financeira no mock: congela -> aprovar 423 -> rejeitar ok -> levanta -> libera.
+		// Trava Financeira no mock: submete 2 OCs, congela -> aprovar 423 -> rejeitar ok -> levanta -> libera.
+		handleMockGovernance('POST', 'approvals', JSON.stringify({ action: 'submit', entityType: 'purchase_order', entityId: 'po-a', amount: 1000 }));
+		handleMockGovernance('POST', 'approvals', JSON.stringify({ action: 'submit', entityType: 'purchase_order', entityId: 'po-b', amount: 2000 }));
 		const mkFrz = handleMockGovernance('POST', 'freezes', JSON.stringify({ action: 'create', reason: 'auditoria em curso' }));
 		assert.equal(mkFrz.status, 201);
 		const frzId = mkFrz.body.freeze.id;

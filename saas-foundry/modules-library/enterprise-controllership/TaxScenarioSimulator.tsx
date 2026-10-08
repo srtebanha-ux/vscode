@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Filter, Layers, Sparkles, TrendingUp } from 'lucide-react';
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useErpDataset } from './useErpDataset.js';
+import { EmptyState } from './EmptyState.js';
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
 
@@ -101,6 +102,11 @@ export function TaxScenarioSimulator(): React.JSX.Element {
 		() => projectScenario({ aliquotaAtual, novaAliquota, volumeMensal, meses: MESES }),
 		[aliquotaAtual, novaAliquota, volumeMensal]
 	);
+
+	// Sem planilha ingerida: nada de volume/alíquota padrão — convida a importar.
+	if (!dataset) {
+		return <EmptyState title="Importe sua planilha para simular com seus números" />;
+	}
 
 	return (
 		<div className="grid grid-cols-1 gap-5 rounded-2xl border border-zinc-800 bg-zinc-950 p-6 text-zinc-100 lg:grid-cols-[minmax(0,340px)_1fr]">

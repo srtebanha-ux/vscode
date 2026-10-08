@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
 import { FileDown, Loader2, Lock, ShieldAlert, Sparkles, Terminal } from 'lucide-react';
 import { useErpDataset } from './useErpDataset.js';
+import { anomaliesFromDataset } from './FiscalDiscoveryHub.js';
 import { EmptyState } from './EmptyState.js';
 
 const MODULE_ID = 'enterprise-controllership-v1';
@@ -14,71 +15,32 @@ function clientNameFromSource(sourceLabel: string): string {
 	return base || sourceLabel;
 }
 
-/** Um "ralo de dinheiro" com a munição pronta para o Controlador Humano. */
-interface CashLeak {
-	readonly id: string;
-	readonly risk: string;
-	readonly argument: string;
-	readonly recovery: number;
-	readonly ref: string;
-}
-
-const LEAKS: readonly CashLeak[] = [
-	{
-		id: 'pis-cofins',
-		risk: 'Pagamento duplicado de PIS/COFINS (Produto X)',
-		argument:
-			'A classificação fiscal atual (NCM) não considera a isenção da nova regra. Correção imediata gera R$ 45.000 de caixa positivo no trimestre.',
-		recovery: 45000,
-		ref: 'NCM 2523.29.10 · LC 214/2025'
-	},
-	{
-		id: 'icms-insumos',
-		risk: 'Crédito de ICMS sobre insumos não aproveitado',
-		argument:
-			'Insumos de uso e consumo passam a gerar crédito na sistemática do IBS. Retificar as últimas 12 competências recupera o valor sem litígio.',
-		recovery: 32000,
-		ref: 'EC 132/2023 · art. 156-A'
-	},
-	{
-		id: 'horas-extras',
-		risk: 'Horas extras recorrentes no Setor de Logística',
-		argument:
-			'A IA detectou sobreposição de funções. Reestruturação de escala elimina o custo fixo — R$ 14.500/mês de folha ociosa.',
-		recovery: 43500,
-		ref: 'Headcount ROI · 3 meses'
-	},
-	{
-		id: 'inss-verbas',
-		risk: 'Retenção indevida de INSS sobre verbas indenizatórias',
-		argument:
-			'Súmula do STJ afasta a incidência sobre aviso prévio e terço de férias. Compensação administrativa, sem judicialização.',
-		recovery: 28000,
-		ref: 'Tema 985 STF · Súmula 89 TNU'
-	}
-];
+const SEV_META = {
+	critico: { label: 'Crítico', border: 'border-l-rose-500', text: 'text-rose-300' },
+	atencao: { label: 'Atenção', border: 'border-l-amber-400', text: 'text-amber-300' },
+	otimizacao: { label: 'Otimização', border: 'border-l-emerald-500', text: 'text-emerald-300' }
+} as const;
 
 export interface ExecutiveBriefingGeneratorProps {
-	/** Razão social do cliente — vira o "logotipo" no cabeçalho do dossiê. */
 	readonly clientName?: string;
 }
 
-/** Gerador de Dossiê Executivo — o terminal de argumentação da Controladora Humana. */
+/**
+ * Gerador de Dossiê Executivo — monta a argumentação a partir dos NÚMEROS REAIS
+ * da planilha do cliente (faturamento, CMV, tributos, margem) e dos achados que o
+ * próprio dataset gera. Nada de ralos/valores fictícios: sem planilha, tela limpa.
+ */
 export function ExecutiveBriefingGenerator(_props: ExecutiveBriefingGeneratorProps = {}): React.JSX.Element {
 	const toast = useToast();
 	const track = useTrackEvent();
 	const [generating, setGenerating] = useState(false);
-	// Números REAIS da planilha ingerida. Sem planilha, nada de cliente/dossiê
-	// fictício — a tela fica limpa até o cliente importar os dados dele.
 	const dataset = useErpDataset();
-	const cliente = dataset ? clientNameFromSource(dataset.sourceLabel) : '';
-	// Exposição = tributos anualizados do período real.
-	const exposureBefore = dataset && dataset.tributosTotal > 0 && dataset.months.length > 0 ? Math.round((dataset.tributosTotal / dataset.months.length) * 12) : 0;
 
-	const totalRecovery = useMemo(() => LEAKS.reduce((sum, leak) => sum + leak.recovery, 0), []);
+	const cliente = dataset ? clientNameFromSource(dataset.sourceLabel) : '';
+	const findings = dataset ? anomaliesFromDataset(dataset) : [];
 
 	const generateDossier = async (): Promise<void> => {
-		if (generating) return;
+		if (generating || !dataset) return;
 		setGenerating(true);
 		try {
 			const { jsPDF } = await import('jspdf');
@@ -86,7 +48,7 @@ export function ExecutiveBriefingGenerator(_props: ExecutiveBriefingGeneratorPro
 			const W = doc.internal.pageSize.getWidth();
 			const M = 48;
 
-			// Cabeçalho institucional com "logotipo" do cliente
+			// Cabeçalho institucional com a razão social (real) do cliente
 			doc.setFillColor(9, 9, 11);
 			doc.rect(0, 0, W, 96, 'F');
 			doc.setFillColor(212, 175, 55);
@@ -103,74 +65,69 @@ export function ExecutiveBriefingGenerator(_props: ExecutiveBriefingGeneratorPro
 			doc.setTextColor(212, 175, 55);
 			doc.text('DOSSIÊ DE CONTROLADORIA · CONFIDENCIAL', M + 40, 62);
 
+			// Números reais do período
 			let y = 140;
 			doc.setTextColor(17, 24, 39);
 			doc.setFont('helvetica', 'bold');
 			doc.setFontSize(11);
-			doc.text('IMPACTO NO CAIXA', M, y);
-
-			// Gráfico Antes x Depois (barras desenhadas em vetor)
-			y += 20;
-			const chartH = 120;
-			const baseY = y + chartH;
-			const barW = 90;
-			const maxVal = Math.max(exposureBefore, totalRecovery);
-			const antesH = (exposureBefore / maxVal) * chartH;
-			const posH = (totalRecovery / maxVal) * chartH;
-			doc.setFillColor(244, 63, 94);
-			doc.rect(M + 20, baseY - antesH, barW, antesH, 'F');
-			doc.setFillColor(16, 185, 129);
-			doc.rect(M + 20 + barW + 60, baseY - posH, barW, posH, 'F');
-			doc.setFontSize(8);
-			doc.setTextColor(107, 114, 128);
-			doc.text('Antes do Lidar Core', M + 12, baseY + 14);
-			doc.text('Economia Projetada', M + 20 + barW + 52, baseY + 14);
-			doc.text('Pós-Ajuste Tributário', M + 20 + barW + 52, baseY + 24);
-			doc.setFont('helvetica', 'bold');
-			doc.setTextColor(244, 63, 94);
-			doc.text(brl.format(exposureBefore), M + 20, baseY - antesH - 6);
-			doc.setTextColor(16, 185, 129);
-			doc.text(brl.format(totalRecovery), M + 20 + barW + 60, baseY - posH - 6);
-
-			// Lista de correções (a munição)
-			y = baseY + 48;
-			doc.setFont('helvetica', 'bold');
-			doc.setFontSize(11);
-			doc.setTextColor(17, 24, 39);
-			doc.text('RALOS DE CAIXA CORRIGIDOS', M, y);
-			y += 8;
-			LEAKS.forEach(leak => {
-				y += 20;
-				doc.setDrawColor(241, 245, 249);
-				doc.line(M, y - 8, W - M, y - 8);
-				doc.setFont('helvetica', 'bold');
-				doc.setFontSize(10);
-				doc.setTextColor(17, 24, 39);
-				doc.text(doc.splitTextToSize(leak.risk, W - M * 2 - 90), M, y);
-				doc.setTextColor(16, 185, 129);
-				doc.text(`+ ${brl.format(leak.recovery)}`, W - M - 84, y);
-				y += 14;
+			doc.text(`RESULTADO DO PERÍODO${dataset.monthLabels.length ? ` (${dataset.monthLabels[0]}–${dataset.monthLabels[dataset.monthLabels.length - 1]})` : ''}`, M, y);
+			y += 18;
+			const rows: readonly [string, string][] = [
+				['Faturamento', brl.format(dataset.faturamentoTotal)],
+				['Compras / CMV', brl.format(dataset.comprasTotal)],
+				['Tributos', brl.format(dataset.tributosTotal)],
+				['Margem bruta', `${brl.format(dataset.margemBrutaValor)} (${dataset.margemPct.toFixed(1)}%)`],
+				['Resultado', brl.format(dataset.resultadoTotal)]
+			];
+			doc.setFontSize(10);
+			rows.forEach(([label, value]) => {
 				doc.setFont('helvetica', 'normal');
-				doc.setFontSize(8.5);
 				doc.setTextColor(107, 114, 128);
-				const lines = doc.splitTextToSize(leak.argument, W - M * 2);
-				doc.text(lines, M, y);
-				y += lines.length * 11;
+				doc.text(label, M, y);
+				doc.setFont('helvetica', 'bold');
+				doc.setTextColor(17, 24, 39);
+				doc.text(value, W - M - doc.getTextWidth(value), y);
+				y += 18;
 			});
 
-			// ROI de fechamento
-			y += 16;
+			// Achados derivados dos dados
+			if (findings.length > 0) {
+				y += 10;
+				doc.setFont('helvetica', 'bold');
+				doc.setFontSize(11);
+				doc.text('ACHADOS DA CONTROLADORIA', M, y);
+				findings.forEach(f => {
+					y += 20;
+					doc.setDrawColor(241, 245, 249);
+					doc.line(M, y - 8, W - M, y - 8);
+					doc.setFont('helvetica', 'bold');
+					doc.setFontSize(10);
+					doc.setTextColor(17, 24, 39);
+					doc.text(doc.splitTextToSize(f.title, W - M * 2), M, y);
+					y += 14;
+					doc.setFont('helvetica', 'normal');
+					doc.setFontSize(8.5);
+					doc.setTextColor(107, 114, 128);
+					const lines = doc.splitTextToSize(f.body, W - M * 2);
+					doc.text(lines, M, y);
+					y += lines.length * 11;
+				});
+			}
+
+			// Fechamento: margem bruta real
+			y += 20;
 			doc.setFillColor(16, 185, 129);
 			doc.roundedRect(M, y, W - M * 2, 44, 8, 8, 'F');
 			doc.setTextColor(255, 255, 255);
 			doc.setFont('helvetica', 'bold');
 			doc.setFontSize(12);
-			doc.text('CAIXA RECUPERÁVEL PROJETADO', M + 16, y + 27);
+			doc.text('MARGEM BRUTA DO PERÍODO', M + 16, y + 27);
 			doc.setFontSize(16);
-			doc.text(brl.format(totalRecovery), W - M - 16 - doc.getTextWidth(brl.format(totalRecovery)), y + 28);
+			const mb = brl.format(dataset.margemBrutaValor);
+			doc.text(mb, W - M - 16 - doc.getTextWidth(mb), y + 28);
 
-			doc.save(`dossie-executivo-${cliente.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}.pdf`);
-			track('Cálculo Realizado', { moduleId: MODULE_ID, kind: 'executive-dossier', recovery: totalRecovery });
+			doc.save(`dossie-${cliente.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'controladoria'}.pdf`);
+			track('Cálculo Realizado', { moduleId: MODULE_ID, kind: 'executive-dossier' });
 			toast.success('Dossiê executivo gerado — pronto para a reunião de diretoria.');
 		} catch {
 			toast.error('Não foi possível gerar o dossiê. Tente novamente.');
@@ -196,7 +153,7 @@ export function ExecutiveBriefingGenerator(_props: ExecutiveBriefingGeneratorPro
 						</span>
 					</h2>
 					<p className="mt-1 text-xs text-zinc-500">
-						cliente: <span className="text-zinc-300">{cliente}</span> · sessão descriptografada · analista humano
+						cliente: <span className="text-zinc-300">{cliente}</span> · dados da planilha importada
 					</p>
 				</div>
 				<button
@@ -207,65 +164,67 @@ export function ExecutiveBriefingGenerator(_props: ExecutiveBriefingGeneratorPro
 					className="inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 px-4 py-2.5 text-xs font-bold text-zinc-950 shadow-lg shadow-amber-500/20 transition-all hover:scale-[1.02] disabled:opacity-70"
 				>
 					{generating ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <FileDown className="h-4 w-4" aria-hidden />}
-					{generating ? 'Compilando…' : 'Gerar Apresentação de Resultados (PDF/PPTX)'}
+					{generating ? 'Compilando…' : 'Gerar Apresentação de Resultados (PDF)'}
 				</button>
 			</header>
 
-			{/* Base real da planilha ingerida (quando houver) */}
-			{dataset && (
-				<div className="grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4" data-testid="dossier-erp-base">
-					{[
-						['Faturamento', brl.format(dataset.faturamentoTotal)],
-						['Compras', brl.format(dataset.comprasTotal)],
-						['Tributos', brl.format(dataset.tributosTotal)],
-						['Exposição anual.', brl.format(exposureBefore)]
-					].map(([label, value]) => (
-						<div key={label} className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-2.5">
-							<p className="text-zinc-500">{label}</p>
-							<p className="mt-0.5 font-bold text-emerald-300">{value}</p>
-						</div>
-					))}
-				</div>
-			)}
-
-			{/* Diagnóstico de Fuga de Caixa */}
-			<div className="flex items-center justify-between text-[11px] uppercase tracking-widest text-zinc-500">
-				<span>&gt; diagnóstico de fuga de caixa</span>
-				<span className="text-emerald-400">recuperável: {brl.format(totalRecovery)}</span>
+			{/* Base real da planilha ingerida */}
+			<div className="grid grid-cols-2 gap-2 text-[11px] sm:grid-cols-4" data-testid="dossier-erp-base">
+				{[
+					['Faturamento', brl.format(dataset.faturamentoTotal)],
+					['Compras / CMV', brl.format(dataset.comprasTotal)],
+					['Tributos', brl.format(dataset.tributosTotal)],
+					['Margem bruta', `${dataset.margemPct.toFixed(1)}%`]
+				].map(([label, value]) => (
+					<div key={label} className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-2.5">
+						<p className="text-zinc-500">{label}</p>
+						<p className="mt-0.5 font-bold text-emerald-300">{value}</p>
+					</div>
+				))}
 			</div>
 
-			<ul className="space-y-3">
-				{LEAKS.map((leak, index) => (
-					<motion.li
-						key={leak.id}
-						initial={{ opacity: 0, x: -8 }}
-						animate={{ opacity: 1, x: 0 }}
-						transition={{ delay: index * 0.06 }}
-						className="rounded-xl border border-zinc-800 border-l-2 border-l-rose-500 bg-zinc-950/80 p-4"
-						data-testid={`leak-${leak.id}`}
-					>
-						<p className="flex items-start gap-2 text-sm text-zinc-100">
-							<ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" aria-hidden />
-							<span>
-								<span className="font-semibold text-rose-300">🚨 Risco Encontrado:</span> {leak.risk}
-							</span>
-						</p>
-						<p className="mt-2.5 flex items-start gap-2 rounded-lg bg-amber-400/[0.06] p-3 text-xs leading-relaxed text-amber-200/90 ring-1 ring-inset ring-amber-400/20">
-							<Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden />
-							<span>
-								<span className="font-semibold text-amber-300">💡 Sugestão de Argumento para a Diretoria:</span> {leak.argument}
-							</span>
-						</p>
-						<div className="mt-2.5 flex items-center justify-between text-[11px]">
-							<span className="text-zinc-500">ref. {leak.ref}</span>
-							<span className="font-bold text-emerald-400">+ {brl.format(leak.recovery)}</span>
-						</div>
-					</motion.li>
-				))}
-			</ul>
+			{/* Achados derivados dos números reais */}
+			<div className="flex items-center justify-between text-[11px] uppercase tracking-widest text-zinc-500">
+				<span>&gt; achados da controladoria</span>
+				<span className="text-emerald-400">{findings.length} achado(s)</span>
+			</div>
+
+			{findings.length === 0 ? (
+				<p className="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 p-4 text-xs text-zinc-500">Nenhum achado relevante nos dados deste período.</p>
+			) : (
+				<ul className="space-y-3">
+					{findings.map((f, index) => {
+						const sev = SEV_META[f.severity];
+						return (
+							<motion.li
+								key={f.id}
+								initial={{ opacity: 0, x: -8 }}
+								animate={{ opacity: 1, x: 0 }}
+								transition={{ delay: index * 0.06 }}
+								className={`rounded-xl border border-zinc-800 border-l-2 bg-zinc-950/80 p-4 ${sev.border}`}
+								data-testid={`finding-${f.id}`}
+							>
+								<p className="flex items-start gap-2 text-sm text-zinc-100">
+									<ShieldAlert className={`mt-0.5 h-4 w-4 shrink-0 ${sev.text}`} aria-hidden />
+									<span>
+										<span className={`font-semibold ${sev.text}`}>{sev.label}:</span> {f.title}
+									</span>
+								</p>
+								<p className="mt-2.5 flex items-start gap-2 rounded-lg bg-amber-400/[0.06] p-3 text-xs leading-relaxed text-amber-200/90 ring-1 ring-inset ring-amber-400/20">
+									<Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" aria-hidden />
+									<span>{f.body}</span>
+								</p>
+								<div className="mt-2.5 text-right text-[11px]">
+									<span className="font-bold text-emerald-400">{f.metric}</span>
+								</div>
+							</motion.li>
+						);
+					})}
+				</ul>
+			)}
 
 			<p className="border-t border-zinc-800 pt-3 text-[11px] text-zinc-600">
-				munição gerada pela IA de Controladoria · validação final e apresentação a cargo do consultor humano
+				achados calculados a partir da planilha do cliente · validação final e apresentação a cargo do consultor humano
 			</p>
 		</div>
 	);

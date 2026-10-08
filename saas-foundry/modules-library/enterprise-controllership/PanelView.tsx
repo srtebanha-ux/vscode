@@ -6,12 +6,10 @@ import type { StoreMode } from './spreadsheetIngest.js';
 import {
 	aggregate,
 	formatKpiValue,
-	PANEL_KPIS,
 	PANEL_PERIODS,
 	PANEL_ROUTES,
 	panelKpisFromDataset,
 	periodMonths,
-	SECTOR_REVENUE,
 	sectorRevenueFromDataset,
 	slicePeriod,
 	windowDeltaPct,
@@ -21,6 +19,7 @@ import {
 } from './panelModel.js';
 import { usePanelClick } from './usePanelClick.js';
 import { useErpDataset } from './useErpDataset.js';
+import { EmptyState } from './EmptyState.js';
 import { renderPanelScreen } from './PanelDetailScreens.js';
 
 type SectorRevenue = readonly { readonly setor: string; readonly valor: number }[];
@@ -162,10 +161,16 @@ export function PanelView(): React.JSX.Element {
 	const [expanded, setExpanded] = useState<string | null>(null);
 	const [screen, setScreen] = useState<PanelRoute | null>(null);
 	const months = periodMonths(period);
-	// Dados REAIS da última planilha ingerida (ou demonstração, se não houver).
+	// Dados REAIS da última planilha ingerida. Sem planilha, o painel fica LIMPO
+	// (estado vazio) — nunca mostra números de demonstração.
 	const dataset = useErpDataset();
-	const kpis = dataset ? panelKpisFromDataset(dataset) : PANEL_KPIS;
-	const sector: SectorRevenue = dataset ? sectorRevenueFromDataset(dataset) : SECTOR_REVENUE;
+
+	if (!dataset) {
+		return <EmptyState title="Nenhum dado ainda — importe sua planilha" />;
+	}
+
+	const kpis = panelKpisFromDataset(dataset);
+	const sector: SectorRevenue = sectorRevenueFromDataset(dataset);
 
 	// Tela de detalhe (duplo-clique): cabeçalho com voltar + a tela roteada.
 	if (screen) {
@@ -180,7 +185,7 @@ export function PanelView(): React.JSX.Element {
 						<p className="font-mono text-[10px] text-zinc-600">{PANEL_ROUTES[screen].path}</p>
 					</div>
 				</div>
-				{renderPanelScreen(screen, period)}
+				{renderPanelScreen(screen, period, kpis, dataset)}
 			</div>
 		);
 	}
@@ -212,15 +217,13 @@ export function PanelView(): React.JSX.Element {
 				</div>
 			</div>
 
-			{/* Fonte dos dados: planilha ingerida vs. demonstração */}
+			{/* Fonte dos dados: a planilha ingerida do cliente */}
 			<div
 				data-testid="panel-source"
-				className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium ${dataset ? 'bg-emerald-500/10 text-emerald-300 ring-1 ring-inset ring-emerald-500/25' : 'bg-zinc-900/70 text-zinc-500 ring-1 ring-inset ring-zinc-800'}`}
+				className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-[11px] font-medium text-emerald-300 ring-1 ring-inset ring-emerald-500/25"
 			>
 				<Database className="h-3.5 w-3.5" aria-hidden />
-				{dataset
-					? `Dados de "${dataset.sourceLabel}" · ${dataset.monthLabels[0] ?? '—'}–${dataset.monthLabels[dataset.monthLabels.length - 1] ?? '—'} · ${STORE_MODE_HINT[dataset.storeMode]}`
-					: 'Dados de demonstração — importe a planilha na aba Ingestão ERP para ver seus números.'}
+				{`Dados de "${dataset.sourceLabel}" · ${dataset.monthLabels[0] ?? '—'}–${dataset.monthLabels[dataset.monthLabels.length - 1] ?? '—'} · ${STORE_MODE_HINT[dataset.storeMode]}`}
 			</div>
 
 			{/* Grid dos 6 KPIs interativos */}

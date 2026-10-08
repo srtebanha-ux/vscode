@@ -1,23 +1,14 @@
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { ArrowDownRight, ArrowUpRight, Banknote, Boxes, Building2, Landmark, LineChart as LineIcon, Percent, Users, Wallet } from 'lucide-react';
-import {
-	aggregate,
-	formatKpiValue,
-	PANEL_KPIS,
-	PANEL_PERIODS,
-	periodMonths,
-	slicePeriod,
-	windowDeltaPct,
-	type PanelPeriod,
-	type PanelRoute
-} from './panelModel.js';
+import { Banknote, Boxes, Landmark, LineChart as LineIcon, Percent, Users } from 'lucide-react';
+import { aggregate, PANEL_PERIODS, periodMonths, slicePeriod, windowDeltaPct, type PanelKpi, type PanelPeriod, type PanelRoute } from './panelModel.js';
+import type { ErpDataset, NamedTotal } from './erpDataset.js';
 
 /**
  * PanelDetailScreens — as 6 telas abertas no DUPLO-CLIQUE dos KPIs.
  *
- * São roteadas por estado (registro PANEL_ROUTES), pois este é um plugin dentro
- * do host do Core. Cada tela recebe o período global e monta o detalhamento
- * pedido pelo Analista de Negócios. Determinístico e legível em SSR.
+ * TODAS usam SOMENTE os números reais da planilha do cliente (séries do dataset,
+ * categorias e fornecedores reais). Nada de empresa/valor fictício: quando não há
+ * detalhamento disponível na planilha, a tela diz isso em vez de inventar.
  */
 
 const brl = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 });
@@ -32,11 +23,7 @@ function periodLabel(period: PanelPeriod): string {
 	return PANEL_PERIODS.find(p => p.id === period)?.label ?? period;
 }
 
-function kpi(id: string) {
-	return PANEL_KPIS.find(k => k.id === id) ?? PANEL_KPIS[0]!;
-}
-
-function Section({ title, icon: Icon, children }: { readonly title: string; readonly icon: typeof Wallet; readonly children: React.ReactNode }): React.JSX.Element {
+function Section({ title, icon: Icon, children }: { readonly title: string; readonly icon: typeof Banknote; readonly children: React.ReactNode }): React.JSX.Element {
 	return (
 		<div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5">
 			<h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-200">
@@ -56,49 +43,85 @@ function Stat({ label, value, tone }: { readonly label: string; readonly value: 
 	);
 }
 
-function DeltaPill({ pct }: { readonly pct: number }): React.JSX.Element {
-	const up = pct >= 0;
+function Empty({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
+	return <p className="rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 p-4 text-xs text-zinc-500">{children}</p>;
+}
+
+/** Gráfico de linha de uma série mensal (real) do KPI. */
+function SeriesChart({ series, months, accent, unit }: { readonly series: PanelKpi['series']; readonly months: number; readonly accent: string; readonly unit: 'brl' | 'pct' }): React.JSX.Element {
 	return (
-		<span className={`inline-flex items-center gap-1 text-xs font-semibold ${up ? 'text-emerald-400' : 'text-rose-400'}`}>
-			{up ? <ArrowUpRight className="h-3.5 w-3.5" aria-hidden /> : <ArrowDownRight className="h-3.5 w-3.5" aria-hidden />}
-			{Math.abs(pct).toFixed(1)}%
-		</span>
+		<div className="h-40">
+			<ResponsiveContainer width="100%" height="100%">
+				<LineChart data={slicePeriod(series, months)} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
+					<CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+					<XAxis dataKey="mes" stroke="#71717a" fontSize={11} tickLine={false} axisLine={false} />
+					<YAxis stroke="#71717a" fontSize={11} tickLine={false} axisLine={false} tickFormatter={v => (unit === 'pct' ? `${v}%` : brl.format(Number(v)))} />
+					<Tooltip {...chartTooltip} formatter={v => (unit === 'pct' ? `${Number(v).toFixed(1)}%` : brl.format(Number(v)))} />
+					<Line type="monotone" dataKey="valor" stroke={accent} strokeWidth={2} dot={false} />
+				</LineChart>
+			</ResponsiveContainer>
+		</div>
 	);
+}
+
+/** Tabela genérica "nome × total × % do total" a partir de dados reais. */
+function BreakdownTable({ head, rows }: { readonly head: string; readonly rows: readonly NamedTotal[] }): React.JSX.Element {
+	const total = rows.reduce((s, r) => s + r.total, 0) || 1;
+	return (
+		<div className="overflow-x-auto">
+			<table className="w-full text-left text-sm">
+				<thead>
+					<tr className="text-[11px] uppercase tracking-wide text-zinc-500">
+						<th className="pb-2 font-medium">{head}</th>
+						<th className="pb-2 text-right font-medium">Valor</th>
+						<th className="pb-2 text-right font-medium">% do total</th>
+					</tr>
+				</thead>
+				<tbody>
+					{rows.map(r => (
+						<tr key={r.name} className="border-t border-zinc-800/70">
+							<td className="py-2 font-medium text-zinc-200">{r.name}</td>
+							<td className="py-2 text-right tabular-nums text-sky-300">{brl.format(r.total)}</td>
+							<td className="py-2 text-right tabular-nums text-zinc-400">{((r.total / total) * 100).toFixed(0)}%</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
+		</div>
+	);
+}
+
+type ScreenProps = { readonly period: PanelPeriod; readonly kpis: readonly PanelKpi[]; readonly dataset: ErpDataset };
+
+function kpiOf(kpis: readonly PanelKpi[], id: string): PanelKpi {
+	return kpis.find(k => k.id === id) ?? kpis[0]!;
 }
 
 // ── 1) DRE ───────────────────────────────────────────────────────────────────
 
-function DreScreen({ period }: { readonly period: PanelPeriod }): React.JSX.Element {
+function DreScreen({ period, kpis }: ScreenProps): React.JSX.Element {
 	const months = periodMonths(period);
-	const receita = aggregate(kpi('faturamento').series, months, 'sum');
-	const custos = aggregate(kpi('cmv').series, months, 'sum');
-	const tributos = aggregate(kpi('tributos').series, months, 'sum');
+	const receita = aggregate(kpiOf(kpis, 'faturamento').series, months, 'sum');
+	const custos = aggregate(kpiOf(kpis, 'cmv').series, months, 'sum');
+	const tributos = aggregate(kpiOf(kpis, 'tributos').series, months, 'sum');
 	const resultado = receita - custos - tributos;
 	const margemLiquida = receita ? (resultado / receita) * 100 : 0;
-	const rows: readonly { readonly conta: string; readonly valor: number; readonly delta: number }[] = [
-		{ conta: 'Receita Bruta', valor: receita, delta: windowDeltaPct(kpi('faturamento').series, months, 'sum') },
-		{ conta: '(-) CMV / CPV', valor: -custos, delta: windowDeltaPct(kpi('cmv').series, months, 'sum') },
-		{ conta: '(-) Tributos', valor: -tributos, delta: windowDeltaPct(kpi('tributos').series, months, 'sum') },
-		{ conta: '(=) Resultado', valor: resultado, delta: windowDeltaPct(kpi('resultado').series, months, 'sum') }
+	const rows = [
+		{ conta: 'Receita', valor: receita },
+		{ conta: '(-) CMV / CPV', valor: -custos },
+		{ conta: '(-) Tributos', valor: -tributos },
+		{ conta: '(=) Resultado', valor: resultado }
 	];
 	return (
 		<div className="space-y-4" data-testid="screen-dre">
-			<Section title={`Comparativo do período (${periodLabel(period)})`} icon={LineIcon}>
+			<Section title={`Resultado do período (${periodLabel(period)})`} icon={LineIcon}>
 				<div className="overflow-x-auto">
 					<table className="w-full text-left text-sm">
-						<thead>
-							<tr className="text-[11px] uppercase tracking-wide text-zinc-500">
-								<th className="pb-2 font-medium">Conta</th>
-								<th className="pb-2 text-right font-medium">Valor</th>
-								<th className="pb-2 text-right font-medium">vs. período anterior</th>
-							</tr>
-						</thead>
 						<tbody>
 							{rows.map(row => (
-								<tr key={row.conta} className="border-t border-zinc-800/70">
+								<tr key={row.conta} className="border-t border-zinc-800/70 first:border-0">
 									<td className="py-2 font-medium text-zinc-200">{row.conta}</td>
 									<td className={`py-2 text-right font-semibold tabular-nums ${row.valor >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{brl.format(row.valor)}</td>
-									<td className="py-2 text-right"><DeltaPill pct={row.delta} /></td>
 								</tr>
 							))}
 						</tbody>
@@ -108,225 +131,105 @@ function DreScreen({ period }: { readonly period: PanelPeriod }): React.JSX.Elem
 			<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
 				<Stat label="Margem líquida" value={`${margemLiquida.toFixed(1)}%`} tone="text-violet-300" />
 				<Stat label="Resultado do período" value={brl.format(resultado)} tone={resultado >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
-				<Stat label="Índice de eficiência" value={`${(receita ? (1 - custos / receita) * 100 : 0).toFixed(0)}%`} tone="text-sky-300" />
+				<Stat label="Margem bruta" value={`${(receita ? ((receita - custos) / receita) * 100 : 0).toFixed(1)}%`} tone="text-sky-300" />
 			</div>
 		</div>
 	);
 }
 
-// ── 2) Análises dos Tributos ──────────────────────────────────────────────────
+// ── 2) Tributos ───────────────────────────────────────────────────────────────
 
-function TributosScreen({ period }: { readonly period: PanelPeriod }): React.JSX.Element {
+function TributosScreen({ period, kpis, dataset }: ScreenProps): React.JSX.Element {
 	const months = periodMonths(period);
-	const pagos = aggregate(kpi('tributos').series, months, 'sum');
-	const cargaAtual = 26.35;
-	const cargaReforma = 26.5; // IBS+CBS de referência
+	const k = kpiOf(kpis, 'tributos');
+	const pagos = aggregate(k.series, months, 'sum');
 	return (
 		<div className="space-y-4" data-testid="screen-tributos">
-			<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-				<Stat label="Tributos pagos no período" value={brl.format(pagos)} tone="text-amber-300" />
-				<Stat label="Carga atual (ISS/ICMS+PIS/COFINS)" value={`${cargaAtual}%`} />
-				<Stat label="Carga estimada IBS/CBS" value={`${cargaReforma}%`} tone="text-violet-300" />
+			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+				<Stat label="Tributos no período" value={brl.format(pagos)} tone="text-amber-300" />
+				<Stat label="Alíquota efetiva" value={`${dataset.aliquotaEfetiva.toFixed(2)}%`} tone="text-violet-300" />
 			</div>
-			<Section title="Comparação da Reforma Tributária (IVA dual)" icon={Landmark}>
-				<p className="text-sm text-zinc-400">
-					No modelo pleno, IBS + CBS unificam ICMS/ISS e PIS/COFINS. Para o seu mix atual, a carga fica <strong className="text-zinc-200">praticamente neutra</strong> ({(cargaReforma - cargaAtual).toFixed(2)} p.p.), mas o creditamento amplo abre espaço de recuperação.
-				</p>
+			<Section title={`Tributos mês a mês (${periodLabel(period)})`} icon={Landmark}>
+				<SeriesChart series={k.series} months={months} accent="#fbbf24" unit="brl" />
 			</Section>
-			<Section title="Oportunidades de economia" icon={Percent}>
-				<ul className="space-y-2 text-sm text-zinc-300">
-					<li>• Crédito amplo de insumos no IBS/CBS — recuperável estimado de <strong className="text-emerald-300">{brl.format(pagos * 0.08)}</strong>.</li>
-					<li>• Reenquadramento de 3 NCMs com alta de carga na transição.</li>
-					<li>• Revisão de PIS/COFINS cumulativo × não-cumulativo no período.</li>
-				</ul>
-			</Section>
+			<Empty>Carga tributária calculada sobre os valores da planilha (ICMS + ICMS-ST + IPI + PIS/COFINS + IRPJ/CSLL quando presentes).</Empty>
 		</div>
 	);
 }
 
-// ── 3) Principais Produtos/Serviços Vendidos ─────────────────────────────────
+// ── 3) Faturamento por categoria ──────────────────────────────────────────────
 
-function ProdutosScreen({ period }: { readonly period: PanelPeriod }): React.JSX.Element {
+function ProdutosScreen({ period, kpis, dataset }: ScreenProps): React.JSX.Element {
 	const months = periodMonths(period);
-	const receita = aggregate(kpi('faturamento').series, months, 'sum');
-	const clientes: readonly { readonly nome: string; readonly share: number }[] = [
-		{ nome: 'Construtora Jacarandá', share: 0.28 },
-		{ nome: 'MoonSilver Incorporações', share: 0.19 },
-		{ nome: 'Prisma Engenharia', share: 0.14 },
-		{ nome: 'Grupo Aurora', share: 0.11 },
-		{ nome: 'Demais clientes', share: 0.28 }
-	];
+	const k = kpiOf(kpis, 'faturamento');
 	return (
 		<div className="space-y-4" data-testid="screen-produtos">
-			<Section title={`Clientes com maior faturamento (${periodLabel(period)})`} icon={Users}>
-				<div className="overflow-x-auto">
-					<table className="w-full text-left text-sm">
-						<thead>
-							<tr className="text-[11px] uppercase tracking-wide text-zinc-500">
-								<th className="pb-2 font-medium">Cliente</th>
-								<th className="pb-2 text-right font-medium">Faturamento</th>
-								<th className="pb-2 text-right font-medium">% do total</th>
-							</tr>
-						</thead>
-						<tbody>
-							{clientes.map(c => (
-								<tr key={c.nome} className="border-t border-zinc-800/70">
-									<td className="py-2 font-medium text-zinc-200">{c.nome}</td>
-									<td className="py-2 text-right tabular-nums text-sky-300">{brl.format(receita * c.share)}</td>
-									<td className="py-2 text-right tabular-nums text-zinc-400">{(c.share * 100).toFixed(0)}%</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
+			<Section title={`Faturamento por categoria (${periodLabel(period)})`} icon={Users}>
+				{dataset.sectorRevenue.length > 0 ? <BreakdownTable head="Categoria" rows={dataset.sectorRevenue} /> : <Empty>Esta planilha não traz detalhamento por categoria/produto.</Empty>}
 			</Section>
-			<Section title="Oportunidades de vendas" icon={Boxes}>
-				<ul className="space-y-2 text-sm text-zinc-300">
-					<li>• Concentração de 28% em 1 cliente — risco/oportunidade de cross-sell nos 3 seguintes.</li>
-					<li>• Serviços recorrentes (locação) têm a maior margem: priorize upsell.</li>
-					<li>• Reativar clientes fora dos últimos {months} meses.</li>
-				</ul>
+			<Section title="Faturamento mês a mês" icon={LineIcon}>
+				<SeriesChart series={k.series} months={months} accent="#38bdf8" unit="brl" />
 			</Section>
 		</div>
 	);
 }
 
-// ── 4) Análise de Custos ──────────────────────────────────────────────────────
+// ── 4) Custos ─────────────────────────────────────────────────────────────────
 
-function CustosScreen({ period }: { readonly period: PanelPeriod }): React.JSX.Element {
+function CustosScreen({ period, kpis, dataset }: ScreenProps): React.JSX.Element {
 	const months = periodMonths(period);
-	const custos = aggregate(kpi('cmv').series, months, 'sum');
+	const k = kpiOf(kpis, 'cmv');
+	const custos = aggregate(k.series, months, 'sum');
 	return (
 		<div className="space-y-4" data-testid="screen-custos">
 			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-				<Stat label="Custo total (CMV/CPV) no período" value={brl.format(custos)} tone="text-rose-300" />
-				<Stat label="Desperdício de mão de obra estimado" value={brl.format(custos * 0.06)} tone="text-amber-300" />
+				<Stat label="Custo (CMV/CPV) no período" value={brl.format(custos)} tone="text-rose-300" />
+				<Stat label="Frete acumulado" value={brl.format(dataset.freteTotal)} tone="text-amber-300" />
 			</div>
-			<Section title="Custeio por departamentalização" icon={Building2}>
-				<div className="overflow-x-auto">
-					<table className="w-full text-left text-sm">
-						<thead>
-							<tr className="text-[11px] uppercase tracking-wide text-zinc-500">
-								<th className="pb-2 font-medium">Departamento</th>
-								<th className="pb-2 text-right font-medium">Custo alocado</th>
-								<th className="pb-2 text-right font-medium">% do total</th>
-							</tr>
-						</thead>
-						<tbody>
-							{([['Produção', 0.46], ['Logística', 0.22], ['Administrativo', 0.18], ['Comercial', 0.14]] as const).map(([dep, share]) => (
-								<tr key={dep} className="border-t border-zinc-800/70">
-									<td className="py-2 font-medium text-zinc-200">{dep}</td>
-									<td className="py-2 text-right tabular-nums text-zinc-300">{brl.format(custos * share)}</td>
-									<td className="py-2 text-right tabular-nums text-zinc-400">{(share * 100).toFixed(0)}%</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
+			<Section title="Maiores fornecedores" icon={Boxes}>
+				{dataset.topSuppliers.length > 0 ? <BreakdownTable head="Fornecedor" rows={dataset.topSuppliers} /> : <Empty>Esta planilha não traz detalhamento por fornecedor.</Empty>}
 			</Section>
-			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-				<Section title="Custeio variável" icon={LineIcon}>
-					<p className="text-sm text-zinc-400">Margem de contribuição do período: <strong className="text-emerald-300">{brl.format(custos * 0.34)}</strong>. Custos fixos cobertos a partir do ponto de equilíbrio.</p>
-				</Section>
-				<Section title="Custeio por absorção" icon={Boxes}>
-					<p className="text-sm text-zinc-400">Rateio dos custos indiretos aos produtos (relatório societário/fiscal). Absorção total apurada sobre {brl.format(custos)}.</p>
-				</Section>
-			</div>
-			<Section title="Análise de preços de insumos/mercadorias (por período)" icon={Percent}>
-				<p className="text-sm text-zinc-400">Cimento +8,2%, aço +5,4% e frete +6,7% no período vs. mercado — repasse recomendado para preservar a margem.</p>
+			<Section title={`Custo mês a mês (${periodLabel(period)})`} icon={LineIcon}>
+				<SeriesChart series={k.series} months={months} accent="#fb7185" unit="brl" />
 			</Section>
 		</div>
 	);
 }
 
-// ── 5) Análise de Preços ──────────────────────────────────────────────────────
+// ── 5) Margem ─────────────────────────────────────────────────────────────────
 
-function PrecosScreen({ period }: { readonly period: PanelPeriod }): React.JSX.Element {
+function PrecosScreen({ period, kpis, dataset }: ScreenProps): React.JSX.Element {
 	const months = periodMonths(period);
-	const margem = aggregate(kpi('margem').series, months, 'avg');
-	const itens: readonly { readonly item: string; readonly nosso: number; readonly mercado: number }[] = [
-		{ item: 'Concreto 35 MPa (m³)', nosso: 520, mercado: 560 },
-		{ item: 'Bombeamento (hora)', nosso: 480, mercado: 450 },
-		{ item: 'Locação de fôrma (m²)', nosso: 38, mercado: 41 },
-		{ item: 'Frete técnico (km)', nosso: 9.2, mercado: 8.7 }
-	];
+	const k = kpiOf(kpis, 'margem');
+	const margem = aggregate(k.series, months, 'avg');
 	return (
 		<div className="space-y-4" data-testid="screen-precos">
 			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 				<Stat label="Margem média no período" value={`${margem.toFixed(1)}%`} tone="text-violet-300" />
-				<Stat label="Itens acima do mercado" value={`${itens.filter(i => i.nosso > i.mercado).length} de ${itens.length}`} tone="text-amber-300" />
+				<Stat label="Margem bruta total" value={brl.format(dataset.margemBrutaValor)} tone="text-emerald-300" />
 			</div>
-			<Section title="Competitividade perante o mercado" icon={Percent}>
-				<div className="overflow-x-auto">
-					<table className="w-full text-left text-sm">
-						<thead>
-							<tr className="text-[11px] uppercase tracking-wide text-zinc-500">
-								<th className="pb-2 font-medium">Item</th>
-								<th className="pb-2 text-right font-medium">Nosso preço</th>
-								<th className="pb-2 text-right font-medium">Mercado</th>
-								<th className="pb-2 text-right font-medium">Posição</th>
-							</tr>
-						</thead>
-						<tbody>
-							{itens.map(i => {
-								const diff = ((i.nosso - i.mercado) / i.mercado) * 100;
-								return (
-									<tr key={i.item} className="border-t border-zinc-800/70">
-										<td className="py-2 font-medium text-zinc-200">{i.item}</td>
-										<td className="py-2 text-right tabular-nums text-zinc-300">{brl.format(i.nosso)}</td>
-										<td className="py-2 text-right tabular-nums text-zinc-400">{brl.format(i.mercado)}</td>
-										<td className={`py-2 text-right font-semibold tabular-nums ${diff <= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{diff >= 0 ? '+' : ''}{diff.toFixed(1)}%</td>
-									</tr>
-								);
-							})}
-						</tbody>
-					</table>
-				</div>
-			</Section>
-			<Section title="Oportunidades de expansão de vendas" icon={Boxes}>
-				<ul className="space-y-2 text-sm text-zinc-300">
-					<li>• Bombeamento e frete estão acima do mercado — risco de perder volume; avaliar pacote.</li>
-					<li>• Concreto e fôrma estão competitivos — espaço para ganhar share.</li>
-				</ul>
+			<Section title={`Margem mês a mês (${periodLabel(period)})`} icon={Percent}>
+				<SeriesChart series={k.series} months={months} accent="#a78bfa" unit="pct" />
 			</Section>
 		</div>
 	);
 }
 
-// ── 6) Fluxo de Caixa ─────────────────────────────────────────────────────────
+// ── 6) Fluxo (valores pagos) ──────────────────────────────────────────────────
 
-function FluxoScreen({ period }: { readonly period: PanelPeriod }): React.JSX.Element {
+function FluxoScreen({ period, kpis }: ScreenProps): React.JSX.Element {
 	const months = periodMonths(period);
-	const recebido = aggregate(kpi('faturamento').series, months, 'sum') * 0.92;
-	const pago = aggregate(kpi('valores').series, months, 'sum');
-	const aReceber = recebido * 0.22;
-	const aPagar = pago * 0.18;
-	const liquidezCorrente = (recebido + aReceber) / Math.max(pago + aPagar, 1);
-	const serie = slicePeriod(kpi('valores').series, months);
+	const k = kpiOf(kpis, 'valores');
+	const pago = aggregate(k.series, months, 'sum');
+	const delta = windowDeltaPct(k.series, months, 'sum');
 	return (
 		<div className="space-y-4" data-testid="screen-fluxo">
-			<div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-				<Stat label="Recebido" value={brl.format(recebido)} tone="text-emerald-300" />
-				<Stat label="Pago" value={brl.format(pago)} tone="text-rose-300" />
-				<Stat label="A receber" value={brl.format(aReceber)} tone="text-sky-300" />
-				<Stat label="A pagar" value={brl.format(aPagar)} tone="text-amber-300" />
-			</div>
 			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-				<Stat label="Liquidez corrente" value={liquidezCorrente.toFixed(2)} tone={liquidezCorrente >= 1 ? 'text-emerald-300' : 'text-rose-300'} />
-				<Stat label="Liquidez seca (estim.)" value={(liquidezCorrente * 0.85).toFixed(2)} tone="text-teal-300" />
+				<Stat label="Valores pagos no período" value={brl.format(pago)} tone="text-teal-300" />
+				<Stat label="vs. período anterior" value={`${delta >= 0 ? '+' : ''}${delta.toFixed(1)}%`} tone={delta <= 0 ? 'text-emerald-300' : 'text-rose-300'} />
 			</div>
 			<Section title={`Valores pagos por período (${periodLabel(period)})`} icon={Banknote}>
-				<div className="h-40">
-					<ResponsiveContainer width="100%" height="100%">
-						<LineChart data={serie} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
-							<CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-							<XAxis dataKey="mes" stroke="#71717a" fontSize={11} tickLine={false} axisLine={false} />
-							<YAxis stroke="#71717a" fontSize={11} tickLine={false} axisLine={false} />
-							<Tooltip {...chartTooltip} />
-							<Line type="monotone" dataKey="valor" stroke="#2dd4bf" strokeWidth={2} dot={false} />
-						</LineChart>
-					</ResponsiveContainer>
-				</div>
+				<SeriesChart series={k.series} months={months} accent="#2dd4bf" unit="brl" />
 			</Section>
 		</div>
 	);
@@ -334,21 +237,20 @@ function FluxoScreen({ period }: { readonly period: PanelPeriod }): React.JSX.El
 
 // ── Roteador interno das telas (registro -> componente) ──────────────────────
 
-export function renderPanelScreen(route: PanelRoute, period: PanelPeriod): React.JSX.Element {
+export function renderPanelScreen(route: PanelRoute, period: PanelPeriod, kpis: readonly PanelKpi[], dataset: ErpDataset): React.JSX.Element {
+	const props: ScreenProps = { period, kpis, dataset };
 	switch (route) {
 		case 'dre':
-			return <DreScreen period={period} />;
+			return <DreScreen {...props} />;
 		case 'tributos':
-			return <TributosScreen period={period} />;
+			return <TributosScreen {...props} />;
 		case 'produtos':
-			return <ProdutosScreen period={period} />;
+			return <ProdutosScreen {...props} />;
 		case 'custos':
-			return <CustosScreen period={period} />;
+			return <CustosScreen {...props} />;
 		case 'precos':
-			return <PrecosScreen period={period} />;
+			return <PrecosScreen {...props} />;
 		case 'fluxo':
-			return <FluxoScreen period={period} />;
+			return <FluxoScreen {...props} />;
 	}
 }
-
-export { DreScreen, TributosScreen, ProdutosScreen, CustosScreen, PrecosScreen, FluxoScreen };

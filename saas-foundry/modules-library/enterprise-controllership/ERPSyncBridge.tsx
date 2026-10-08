@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast, useTrackEvent } from '@foundry/engine-core/ui';
 import { motion } from 'framer-motion';
-import { AlertTriangle, CheckCircle2, Database, FileCode2, FileUp, FlaskConical, Loader2, Lock, Server, ShieldCheck } from 'lucide-react';
-import { CSV_HEADER, generateDemoCsv, ingestCsv, loadCube, saveCube, type IngestResult } from './erpIngest.js';
+import { AlertTriangle, CheckCircle2, Database, FileCode2, FileUp, Loader2, Lock, Server, ShieldCheck } from 'lucide-react';
+import { CSV_HEADER, ingestCsv, loadCube, saveCube, type IngestResult } from './erpIngest.js';
 import { ingestWorkbook, looksLikeBinaryWorkbook, type StoreMode, type WorkbookInsight } from './spreadsheetIngest.js';
 import { deriveDataset, deriveDatasetFromStatements, deriveDatasetFromWorkbook, saveDataset } from './erpDataset.js';
 
@@ -33,16 +33,18 @@ interface Connector {
 	readonly icon: typeof Server;
 }
 
+// Integrações disponíveis — mostradas como NÃO conectadas por padrão (nada de
+// status/throughput fictício). O fluxo atual é por importação de planilha.
 const CONNECTORS: readonly Connector[] = [
-	{ id: 'sap', name: 'SAP ERP', system: 'S/4HANA · RFC/BAPI', status: 'online', lastSync: 'há 2 min', throughput: '1.240 docs/min', icon: Server },
-	{ id: 'totvs', name: 'TOTVS Protheus', system: 'REST TReports · SIGAFIS', status: 'online', lastSync: 'há 5 min', throughput: '860 docs/min', icon: Database },
-	{ id: 'receita', name: 'Receita Federal / XML', system: 'NF-e · SPED · manifestação', status: 'degraded', lastSync: 'há 38 min', throughput: 'fila: 312 docs', icon: FileCode2 }
+	{ id: 'sap', name: 'SAP ERP', system: 'S/4HANA · RFC/BAPI', status: 'offline', lastSync: '—', throughput: 'disponível em breve', icon: Server },
+	{ id: 'totvs', name: 'TOTVS Protheus', system: 'REST TReports · SIGAFIS', status: 'offline', lastSync: '—', throughput: 'disponível em breve', icon: Database },
+	{ id: 'receita', name: 'Receita Federal / XML', system: 'NF-e · SPED · manifestação', status: 'offline', lastSync: '—', throughput: 'disponível em breve', icon: FileCode2 }
 ];
 
 const STATUS_META: Readonly<Record<ConnStatus, { readonly label: string; readonly dot: string; readonly text: string; readonly ping: boolean }>> = {
 	online: { label: 'Conectado', dot: 'bg-emerald-400', text: 'text-emerald-400', ping: true },
 	degraded: { label: 'Reprocessando', dot: 'bg-amber-400', text: 'text-amber-400', ping: true },
-	offline: { label: 'Offline', dot: 'bg-rose-500', text: 'text-rose-400', ping: false }
+	offline: { label: 'Não conectado', dot: 'bg-zinc-600', text: 'text-zinc-500', ping: false }
 };
 
 function StatusLight({ status }: { readonly status: ConnStatus }): React.JSX.Element {
@@ -58,7 +60,6 @@ function StatusLight({ status }: { readonly status: ConnStatus }): React.JSX.Ele
 	);
 }
 
-const DEMO_BATCH_SIZE = 50_000;
 
 type Phase =
 	| { readonly kind: 'idle' }
@@ -189,13 +190,6 @@ export function ERPSyncBridge(): React.JSX.Element {
 		[busy, runIngestion, runWorkbook]
 	);
 
-	const runDemo = useCallback(async () => {
-		if (busy) return;
-		// O "SAP" que não temos plugado: lote sintético com a anomalia embutida.
-		const csv = generateDemoCsv(DEMO_BATCH_SIZE);
-		await runIngestion(csv, `Lote de teste (${int.format(DEMO_BATCH_SIZE)} NF-e)`);
-	}, [busy, runIngestion]);
-
 	const progressPct = phase.kind === 'running' && phase.total > 0 ? Math.round((phase.processed / phase.total) * 100) : 0;
 
 	return (
@@ -226,16 +220,6 @@ export function ERPSyncBridge(): React.JSX.Element {
 						className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:scale-[1.02] hover:bg-sky-400 disabled:opacity-70"
 					>
 						<FileUp className="h-4 w-4" aria-hidden /> Importar planilha (Excel/CSV)
-					</button>
-					<button
-						type="button"
-						onClick={() => void runDemo()}
-						disabled={busy}
-						data-testid="erp-demo-batch"
-						className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-700 px-4 py-2.5 text-sm font-semibold text-zinc-300 transition-colors hover:border-sky-500/60 hover:text-sky-300 disabled:opacity-70"
-					>
-						{busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <FlaskConical className="h-4 w-4" aria-hidden />}
-						Gerar lote de teste (50.000)
 					</button>
 				</div>
 			</header>
@@ -370,7 +354,7 @@ export function ERPSyncBridge(): React.JSX.Element {
 								</p>
 							) : (
 								<p className="mt-1 flex items-center gap-1.5 text-sm text-zinc-400">
-									<AlertTriangle className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nenhum dado ingerido ainda — importe a planilha (Excel/CSV) ou gere o lote de teste.
+									<AlertTriangle className="h-3.5 w-3.5 text-amber-300" aria-hidden /> Nenhum dado ingerido ainda — importe a planilha (Excel/CSV) da sua empresa.
 								</p>
 							)}
 						</div>

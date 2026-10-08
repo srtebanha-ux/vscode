@@ -1631,6 +1631,22 @@ try {
 	assert.equal(ins2.storeMode, 'multi', 'coluna Filial -> modo multi');
 	assert.equal(ins2.compras.dimension, 'filial');
 	assert.deepEqual([...ins2.compras.result.branches].sort(), ['Loja Centro', 'Loja Sul']);
+
+	// Prioridade da coluna de valor: quando a aba traz Vlr Bruto, Vlr Líquido E Vlr Total
+	// do Item (como nas planilhas reais), o faturamento é o TOTAL DA LINHA — não o bruto,
+	// mesmo que o bruto apareça antes. (Regressão: antes somava "Vlr Bruto" = overcount.)
+	const vendasMulti = XLSX.utils.aoa_to_sheet([
+		['REGISTRO DE SAÍDAS'],
+		[],
+		[],
+		['Data', 'Cliente / Destinatário', 'UF Dest.', 'Vlr Bruto', 'Desconto', 'Vlr Líquido', 'Vlr Total do Item'],
+		[D(2026, 8, 1), 'CONSUMIDOR', 'SP', 120, 20, 100, 100],
+		[D(2026, 8, 2), 'CONSUMIDOR', 'SP', 60, 5, 55, 55]
+	]);
+	const wb3 = XLSX.utils.book_new();
+	XLSX.utils.book_append_sheet(wb3, vendasMulti, 'Vendas');
+	const ins3 = ingestWorkbook(XLSX.write(wb3, { type: 'array', bookType: 'xlsx' }));
+	assert.equal(ins3.totalVendas, 155, 'faturamento = Vlr Total do Item (100+55), não Vlr Bruto (120+60)');
 }
 
 // 28b3. Dataset único do ERP: destila Compras+Vendas nos números de TODO o ERP.

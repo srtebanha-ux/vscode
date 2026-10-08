@@ -37,7 +37,10 @@ const COLUMN_SYNONYMS = {
 	supplier: ['fornecedor', 'razao social', 'nome do fornecedor', 'emitente'],
 	customer: ['cliente / destinatario', 'cliente', 'destinatario', 'tomador'],
 	date: ['data entrada', 'data de entrada', 'data emissao', 'data', 'competencia', 'data documento', 'emissao'],
-	valor: ['vlr produtos', 'valor produtos', 'vlr liquido', 'vlr bruto', 'valor total do item', 'vlr total do item', 'valor', 'total'],
+	// Ordem = prioridade. O total da LINHA ("Vlr Total do Item") é o faturamento/compra
+	// oficial (líquido de desconto, com frete/outras) — é o que a própria planilha soma
+	// na Apuração. Só caímos para produtos/líquido/bruto quando o total da linha não existe.
+	valor: ['valor total do item', 'vlr total do item', 'vlr produtos', 'valor produtos', 'vlr liquido', 'vlr bruto', 'valor', 'total'],
 	frete: ['frete (rateado)', 'frete rateado', 'frete'],
 	icms: ['vlr icms'],
 	icmsst: ['vlr icms-st', 'vlr icms st'],
@@ -112,8 +115,16 @@ function buildColumnMap(headerCells: readonly unknown[]): ColumnMap {
 	const normalized = headerCells.map(normalizeHeader);
 	for (const key of Object.keys(COLUMN_SYNONYMS) as ColumnKey[]) {
 		const synonyms = COLUMN_SYNONYMS[key] as readonly string[];
-		const idx = normalized.findIndex(cell => synonyms.includes(cell));
-		if (idx >= 0) map[key] = idx;
+		// Seleção por PRIORIDADE do sinônimo (não pela posição da coluna): o primeiro
+		// sinônimo que tiver uma coluna correspondente vence. Assim "Vlr Total do Item"
+		// ganha de "Vlr Bruto"/"Vlr Líquido" mesmo aparecendo mais à direita na planilha.
+		for (const syn of synonyms) {
+			const idx = normalized.indexOf(syn);
+			if (idx >= 0) {
+				map[key] = idx;
+				break;
+			}
+		}
 	}
 	return map;
 }
